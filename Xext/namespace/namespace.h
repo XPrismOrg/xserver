@@ -65,6 +65,14 @@ struct XnsAppInfo *XnsAppInfoRef(struct XnsAppInfo *app);
 /* XPrism capabilities a client holds: its namespace's grants, limited by
    its listener's ceiling (namespace.c) */
 uint32_t XnsClientGrants(struct XnamespaceClientPriv *priv);
+
+/* Answering a SelectionRequest across namespaces (hook-selection.c): the
+   owner may set the requested property on the requestor's window and send
+   it one SelectionNotify, once per request. */
+Bool XnsSelReplyMayChangeProperty(ClientPtr owner, Window requestor, Atom property);
+Bool XnsSelReplyPending(ClientPtr owner, Window requestor);
+Bool XnsSelReplyConsume(ClientPtr owner, WindowPtr dest, const xEvent *events, int count);
+void XnsSelReplyDropClient(ClientPtr client);
 void XnsAppInfoUnref(struct XnsAppInfo *app);
 
 struct XnamespaceClientPriv {

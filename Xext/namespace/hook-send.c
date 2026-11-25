@@ -38,6 +38,10 @@ void hookSend(CallbackListPtr *pcbl, void *unused, void *calldata)
     if (clientAllowedOnClient(client, targetClient))
         goto pass;
 
+    /* the reply to a SelectionRequest from another namespace */
+    if (XnsSelReplyConsume(client, param->pWin, param->events, param->count))
+        goto pass;
+
     XNS_HOOK_LOG("BLOCK target @ %s\n", obj->ns->name);
     for (int i = 0; i < param->count; i++) {
         XNS_HOOK_LOG("sending event of type %s to window 0x%lx of client %d\n",

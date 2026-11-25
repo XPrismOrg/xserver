@@ -48,6 +48,21 @@ void hookResourceAccess(CallbackListPtr *pcbl, void *unused, void *calldata)
     if (XnsClientSameNS(subj, obj))
         goto pass;
 
+    // answering a SelectionRequest from another namespace (hook-selection.c)
+    if (param->rtype == X11_RESTYPE_WINDOW && client->requestBuffer) {
+        if (client->majorOp == X_ChangeProperty &&
+            checkAllowed(param->access_mode, DixSetPropAccess)) {
+            const xChangePropertyReq *req = client->requestBuffer;
+            if (req->window == param->id &&
+                XnsSelReplyMayChangeProperty(client, param->id, req->property))
+                goto pass;
+        }
+        if (client->majorOp == X_SendEvent &&
+            checkAllowed(param->access_mode, DixSendAccess) &&
+            XnsSelReplyPending(client, param->id))
+            goto pass;  /* the send hook checks the event itself */
+    }
+
     // check for root windows (screen or ns-virtual)
     if (param->rtype == X11_RESTYPE_WINDOW) {
         WindowPtr pWindow = (WindowPtr) param->res;

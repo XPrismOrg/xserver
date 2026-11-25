@@ -66,6 +66,7 @@ void hookClientDestroy(CallbackListPtr *pcbl, void *unused, void *calldata)
     if (!subj)
         return; /* no XNS devprivate assigned ? */
 
+    XnsSelReplyDropClient(client);
     XnamespaceAssignClient(subj, NULL);
     XnsAppInfoUnref(subj->app);
     subj->app = NULL;

@@ -77,9 +77,37 @@ them: a client needs both to pass.
 Xnamespace gives each namespace private copies of the selections: a
 confined client asking for `CLIPBOARD` gets `<editor>CLIPBOARD`. Those
 are not checked, so a confined client's own clipboard needs no
-capability, and it cannot reach the session clipboard at all. Letting a
-`clipboard.read`/`clipboard.write` grant open the session clipboard to a
-confined client is still to do.
+capability.
+
+The grants open the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD`
+(`Xext/namespace/hook-selection.c`):
+
+| Request | Session selection if the client holds |
+|---|---|
+| `SetSelectionOwner` | `clipboard.write` |
+| `ConvertSelection`, XFixes `SelectSelectionInput` | `clipboard.read` |
+| `GetSelectionOwner` | either |
+
+Without the grant the request goes to the namespace's private copy, as
+before. Revoking a grant applies from the client's next request.
+
+A transfer also needs the owner to write the data onto the requestor's
+window and send it `SelectionNotify`, which Xnamespace blocks across
+namespaces. So when the server hands a `SelectionRequest` from another
+namespace to a confined owner, it records a one-time token: that owner
+may set *the requested property* on *that window* and send it *one*
+`SelectionNotify` for that selection. Any other property, any other
+event, or a second reply is refused (events are dropped silently, as
+`SendEvent` denials always are).
+
+Limits:
+
+- INCR transfers (data too large for one request) from a confined owner
+  to another namespace don't work yet: the owner would also need
+  `PropertyNotify` events from the requestor's window.
+- Tested between the session (root namespace) and confined namespaces.
+  Between two confined namespaces the same token applies, but there is
+  no test for it yet.
 
 ## Known gaps
 
