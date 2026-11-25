@@ -53,6 +53,7 @@ if pytest.found()
     tests_pyxtest = [
         'test_capability.py',
      'test_clipboard_grants.py',
+     'test_randr_access.py',
         'test_fb.py',
         'test_font.py',
         'test_glamor.py',

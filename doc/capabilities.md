@@ -67,7 +67,7 @@ them: a client needs both to pass.
 | `window.manage` | resource hook: manage access to another client's or the root window (`ReparentWindow`, `ChangeSaveSet`, Composite redirect, selecting `SubstructureRedirect`/`ResizeRedirect`) | |
 | `clipboard.read` | selection hook: `ConvertSelection` | Only the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD`. |
 | `clipboard.write` | selection hook: `SetSelectionOwner` | As above. |
-| `display.configure` | extension dispatch: the RandR requests that change the configuration (`SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output/provider properties, monitors, leases) | Not via the resource hook: RandR looks up outputs and CRTCs with *read* access even in most requests that change them, and `SetScreenSize` looks up none. |
+| `display.configure` | extension dispatch: the RandR requests that change the configuration (`SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output/provider properties, monitors, leases) | Checked at dispatch, so every configuring request is covered in one place. Since commit `RANDR_FIX` RandR also looks up the CRTCs, outputs, providers and root window it changes with write access, so Xnamespace (and SELinux) see the write too. |
 
 "Another client's" means the resource's XID belongs to a different client
 (or to the server). A client never needs a capability for its own windows.

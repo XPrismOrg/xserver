@@ -420,7 +420,7 @@ ProcRRConfigureProviderProperty(ClientPtr client)
     RRProviderPtr provider;
     int num_valid;
 
-    VERIFY_RR_PROVIDER(stuff->provider, provider, DixReadAccess);
+    VERIFY_RR_PROVIDER(stuff->provider, provider, DixSetPropAccess);
 
     num_valid =
         client->req_len - bytes_to_int32(sizeof(xRRConfigureProviderPropertyReq));
@@ -481,7 +481,7 @@ ProcRRChangeProviderProperty(ClientPtr client)
     totalSize = len * sizeInBytes;
     REQUEST_FIXED_SIZE(xRRChangeProviderPropertyReq, totalSize);
 
-    VERIFY_RR_PROVIDER(stuff->provider, provider, DixReadAccess);
+    VERIFY_RR_PROVIDER(stuff->provider, provider, DixSetPropAccess);
 
     if (!ValidAtom(stuff->property)) {
         client->errorValue = stuff->property;
@@ -517,7 +517,7 @@ ProcRRDeleteProviderProperty(ClientPtr client)
     RRPropertyPtr prop;
 
     UpdateCurrentTime();
-    VERIFY_RR_PROVIDER(stuff->provider, provider, DixReadAccess);
+    VERIFY_RR_PROVIDER(stuff->provider, provider, DixSetPropAccess);
 
     if (!ValidAtom(stuff->property)) {
         client->errorValue = stuff->property;

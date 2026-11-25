@@ -686,7 +686,7 @@ ProcRRSetMonitor(ClientPtr client)
     if (stuff->monitor.noutput != client->req_len - (sizeof(xRRSetMonitorReq) >> 2))
         return BadLength;
 
-    r = dixLookupWindow(&window, stuff->window, client, DixGetAttrAccess);
+    r = dixLookupWindow(&window, stuff->window, client, DixSetAttrAccess);
     if (r != Success)
         return r;
     screen = window->drawable.pScreen;
@@ -735,7 +735,7 @@ ProcRRDeleteMonitor(ClientPtr client)
     ScreenPtr           screen;
     int                 r;
 
-    r = dixLookupWindow(&window, stuff->window, client, DixGetAttrAccess);
+    r = dixLookupWindow(&window, stuff->window, client, DixSetAttrAccess);
     if (r != Success)
         return r;
     screen = window->drawable.pScreen;

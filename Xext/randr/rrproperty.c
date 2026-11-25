@@ -494,7 +494,7 @@ ProcRRConfigureOutputProperty(ClientPtr client)
     RROutputPtr output;
     int num_valid;
 
-    VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+    VERIFY_RR_OUTPUT(stuff->output, output, DixSetPropAccess);
 
     if (RROutputIsLeased(output))
         return BadAccess;
@@ -558,7 +558,7 @@ ProcRRChangeOutputProperty(ClientPtr client)
     totalSize = len * sizeInBytes;
     REQUEST_FIXED_SIZE(xRRChangeOutputPropertyReq, totalSize);
 
-    VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+    VERIFY_RR_OUTPUT(stuff->output, output, DixSetPropAccess);
 
     if (!ValidAtom(stuff->property)) {
         client->errorValue = stuff->property;
@@ -594,7 +594,7 @@ ProcRRDeleteOutputProperty(ClientPtr client)
     RRPropertyPtr prop;
 
     UpdateCurrentTime();
-    VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+    VERIFY_RR_OUTPUT(stuff->output, output, DixSetPropAccess);
 
     if (RROutputIsLeased(output))
         return BadAccess;

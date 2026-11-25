@@ -306,7 +306,7 @@ ProcRRSetProviderOutputSource(ClientPtr client)
     RRProviderPtr provider, source_provider = NULL;
     ScreenPtr pScreen;
 
-    VERIFY_RR_PROVIDER(stuff->provider, provider, DixReadAccess);
+    VERIFY_RR_PROVIDER(stuff->provider, provider, DixSetAttrAccess);
 
     if (!(provider->capabilities & RR_Capability_SinkOutput))
         return BadValue;
@@ -352,7 +352,7 @@ ProcRRSetProviderOffloadSink(ClientPtr client)
     RRProviderPtr provider, sink_provider = NULL;
     ScreenPtr pScreen;
 
-    VERIFY_RR_PROVIDER(stuff->provider, provider, DixReadAccess);
+    VERIFY_RR_PROVIDER(stuff->provider, provider, DixSetAttrAccess);
     if (!(provider->capabilities & RR_Capability_SourceOffload))
         return BadValue;
     if (!provider->pScreen->isGPU)

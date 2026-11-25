@@ -577,12 +577,12 @@ ProcRRSetOutputPrimary(ClientPtr client)
     int ret;
     ScreenPtr secondary;
 
-    ret = dixLookupWindow(&pWin, stuff->window, client, DixGetAttrAccess);
+    ret = dixLookupWindow(&pWin, stuff->window, client, DixSetAttrAccess);
     if (ret != Success)
         return ret;
 
     if (stuff->output) {
-        VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+        VERIFY_RR_OUTPUT(stuff->output, output, DixSetAttrAccess);
 
         if (RROutputIsLeased(output))
             return BadAccess;

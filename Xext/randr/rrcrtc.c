@@ -1552,7 +1552,7 @@ ProcRRSetPanning(ClientPtr client)
     INT16 border[4];
     CARD8 status;
 
-    VERIFY_RR_CRTC(stuff->crtc, crtc, DixReadAccess);
+    VERIFY_RR_CRTC(stuff->crtc, crtc, DixSetAttrAccess);
 
     if (RRCrtcIsLeased(crtc))
         return BadAccess;
@@ -1681,7 +1681,7 @@ ProcRRSetCrtcGamma(ClientPtr client)
     unsigned long len;
     CARD16 *red, *green, *blue;
 
-    VERIFY_RR_CRTC(stuff->crtc, crtc, DixReadAccess);
+    VERIFY_RR_CRTC(stuff->crtc, crtc, DixSetAttrAccess);
 
     if (RRCrtcIsLeased(crtc))
         return BadAccess;
@@ -1732,7 +1732,7 @@ ProcRRSetCrtcTransform(ClientPtr client)
     xFixed *params;
     int nparams;
 
-    VERIFY_RR_CRTC(stuff->crtc, crtc, DixReadAccess);
+    VERIFY_RR_CRTC(stuff->crtc, crtc, DixSetAttrAccess);
 
     if (RRCrtcIsLeased(crtc))
         return BadAccess;

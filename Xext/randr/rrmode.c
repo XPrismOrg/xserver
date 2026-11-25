@@ -380,7 +380,7 @@ ProcRRAddOutputMode(ClientPtr client)
     }
 
     RROutputPtr output;
-    VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+    VERIFY_RR_OUTPUT(stuff->output, output, DixSetAttrAccess);
 
     RRModePtr mode;
     VERIFY_RR_MODE(stuff->mode, mode, DixUseAccess);
@@ -403,7 +403,7 @@ ProcRRDeleteOutputMode(ClientPtr client)
     }
 
     RROutputPtr output;
-    VERIFY_RR_OUTPUT(stuff->output, output, DixReadAccess);
+    VERIFY_RR_OUTPUT(stuff->output, output, DixSetAttrAccess);
 
     RRModePtr mode;
     VERIFY_RR_MODE(stuff->mode, mode, DixUseAccess);

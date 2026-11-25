@@ -205,7 +205,7 @@ ProcRRSetScreenSize(ClientPtr client)
     rrScrPrivPtr pScrPriv;
     int i, rc;
 
-    rc = dixLookupWindow(&pWin, stuff->window, client, DixGetAttrAccess);
+    rc = dixLookupWindow(&pWin, stuff->window, client, DixSetAttrAccess);
     if (rc != Success)
         return rc;
 
