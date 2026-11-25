@@ -66,14 +66,9 @@ ProcXIPassiveGrabDevice(ClientPtr client)
     X_REQUEST_FIELD_CARD16(num_modifiers);
     REQUEST_FIXED_SIZE(xXIPassiveGrabDeviceReq,
         ((uint32_t) stuff->mask_len + stuff->num_modifiers) *4);
-    /* swap the modifiers list only: the event mask is a byte array and
-       has no byte order (4395caee1 swapped it too, so byte-swapped clients
-       grabbed the wrong events) */
-    if (client->swapped) {
-        uint32_t *mods = (uint32_t *) &stuff[1] + stuff->mask_len;
-        for (int m = 0; m < stuff->num_modifiers; m++)
-            swapl(&mods[m]);
-    }
+    /* the event mask is a byte array: swap only the modifiers after it */
+    if (client->swapped)
+        SwapLongs((CARD32 *) &stuff[1] + stuff->mask_len, stuff->num_modifiers);
 
     DeviceIntPtr dev, mod_dev;
     xXIPassiveGrabDeviceReply reply = {
