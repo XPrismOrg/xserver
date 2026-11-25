@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<title>XPrism</title>
+<defs>
+  <mask id="cut"><rect x="-10" y="-10" width="280" height="280" fill="#fff"/>
+    <polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="#000" stroke="#000" stroke-width="16" stroke-linejoin="round"/></mask>
+  <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.45"/><stop offset="0.45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="9"/></filter>
+  <linearGradient id="spec" x1="44" y1="34" x2="212" y2="222" gradientUnits="userSpaceOnUse"><stop offset="0.00" stop-color="#ff3b3b"/><stop offset="0.20" stop-color="#ff8a00"/><stop offset="0.40" stop-color="#ffd400"/><stop offset="0.60" stop-color="#21d07a"/><stop offset="0.80" stop-color="#1e90ff"/><stop offset="1.00" stop-color="#8a3ffc"/></linearGradient>
+</defs>
+<polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="url(#spec)" opacity="0.45" filter="url(#glow)"/>
+<g mask="url(#cut)"><polygon points="190.0,34.0 212.0,34.0 117.0,128.0" fill="#ffffff"/><polygon points="212.0,34.0 139.0,128.0 117.0,128.0" fill="#e2e8f0"/><polygon points="117.0,128.0 139.0,128.0 44.0,222.0" fill="#e2e8f0"/><polygon points="139.0,128.0 66.0,222.0 44.0,222.0" fill="#cbd5e1"/></g>
+<g><polygon points="44.0,34.0 104.0,34.0 62.0,65.3" fill="#ff8585"/><polygon points="104.0,34.0 122.0,65.3 62.0,65.3" fill="#ff3b3b"/><polygon points="62.0,65.3 122.0,65.3 140.0,96.7" fill="#ff8a00"/><polygon points="62.0,65.3 140.0,96.7 80.0,96.7" fill="#c76c00"/><polygon points="80.0,96.7 140.0,96.7 98.0,128.0" fill="#ffe461"/><polygon points="140.0,96.7 158.0,128.0 98.0,128.0" fill="#ffd400"/><polygon points="98.0,128.0 158.0,128.0 176.0,159.3" fill="#21d07a"/><polygon points="98.0,128.0 176.0,159.3 116.0,159.3" fill="#1aa25f"/><polygon points="116.0,159.3 176.0,159.3 134.0,190.7" fill="#74baff"/><polygon points="176.0,159.3 194.0,190.7 134.0,190.7" fill="#1e90ff"/><polygon points="134.0,190.7 194.0,190.7 212.0,222.0" fill="#8a3ffc"/><polygon points="134.0,190.7 212.0,222.0 152.0,222.0" fill="#6c31c5"/></g>
+<polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="url(#sheen)"/>
+</svg>

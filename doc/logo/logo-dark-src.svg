@@ -1,39 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 256" width="840" height="256">
-  <title>XPrism</title>
-  <defs>
-    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#a5b4fc" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#c4b5fd" stop-opacity="0.08"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#a5b4fc"/>
-      <stop offset="1" stop-color="#8b5cf6"/>
-    </linearGradient>
-    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4f46e5"/>
-      <stop offset="1" stop-color="#7c3aed"/>
-    </linearGradient>
-    <mask id="cut">
-      <rect width="264" height="256" fill="#fff"/>
-      <polygon points="86,108 112,108 170,196 144,196" fill="#000" stroke="#000" stroke-width="12" stroke-linejoin="round"/>
-    </mask>
-  </defs>
-  <!-- white light in -->
-  <line x1="2" y1="160" x2="67.5" y2="136" stroke="#cbd5e1" stroke-width="6" stroke-linecap="round"/>
-  <!-- spectrum out -->
-  <g stroke-linecap="round" stroke-width="5.5">
-    <line x1="184.2" y1="128.0" x2="251.0" y2="101.0" stroke="#ef4444"/>
-    <line x1="186.9" y1="133.0" x2="257.3" y2="118.0" stroke="#f97316"/>
-    <line x1="189.5" y1="138.0" x2="261.5" y2="135.5" stroke="#eab308"/>
-    <line x1="192.2" y1="143.0" x2="263.5" y2="153.0" stroke="#22c55e"/>
-    <line x1="194.8" y1="148.0" x2="263.3" y2="170.2" stroke="#3b82f6"/>
-    <line x1="197.5" y1="153.0" x2="261.0" y2="186.8" stroke="#8b5cf6"/>
-  </g>
-  <!-- the prism -->
-  <path d="M128 18 L236 222 L20 222 Z" fill="url(#glass)" stroke="url(#edge)" stroke-width="7" stroke-linejoin="round"/>
-  <!-- the X: a thin stroke broken by a thick one -->
-  <polygon points="160,108 170,108 96,196 86,196" fill="url(#ink)" mask="url(#cut)"/>
-  <polygon points="86,108 112,108 170,196 144,196" fill="url(#ink)"/>
-  <text x="300" y="160" font-family="Inter" font-weight="800" font-size="124" letter-spacing="-3" fill="#f8fafc"><tspan fill="url(#ink)">X</tspan>Prism</text>
-  <text x="304" y="212" font-family="Inter" font-weight="500" font-size="29" letter-spacing="0.5" fill="#94a3b8">A modern display server for Unix</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 256" width="860" height="256">
+<title>XPrism</title>
+<defs>
+  <mask id="cutw"><rect x="-10" y="-10" width="280" height="280" fill="#fff"/>
+    <polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="#000" stroke="#000" stroke-width="16" stroke-linejoin="round"/></mask>
+  <linearGradient id="sheenw" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.45"/><stop offset="0.45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <filter id="gloww" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="9"/></filter>
+  <linearGradient id="specw" x1="44" y1="34" x2="212" y2="222" gradientUnits="userSpaceOnUse"><stop offset="0.00" stop-color="#ff3b3b"/><stop offset="0.20" stop-color="#ff8a00"/><stop offset="0.40" stop-color="#ffd400"/><stop offset="0.60" stop-color="#21d07a"/><stop offset="0.80" stop-color="#1e90ff"/><stop offset="1.00" stop-color="#8a3ffc"/></linearGradient>
+</defs>
+<polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="url(#specw)" opacity="0.45" filter="url(#gloww)"/>
+<g mask="url(#cutw)"><polygon points="190.0,34.0 212.0,34.0 117.0,128.0" fill="#ffffff"/><polygon points="212.0,34.0 139.0,128.0 117.0,128.0" fill="#e2e8f0"/><polygon points="117.0,128.0 139.0,128.0 44.0,222.0" fill="#e2e8f0"/><polygon points="139.0,128.0 66.0,222.0 44.0,222.0" fill="#cbd5e1"/></g>
+<g><polygon points="44.0,34.0 104.0,34.0 62.0,65.3" fill="#ff8585"/><polygon points="104.0,34.0 122.0,65.3 62.0,65.3" fill="#ff3b3b"/><polygon points="62.0,65.3 122.0,65.3 140.0,96.7" fill="#ff8a00"/><polygon points="62.0,65.3 140.0,96.7 80.0,96.7" fill="#c76c00"/><polygon points="80.0,96.7 140.0,96.7 98.0,128.0" fill="#ffe461"/><polygon points="140.0,96.7 158.0,128.0 98.0,128.0" fill="#ffd400"/><polygon points="98.0,128.0 158.0,128.0 176.0,159.3" fill="#21d07a"/><polygon points="98.0,128.0 176.0,159.3 116.0,159.3" fill="#1aa25f"/><polygon points="116.0,159.3 176.0,159.3 134.0,190.7" fill="#74baff"/><polygon points="176.0,159.3 194.0,190.7 134.0,190.7" fill="#1e90ff"/><polygon points="134.0,190.7 194.0,190.7 212.0,222.0" fill="#8a3ffc"/><polygon points="134.0,190.7 212.0,222.0 152.0,222.0" fill="#6c31c5"/></g>
+<polygon points="44.0,34.0 104.0,34.0 212.0,222.0 152.0,222.0" fill="url(#sheenw)"/>
+<defs><linearGradient id="wm" x1="296" y1="70" x2="436" y2="168" gradientUnits="userSpaceOnUse"><stop offset="0.00" stop-color="#ff3b3b"/><stop offset="0.20" stop-color="#ff8a00"/><stop offset="0.40" stop-color="#ffd400"/><stop offset="0.60" stop-color="#21d07a"/><stop offset="0.80" stop-color="#1e90ff"/><stop offset="1.00" stop-color="#8a3ffc"/></linearGradient></defs>
+<text x="292" y="168" font-family="Inter Display" font-weight="900" font-size="138" letter-spacing="-5" fill="#f8fafc"><tspan fill="url(#wm)">X</tspan>Prism</text>
+<text x="298" y="220" font-family="Inter" font-weight="600" font-size="25" letter-spacing="5" fill="#94a3b8">DISPLAY SERVER FOR UNIX</text>
 </svg>
