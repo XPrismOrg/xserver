@@ -196,6 +196,7 @@ if build_xorg
      'list.c',
      'list_zeroinit.c',
      'misc.c',
+     'peer_identity.c',
      'sha1.c',
      'signal-logging.c',
      'string.c',

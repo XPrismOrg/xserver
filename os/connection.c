@@ -582,7 +582,21 @@ AllocNewConnection(XtransConnInfo trans_conn, int fd, CARD32 conn_time)
     oc->trans_conn = trans_conn;
     oc->fd = fd;
     oc->conn_time = conn_time;
+
+    /* Fix the client's identity now, while it is known to be the process
+     * that opened the connection. Most platforms can only identify peers
+     * of Unix domain sockets; Solaris' getpeerucred() decides for itself. */
+#if !(defined(__sun) && defined(HAVE_GETPEERUCRED))
+    if (_XSERVTransIsLocal(trans_conn))
+        peer_identity_query(fd, &oc->peer);
+    else
+        peer_identity_init(&oc->peer);
+#else
+    peer_identity_query(fd, &oc->peer);
+#endif
+
     if (!(client = NextAvailableClient((void *) oc))) {
+        peer_identity_release(&oc->peer);
         free(oc);
         return NULL;
     }
@@ -737,6 +751,7 @@ CloseDownConnection(ClientPtr client)
 	FlushClient(client, oc);
     CloseDownFileDescriptor(oc);
     FreeOsBuffers(oc);
+    peer_identity_release(&oc->peer);
     free(client->osPrivate);
     client->osPrivate = (void *) NULL;
     if (auditTrailLevel > 1)

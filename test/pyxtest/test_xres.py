@@ -2,6 +2,7 @@
 #
 # Tests for X-Resource extension.
 
+import os
 import struct
 
 import pytest
@@ -208,3 +209,71 @@ class TestXResQueryResourceBytes:
         assert resp.error_code == BadLength, (
             f"Expected BadLength ({BadLength}), got {resp.error_code}"
         )
+
+
+XRES_CLIENT_ID_PID_MASK = 1 << 1
+
+
+class TestXResClientPid:
+    def test_query_client_ids_reports_connecting_pid(self, xserver, xres_xclient):
+        """
+        The PID reported for a client is the identity the server recorded
+        when the client connected (os/peer_identity.c): it must be the PID of
+        the process that opened the connection, i.e. this test process.
+        """
+        import os
+
+        conn, opcode = xres_xclient
+        conn.send_request(
+            xres.QueryClientIdsRequest(
+                opcode=opcode,
+                specs=[(conn._resource_id_base, XRES_CLIENT_ID_PID_MASK)],
+            )
+        )
+        resp = conn.recv_response(timeout=5.0)
+        assert isinstance(resp, X11Reply), resp
+
+        num_ids = struct.unpack_from("<I", resp.data, 8)[0]
+        offset = 32
+        pids = []
+        for _ in range(num_ids):
+            _client, mask, length = struct.unpack_from("<III", resp.data, offset)
+            offset += 12
+            if mask == XRES_CLIENT_ID_PID_MASK and length == 4:
+                pids.append(struct.unpack_from("<I", resp.data, offset)[0])
+            offset += length
+
+        assert pids == [os.getpid()]
+
+
+class TestClientIdentityResources:
+    @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
+    def test_connections_do_not_leak_fds(self, xserver):
+        """
+        Each local client's identity can hold a pidfd (Linux >= 6.5). It must
+        be closed when the client disconnects, so the server's open file
+        descriptor count must not grow with the number of past clients.
+        """
+        import time
+
+        from xclient import RawX11Connection
+
+        proc = getattr(xserver, "_process", None)
+        if proc is None:
+            pytest.skip("server process not managed by the test")
+        fd_dir = f"/proc/{proc.pid}/fd"
+
+        def server_fds():
+            # let the server process the disconnects first
+            with RawX11Connection(xserver.display_num) as sync_conn:
+                sync_conn.send_request(struct.pack("<BxH", 43, 1))  # GetInputFocus
+                sync_conn.recv_response(timeout=5.0)
+            time.sleep(0.1)
+            return len(os.listdir(fd_dir))
+
+        before = server_fds()
+        for _ in range(50):
+            RawX11Connection(xserver.display_num).close()
+        after = server_fds()
+
+        assert after - before < 5, f"server fds grew from {before} to {after}"
