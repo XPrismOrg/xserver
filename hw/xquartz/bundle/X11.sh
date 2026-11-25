@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set "$(dirname "$0")"/X11.bin "${@}"
 

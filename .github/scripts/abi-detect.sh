@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
 # Master's driver ABI detector: compare what drivers see of two commits, the

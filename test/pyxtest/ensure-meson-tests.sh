@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Helper script used by meson to ensure each test_foo.py file has
 # a corresponding entry in the tests_pyxtest array
