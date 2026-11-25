@@ -390,11 +390,11 @@ static int
 make_listening_socket(const char *path)
 {
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    if (strlen(path) >= sizeof(addr.sun_path)) {
+    if (snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path) >=
+        (int) sizeof(addr.sun_path)) {
         fprintf(stderr, "%s: socket path too long\n", progname);
         return -1;
     }
-    strcpy(addr.sun_path, path);
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
