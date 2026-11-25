@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 256" width="840" height="256">
+  <title>XPrism</title>
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a5b4fc" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#c4b5fd" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a5b4fc"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <mask id="cut">
+      <rect width="264" height="256" fill="#fff"/>
+      <polygon points="86,108 112,108 170,196 144,196" fill="#000" stroke="#000" stroke-width="12" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+  <!-- white light in -->
+  <line x1="2" y1="160" x2="67.5" y2="136" stroke="#cbd5e1" stroke-width="6" stroke-linecap="round"/>
+  <!-- spectrum out -->
+  <g stroke-linecap="round" stroke-width="5.5">
+    <line x1="184.2" y1="128.0" x2="251.0" y2="101.0" stroke="#ef4444"/>
+    <line x1="186.9" y1="133.0" x2="257.3" y2="118.0" stroke="#f97316"/>
+    <line x1="189.5" y1="138.0" x2="261.5" y2="135.5" stroke="#eab308"/>
+    <line x1="192.2" y1="143.0" x2="263.5" y2="153.0" stroke="#22c55e"/>
+    <line x1="194.8" y1="148.0" x2="263.3" y2="170.2" stroke="#3b82f6"/>
+    <line x1="197.5" y1="153.0" x2="261.0" y2="186.8" stroke="#8b5cf6"/>
+  </g>
+  <!-- the prism -->
+  <path d="M128 18 L236 222 L20 222 Z" fill="url(#glass)" stroke="url(#edge)" stroke-width="7" stroke-linejoin="round"/>
+  <!-- the X: a thin stroke broken by a thick one -->
+  <polygon points="160,108 170,108 96,196 86,196" fill="url(#ink)" mask="url(#cut)"/>
+  <polygon points="86,108 112,108 170,196 144,196" fill="url(#ink)"/>
+  <text x="300" y="160" font-family="Inter" font-weight="800" font-size="124" letter-spacing="-3" fill="#0f172a"><tspan fill="url(#ink)">X</tspan>Prism</text>
+  <text x="304" y="212" font-family="Inter" font-weight="500" font-size="29" letter-spacing="0.5" fill="#475569">A modern display server for Unix</text>
+</svg>
