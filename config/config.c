@@ -28,7 +28,6 @@
 #include <stdbool.h>
 #include <unistd.h>
 
-#include "config/config-hal.h"
 #include "config/config-udev.h"
 #include "config/config-wscons.h"
 #include "config/hotplug_priv.h"
@@ -52,8 +51,6 @@ config_init(void)
 {
     if (!config_udev_init())
         ErrorF("[config] failed to initialise udev\n");
-    if (!config_hal_init())
-        ErrorF("[config] failed to initialise HAL\n");
     if (!config_wscons_init())
         ErrorF("[config] failed to initialise wscons\n");
 }
@@ -62,7 +59,6 @@ void
 config_fini(void)
 {
     config_udev_fini();
-    config_hal_fini();
     config_wscons_fini();
 }
 

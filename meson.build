@@ -195,11 +195,6 @@ endif
 
 glamor_option = get_option('glamor')
 
-hal_option = get_option('hal')
-if host_machine.system() in ['windows', 'darwin', 'cygwin']
-    hal_option = 'false'
-endif
-
 udev_option = get_option('udev')
 udev_kms_option = get_option('udev_kms')
 if not dependency('libudev', required: (udev_option == 'true' or udev_kms_option == 'true')).found()
@@ -301,32 +296,7 @@ if build_ipv6 and not have_AF_INET6
 endif
 message('IPv6 support: ' + (build_ipv6 ? 'YES' : 'NO'))
 
-hal_dep = []
-if hal_option == 'auto'
-    if not build_udev
-        hal_dep = dependency('hal', required: false)
-        build_hal = hal_dep.found()
-    else
-        build_hal = false
-    endif
-else
-    build_hal = hal_option == 'true'
-    if build_hal
-        hal_dep = dependency('hal')
-    endif
-endif
-
-if build_hal
-    message('WARNING: HAL is deprecated and might be removed in near future')
-    message('If you really need it, please file a feature request on keeping it')
-    message('and explain why you need it, what your use case is.')
-endif
-
-if build_udev and build_hal
-    error('Hotplugging through both libudev and hal not allowed')
-endif
-
-build_dbus = build_hal or build_systemd_logind
+build_dbus = build_systemd_logind
 
 udev_dep = dependency('', required:false)
 if build_udev or build_udev_kms
