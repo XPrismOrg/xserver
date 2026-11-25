@@ -106,8 +106,6 @@ option('linux_acpi', type: 'boolean', value: true,
        description: 'ACPI support on Linux')
 option('mitshm', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
        description: 'SHM extension')
-option('agp', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
-       description: 'AGP support')
 option('sha1', type: 'combo', choices: ['libc', 'CommonCrypto', 'CryptoAPI', 'libmd', 'libsha1', 'libnettle', 'libgcrypt', 'libcrypto', 'auto'], value: 'auto',
        description: 'SHA1 implementation')
 option('tests', type: 'boolean', value: true,

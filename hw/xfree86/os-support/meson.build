@@ -1,5 +1,6 @@
 srcs_xorg_os_support = [
     'bus/nobus.c',
+    'shared/agp_noop.c',
     'shared/posix_tty.c',
     'shared/sigio.c',
     'shared/vidmem.c',
@@ -15,12 +16,6 @@ if get_option('pciaccess')
     endif
 endif
 
-if get_option('agp') == 'auto'
-    build_agp = cc.has_header('sys/agpio.h') or cc.has_header('sys/agpgart.h') or cc.has_header('linux/agpgart.h')
-else
-    build_agp = get_option('agp') == 'true'
-endif
-
 if host_machine.system() == 'linux'
     srcs_xorg_os_support += [
         'linux/lnx_bell.c',
@@ -34,11 +29,6 @@ if host_machine.system() == 'linux'
         srcs_xorg_os_support += 'shared/drm_platform.c'
     else
         srcs_xorg_os_support += 'shared/platform_noop.c'
-    endif
-    if build_agp
-        srcs_xorg_os_support += 'linux/lnx_agp.c'
-    else
-        srcs_xorg_os_support += 'shared/agp_noop.c'
     endif
     if build_systemd_logind
         srcs_xorg_os_support += 'linux/systemd-logind.c'
@@ -66,11 +56,6 @@ elif host_machine.system() == 'sunos'
         srcs_xorg_os_support += 'shared/VTsw_noop.c'
     endif
 
-    if build_agp
-        srcs_xorg_os_support += 'solaris/sun_agp.c'
-    else
-        srcs_xorg_os_support += 'shared/agp_noop.c'
-    endif
 
     if host_machine.cpu_family() in ['sparc', 'sparc64']
         srcs_xorg_os_support += 'solaris/solaris-sparcv8plus.S'
@@ -131,16 +116,10 @@ elif host_machine.system().endswith('bsd') or host_machine.system() == 'dragonfl
         srcs_xorg_os_support += 'shared/kmod_noop.c'
     endif
 
-    if build_agp
-        srcs_xorg_os_support += 'linux/lnx_agp.c'
-    else
-        srcs_xorg_os_support += 'shared/agp_noop.c'
-    endif
 else
     # stub ossupport
     srcs_xorg_os_support += [
         'shared/VTsw_noop.c',
-        'shared/agp_noop.c',
         'shared/ioperm_noop.c',
         'shared/kmod_noop.c',
         'shared/pm_noop.c',
