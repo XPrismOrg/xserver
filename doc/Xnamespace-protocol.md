@@ -397,6 +397,9 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
    stream socket, or an app string is too long or not printable ASCII),
    `BadLength`. The passed fds are closed on every error.
 
+`utils/xns-listen` is a ready-made launcher-side client for this request;
+see its README for a bubblewrap example.
+
 ### 6.11 RemoveListener (since 1.1)
 
 ```

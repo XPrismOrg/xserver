@@ -721,6 +721,10 @@ endif
 subdir('hw')
 subdir('abi')
 
+if build_namespace
+    subdir('utils/xns-listen')
+endif
+
 if (get_option('tests') and host_machine.system() != 'windows' and build_xserver)
     subdir('test')
 endif

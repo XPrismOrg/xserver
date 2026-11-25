@@ -68,6 +68,7 @@ if pytest.found()
         'test_xinerama.py',
         'test_xi.py',
         'test_xkb.py',
+        'test_xns_listen.py',
         'test_xres.py',
     ]
 
