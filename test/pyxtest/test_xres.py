@@ -218,7 +218,7 @@ class TestXResClientPid:
     def test_query_client_ids_reports_connecting_pid(self, xserver, xres_xclient):
         """
         The PID reported for a client is the identity the server recorded
-        when the client connected (os/peer_identity.c): it must be the PID of
+        when the client connected (os/pal/identity.c): it must be the PID of
         the process that opened the connection, i.e. this test process.
         """
         import os

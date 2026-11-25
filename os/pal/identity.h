@@ -8,8 +8,8 @@
  * copy instead of querying the socket again, so the answer can't change
  * over the lifetime of the connection.
  */
-#ifndef XSERVER_OS_PEER_IDENTITY_H
-#define XSERVER_OS_PEER_IDENTITY_H
+#ifndef XSERVER_OS_PAL_IDENTITY_H
+#define XSERVER_OS_PAL_IDENTITY_H
 
 #include <sys/types.h>
 
@@ -62,4 +62,4 @@ struct _Client;
  */
 const struct peer_identity *ClientPeerIdentity(struct _Client *client);
 
-#endif /* XSERVER_OS_PEER_IDENTITY_H */
+#endif /* XSERVER_OS_PAL_IDENTITY_H */

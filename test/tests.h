@@ -31,6 +31,7 @@ const testfunc_t* list_test(void);
 const testfunc_t* list_zeroinit_test(void);
 const testfunc_t* misc_test(void);
 const testfunc_t* peer_identity_test(void);
+const testfunc_t* pal_test(void);
 const testfunc_t* sha1_test(void);
 const testfunc_t* signal_logging_test(void);
 const testfunc_t* string_test(void);

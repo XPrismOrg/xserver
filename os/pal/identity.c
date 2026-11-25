@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT OR X11
  *
  * Platform abstraction for the identity of a locally connected client.
- * See peer_identity.h.
+ * PAL identity module, see identity.h.
  *
  * Per platform:
  *   Solaris/illumos  getpeerucred()      uid, gid, pid, zone, groups
@@ -14,7 +14,8 @@
  *   others           getpeereid()        uid, gid (+ LOCAL_PEERPID on macOS)
  *
  * The code used to live in GetLocalClientCreds() (os/access.c), which
- * queried the socket every time it was called.
+ * queried the socket every time it was called, and then in
+ * os/peer_identity.c, before the PAL existed.
  */
 #include <dix-config.h>
 
@@ -37,7 +38,7 @@
 #include <sys/ucred.h>
 #endif
 
-#include "os/peer_identity.h"
+#include "os/pal/identity.h"
 
 #if defined(__linux__) && !defined(SO_PEERPIDFD)
 #define SO_PEERPIDFD 77     /* Linux 6.5; older libc headers lack it */

@@ -18,6 +18,7 @@ main(int argc, char **argv)
     run_test(input_test);
     run_test(misc_test);
     run_test(peer_identity_test);
+    run_test(pal_test);
     run_test(signal_logging_test);
     run_test(touch_test);
     run_test(xfree86_test);

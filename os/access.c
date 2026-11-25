@@ -1091,7 +1091,7 @@ ComputeLocalClient(ClientPtr client)
  * Used by AuthAudit to log who local connections came from
  *
  * The credentials are the ones recorded when the client connected
- * (see os/peer_identity.c); the socket is not queried again.
+ * (see os/pal/identity.c); the socket is not queried again.
  */
 int
 GetLocalClientCreds(ClientPtr client, LocalClientCredRec ** lccp)

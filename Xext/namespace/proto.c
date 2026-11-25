@@ -24,7 +24,7 @@
 #include "dix/rpcbuf_priv.h"
 #include "include/dixstruct.h"
 #include "include/os.h"
-#include "os/peer_identity.h"
+#include "os/pal/identity.h"
 #include "dix/capability_priv.h"
 #include "miext/extinit_priv.h"
 

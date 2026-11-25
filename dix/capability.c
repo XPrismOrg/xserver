@@ -65,7 +65,7 @@
 #include "include/propertyst.h"
 #include "include/windowstr.h"
 #include "os/log_priv.h"
-#include "os/peer_identity.h"
+#include "os/pal/identity.h"
 #include "Xext/xace.h"
 #include "Xext/xacestr.h"
 

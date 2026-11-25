@@ -8,7 +8,7 @@
 #include <X11/Xdefs.h>
 
 #include "include/dix.h" /* ClientPtr */
-#include "os/peer_identity.h"
+#include "os/pal/identity.h"
 
 struct _XtransConnInfo;
 
@@ -23,7 +23,7 @@ typedef struct {
     CARD32 conn_time;
     struct _XtransConnInfo *trans_conn;
     int flags;
-    /* who is on the other end; read once at connect time, see peer_identity.h */
+    /* who is on the other end; read once at connect time, see os/pal/identity.h */
     struct peer_identity peer;
     /* label of the labeled listener the client came through, or NULL;
      * see os/listener_priv.h */

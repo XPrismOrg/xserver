@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Tests for os/peer_identity.c: the identity of the process on the other
+ * Tests for os/pal/identity.c: the identity of the process on the other
  * end of a local socket.
  */
 
@@ -25,7 +25,7 @@
 #include <sys/syscall.h>
 #endif
 
-#include "os/peer_identity.h"
+#include "os/pal/identity.h"
 #include "tests-common.h"
 
 /*

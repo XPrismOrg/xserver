@@ -1,7 +1,6 @@
 srcs_os = [
     'WaitFor.c',
     'access.c',
-    'peer_identity.c',
     'listener.c',
     'alloc.c',
     'auth.c',
@@ -26,6 +25,9 @@ srcs_os = [
     'xprintf.c',
     'log.c',
 ]
+
+subdir('pal')
+srcs_os += srcs_pal
 
 conf_data.set('CONFIG_SYSLOG', cc.has_header('syslog.h') ? '1' : false)
 
@@ -66,6 +68,7 @@ endif
 
 os_dep = []
 os_c_args = []
+os_c_args += pal_c_args
 
 # eg. struct msghdr -> msg_control 
 if host_machine.system() == 'sunos'

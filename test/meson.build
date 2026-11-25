@@ -197,6 +197,7 @@ if build_xorg
      'list_zeroinit.c',
      'misc.c',
      'peer_identity.c',
+     'pal.c',
      'sha1.c',
      'signal-logging.c',
      'string.c',
@@ -261,3 +262,7 @@ if build_xorg
 
     test('unit', unit)
 endif
+
+# OS-specific code stays in the Platform Abstraction Layer (doc/pal.md)
+test('os-ifdefs', find_program('check-os-ifdefs.sh'),
+     args: [meson.project_source_root()])
