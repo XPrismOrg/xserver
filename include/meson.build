@@ -274,7 +274,6 @@ conf_data.set('XSYNC', '1')
 conf_data.set('XTEST', '1')
 conf_data.set('XV', build_xv ? '1' : false)
 conf_data.set('XvExtension', build_xv ? '1' : false)
-conf_data.set('XvMCExtension', build_xvmc ? '1' : false)
 
 # needed by several extensions
 build_registry_resource = (build_xselinux or build_res or build_namespace)
@@ -555,7 +554,6 @@ if build_xorg_sdk
             'xorgVersion.h',
             'Xprintf.h',
             'xvdix.h',
-            'xvmcext.h',
             'xserver-properties.h',
             'xlibre_ptrtypes.h',
             'xf86Crtc.h',
@@ -575,7 +573,7 @@ if build_xorg_sdk
     endif
 
     if build_xv
-        install_data(['xf86xv.h', 'xf86xvmc.h'], install_dir: xorgsdkdir)
+        install_data(['xf86xv.h'], install_dir: xorgsdkdir)
     endif
 
     if build_mitshm

@@ -40,7 +40,7 @@ if build_dga
 endif
 
 if build_xv
-    srcs_xorg_common += ['xf86xv.c', 'xf86xvmc.c']
+    srcs_xorg_common += ['xf86xv.c']
 endif
 
 if build_udev

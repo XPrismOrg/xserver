@@ -49,7 +49,6 @@ cat > sdksyms.c << EOF
 /* Xext/Makefile.am -- half is module, half is builtin */
 #ifdef XV
 #include "xvdix.h"
-#include "xvmcext.h"
 #endif
 #ifdef CONFIG_MITSHM
 #include "shmint.h"
@@ -114,7 +113,6 @@ cat > sdksyms.c << EOF
 #include "xisb.h"
 #ifdef XV
 # include "xf86xv.h"
-# include "xf86xvmc.h"
 #endif
 #include "xorgVersion.h"
 #if defined(__sparc__) || defined(__sparc)

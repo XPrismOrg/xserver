@@ -4,9 +4,6 @@ srcs_xv = [
     'xvdisp.c',
 ]
 
-if build_xvmc
-    srcs_xv += 'xvmc.c'
-endif
 
 libxserver_xv = []
 if build_xv

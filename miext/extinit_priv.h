@@ -60,9 +60,6 @@ void XkbExtensionInit(void);
 void SELinuxExtensionInit(void);
 void XTestExtensionInit(void);
 void XvExtensionInit(void);
-#ifdef XvMCExtension
-void XvMCExtensionInit(void);
-#endif
 void dri3_extension_init(void);
 void present_extension_init(void);
 void NamespaceExtensionInit(void);

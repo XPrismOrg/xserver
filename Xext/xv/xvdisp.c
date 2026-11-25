@@ -39,7 +39,6 @@ SOFTWARE.
 #include "include/callback.h"
 #include "include/shmint.h"
 #include "include/misc.h"
-#include "include/xvmcext.h"
 #include "os/osdep.h"
 #include "Xext/panoramiX/panoramiX.h"
 #include "Xext/panoramiX/panoramiXsrv.h"
@@ -836,11 +835,6 @@ ProcXvQueryImageAttributes(ClientPtr client)
             break;
         }
     }
-
-#ifdef XvMCExtension
-    if (!pImage)
-        pImage = XvMCFindXvImage(pPort, stuff->id);
-#endif
 
     if (!pImage)
         return BadMatch;
