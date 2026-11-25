@@ -108,9 +108,6 @@ extern _X_EXPORT int DestroySubwindows(WindowPtr /*pWin */ ,
 
 /* Quartz support on Mac OS X uses the HIToolbox
    framework whose ChangeWindowAttributes function conflicts here. */
-#ifdef __APPLE__
-#define ChangeWindowAttributes Darwin_X_ChangeWindowAttributes
-#endif
 extern _X_EXPORT int ChangeWindowAttributes(WindowPtr /*pWin */ ,
                                             Mask /*vmask */ ,
                                             XID * /*vlist */ ,
@@ -126,12 +123,7 @@ extern _X_EXPORT struct _Cursor *WindowGetDeviceCursor(WindowPtr /*pWin */ ,
 
 /* Quartz support on Mac OS X uses the HIToolbox
    framework whose GetWindowAttributes function conflicts here. */
-#ifdef __APPLE__
-#define GetWindowAttributes(w,c,x) Darwin_X_GetWindowAttributes((w),(c),(x))
-extern void Darwin_X_GetWindowAttributes(
-#else
 extern _X_EXPORT void GetWindowAttributes(
-#endif
                                              WindowPtr /*pWin */ ,
                                              ClientPtr /*client */ ,
                                              xGetWindowAttributesReply *

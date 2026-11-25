@@ -74,40 +74,6 @@ x_sha1_final(void *ctx, unsigned char result[20])
     return 1;
 }
 
-#elif defined(HAVE_SHA1_IN_COMMONCRYPTO)        /* Use CommonCrypto for SHA1 */
-
-#include <CommonCrypto/CommonDigest.h>
-
-void *
-x_sha1_init(void)
-{
-    CC_SHA1_CTX *ctx = calloc(1, sizeof(CC_SHA1_CTX));
-
-    if (!ctx)
-        return NULL;
-    CC_SHA1_Init(ctx);
-    return ctx;
-}
-
-int
-x_sha1_update(void *ctx, void *data, int size)
-{
-    CC_SHA1_CTX *sha1_ctx = ctx;
-
-    CC_SHA1_Update(sha1_ctx, data, size);
-    return 1;
-}
-
-int
-x_sha1_final(void *ctx, unsigned char result[20])
-{
-    CC_SHA1_CTX *sha1_ctx = ctx;
-
-    CC_SHA1_Final(result, sha1_ctx);
-    free(sha1_ctx);
-    return 1;
-}
-
 #elif defined(HAVE_SHA1_IN_CRYPTOAPI)        /* Use CryptoAPI for SHA1 */
 
 #define WIN32_LEAN_AND_MEAN

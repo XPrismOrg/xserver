@@ -16,7 +16,7 @@ if get_option('xvfb')
     ]
 
     # Only keep tools that are actually installed: simple-xinit execs the client
-    # by name at runtime, so a missing client (e.g. Cygwin CI ships none of
+    # by name at runtime, so a missing client (e.g. a minimal CI image ships none of
     # these) would make the test fail rather than skip. Filter them out up front.
     avail_tests = []
     foreach test_walk: testlist

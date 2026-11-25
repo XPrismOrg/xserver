@@ -76,7 +76,7 @@ Notes on the choices:
 
 ## Inventory: OS-specific code today
 
-Outside `os/pal` and the legacy per-OS directories, 32 files have OS
+Outside `os/pal` and the legacy per-OS directories, 22 files have OS
 `#if`s (`test/os-ifdefs.baseline`). By area:
 
 | Area | Files | Moves to |
@@ -89,7 +89,7 @@ Outside `os/pal` and the legacy per-OS directories, 32 files have OS
 | Privilege handling | `hw/xfree86/xorg-wrapper.c`, `os/utils.c` | session / restrict |
 | Sockets and transport | `os/Xtranssock.c`, `os/Xtransutil.c`, `os/connection.c` | stays (portability shims, see rule 3) |
 | Misc portability | `include/compiler.h`, `os/xsha1.c`, `os/backtrace.c`, `os/inputthread.c`, `Xext/shm/shm.c` | stays or becomes `HAVE_*` checks |
-| macOS / Cygwin leftovers | `include/window.h`, `include/resource.h`, `include/dixfont.h`, ... | delete (unsupported platforms) |
+| ~~macOS / Cygwin leftovers~~ | | Removed |
 
 The Xorg DDX keeps `hw/xfree86/os-support` for as long as it exists. The
 new display core (Phase II) is written against the PAL only.

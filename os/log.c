@@ -127,15 +127,6 @@ static char *saveBuffer = NULL;
 static int bufferSize = 0, bufferUnused = 0, bufferPos = 0;
 static Bool needBuffer = TRUE;
 
-#ifdef __APPLE__
-static char __crashreporter_info_buff__[4096] = { 0 };
-
-static const char *__crashreporter_info__ __attribute__ ((__used__)) =
-    &__crashreporter_info_buff__[0];
-/* NOLINTBEGIN(hicpp-no-assembler) */
-asm(".desc ___crashreporter_info__, 0x10");
-/* NOLINTEND(hicpp-no-assembler) */
-#endif
 
 /* Prefix strings for log messages. */
 #define X_UNKNOWN_STRING		"(\?\?)"
@@ -957,16 +948,6 @@ FatalError(const char *f, ...)
     /* Make a copy for ddxFatalError */
     va_copy(args2, args);
 
-#ifdef __APPLE__
-    {
-        va_list apple_args;
-
-        va_copy(apple_args, args);
-        (void)vsnprintf(__crashreporter_info_buff__,
-                        sizeof(__crashreporter_info_buff__), f, apple_args);
-        va_end(apple_args);
-    }
-#endif
     LogVMessageVerb(X_NONE, -1, f, args);
     va_end(args);
     ErrorF("\n");

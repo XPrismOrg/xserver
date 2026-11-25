@@ -168,9 +168,6 @@ extern _X_EXPORT XID FakeClientID(int /*client */ );
 
 /* Quartz support on Mac OS X uses the CarbonCore
    framework whose AddResource function conflicts here. */
-#ifdef __APPLE__
-#define AddResource Darwin_X_AddResource
-#endif
 extern _X_EXPORT Bool AddResource(XID id,
                                   RESTYPE type,
                                   void *value);

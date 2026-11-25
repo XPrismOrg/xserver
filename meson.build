@@ -182,12 +182,6 @@ if dfp == ''
         join_paths(fontrootdir, '100dpi'),
         join_paths(fontrootdir, '75dpi'),
     ]
-    if host_machine.system() == 'darwin'
-       dfp_elements += [
-       '/Library/Fonts',
-       '/System/Library/Fonts',
-    ]
-    endif
     default_font_path = ','.join(dfp_elements)
 else
     default_font_path = dfp
@@ -231,7 +225,7 @@ build_xorg_sdk = get_option('xorg-sdk')
 build_xorg = false
 if (host_machine.system() != 'windows')
     if get_option('xorg') == 'auto'
-        build_xorg = host_machine.system() not in ['darwin', 'windows']
+        build_xorg = host_machine.system() != 'windows'
     else
         build_xorg = get_option('xorg') == 'true'
     endif
@@ -339,7 +333,6 @@ endif
 # builtin providers, and then smaller implementations of over larger ones.
 test_sha1 = [
     'libc',          # libmd API is in libc on some BSDs
-    'CommonCrypto',  # darwin API
     'CryptoAPI',     # windows API
     'libmd',         # other BSDs & Solaris
     'libsha1',       # "a tiny library providing a SHA1 implementation, created for facilitating X server compilation on embedded devices where larger libraries containing SHA1 implementations are not needed"
@@ -356,11 +349,6 @@ sha1_found = false
 foreach t : test_sha1
     if t == 'libc'
         if cc.has_function('SHA1Init')
-            sha1_found = true
-            sha1_dep = dependency('', required: false)
-        endif
-    elif t == 'CommonCrypto'
-        if cc.has_function('CC_SHA1_Init')
             sha1_found = true
             sha1_dep = dependency('', required: false)
         endif
@@ -795,7 +783,7 @@ if build_xorg_sdk
 
     # On Windows, modules built with the SDK will need to link with server and
     # module implibs to resolve symbols
-    if host_machine.system() in ['cygwin', 'windows']
+    if host_machine.system() == 'windows'
         sdkconfig.set('XORG_DRIVER_LIBS', '-lXorg.exe -L\${moduledir} -lshadow -no-undefined')
     endif
 

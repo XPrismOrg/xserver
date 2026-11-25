@@ -166,7 +166,7 @@ SOFTWARE.
 
 #endif                          /* WIN32 */
 
-#if !defined(WIN32) || defined(__CYGWIN__)
+#ifndef WIN32
 #include <libgen.h>
 #endif
 
@@ -1069,7 +1069,7 @@ ComputeLocalClient(ClientPtr client)
          */
         char *tok = strtok(cmd, ":");
 
-#if !defined(WIN32) || defined(__CYGWIN__)
+#ifndef WIN32
         bool ret = strcmp(basename(tok), "ssh") != 0;
 #else
         bool ret = strcmp(tok, "ssh") != 0;

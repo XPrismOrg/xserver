@@ -64,9 +64,9 @@ xorg_link = [
     libxserver_config,
 ]
 
-if host_machine.system() in ['cygwin', 'windows']
+if host_machine.system() == 'windows'
     linker_export_flags = '-Wl,--export-all-symbols'
-elif host_machine.system() in ['sunos', 'darwin']
+elif host_machine.system() == 'sunos'
     linker_export_flags = []
 else
     linker_export_flags = '-Wl,--export-dynamic'

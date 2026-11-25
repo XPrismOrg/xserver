@@ -326,10 +326,6 @@ if host_machine.system() == 'openbsd'
   csrg_based = true
 endif
 
-if host_machine.system() == 'darwin'
-  csrg_based = true
-endif
-
 conf_data.set('SVR4', cc.compiles(defines_svr4) ? '1' : false)
 conf_data.set_quoted('XKB_DFLT_RULES', get_option('xkb_default_rules'))
 conf_data.set('XORGSERVER', build_xorg ? '1' : false)

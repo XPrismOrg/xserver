@@ -42,8 +42,6 @@ elif pal_system == 'openbsd'
     srcs_pal += 'pal/openbsd/cmdline.c'
 elif pal_system == 'sunos'
     srcs_pal += 'pal/sunos/cmdline.c'
-elif pal_system == 'darwin'
-    srcs_pal += 'pal/darwin/cmdline.c'
 else
     srcs_pal += 'pal/procfs/default.c'
 endif
