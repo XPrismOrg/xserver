@@ -74,7 +74,7 @@ jobs:
             - name: QEMU user-mode native build for ${{ matrix.name }}
               run: sudo --preserve-env=MESON_ARGS,FDO_CI_CONCURRENT .github/scripts/qemu/run-qemu-build.sh ${{ matrix.name }} ${{ matrix.qemu }} ${{ matrix.suite }} ${{ matrix.mirror }}
               env:
-                  MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxorg=true -Dxvfb=true -Dxephyr=true -Dxfbdev=false -Dglx=true -Dxcsecurity=true
+                  MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxorg=true -Dxvfb=true -Dxephyr=true -Dxfbdev=false -Dglx=true
 
             - name: Save QEMU rootfs cache
               if: always()

@@ -47,7 +47,6 @@ build() {
     "${_builddir}"
     -D ipv6=true
     -D xvfb=true
-    -D xcsecurity=true
     -D xorg=true
     -D xephyr=true
     -D glamor=true

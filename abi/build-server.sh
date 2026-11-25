@@ -38,7 +38,7 @@ rm -rf "$workdir/build" "$workdir/root"
 meson setup "$workdir/build" "$srcdir" \
 	-Dprefix=/usr -Dbuildtype=debug -Dc_args=-fno-common \
 	-Dnamespace=false -Dxselinux=false -Dxephyr=false -Dwerror=false \
-	-Dxcsecurity=false -Dxorg=true -Dxvfb=false \
+	-Dxorg=true -Dxvfb=false \
 	-Ddocs=false -Dsuid_wrapper=false
 ninja -C "$workdir/build"
 DESTDIR="$workdir/root" meson install -C "$workdir/build" --no-rebuild --quiet

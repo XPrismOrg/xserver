@@ -111,9 +111,6 @@ static const ExtensionModule staticExtensions[] = {
     {SyncExtensionInit, "SYNC", NULL},
     {XkbExtensionInit, "XKEYBOARD", NULL},
     {XCMiscExtensionInit, "XC-MISC", NULL},
-#ifdef XCSECURITY
-    {SecurityExtensionInit, "SECURITY", &noSecurityExtension},
-#endif
 #ifdef CONFIG_NAMESPACE
     {NamespaceExtensionInit, "NAMESPACE", &noNamespaceExtension},
 #endif

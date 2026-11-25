@@ -32,7 +32,7 @@ RUN MACHINE="$(gcc -dumpmachine)" && \
         -Dprefix=/opt/x11 \
         -Dxorg-sdk=true -Dxorg=true \
         -Dxephyr=false -Dxvfb=false -Dxfbdev=false \
-        -Dwerror=false -Dxcsecurity=false && \
+        -Dwerror=false && \
     ninja -C _build install
 
 # --- final stage: base + the installed SDK, no source -----------------------

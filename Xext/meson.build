@@ -24,7 +24,6 @@ if build_xselinux
     subdir('xselinux')
 endif
 
-subdir('security')
 subdir('damage')
 subdir('doublebuffer')
 subdir('dri2')

@@ -94,8 +94,6 @@ option('namespace', type: 'boolean', value: true,
        description: 'Container/namespace extension')
 option('xinerama', type: 'boolean', value: true,
        description: 'Xinerama extension')
-option('xcsecurity', type: 'boolean', value: false,
-       description: 'Security extension')
 option('xv', type: 'boolean', value: true,
        description: 'Xv extension')
 option('linux_acpi', type: 'boolean', value: true,

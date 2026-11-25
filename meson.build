@@ -497,7 +497,6 @@ if build_res
 endif
 
 build_xinerama = get_option('xinerama')
-build_xsecurity = get_option('xcsecurity')
 build_namespace = get_option('namespace')
 
 build_xv = get_option('xv')
@@ -690,7 +689,6 @@ if build_xserver
         libxserver_xext,
         libxserver_xcmisc,
         libxserver_sync,
-        libxserver_security,
         libxserver_miext_sync,
         libxserver_xfixes,
         libxserver_xi,
