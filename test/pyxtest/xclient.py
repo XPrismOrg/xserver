@@ -163,9 +163,14 @@ class RawX11Connection:
     Set swapped=True for testing byte-swap code paths (SProcXxx).
     """
 
-    def __init__(self, display_num, swapped=False):
+    def __init__(self, display_num, swapped=False, auth=None):
+        """
+        :param auth: optional ``(protocol_name, data)`` tuple of bytes sent in
+            the connection setup, e.g. ``(b"MIT-MAGIC-COOKIE-1", cookie)``.
+        """
         self.display_num = display_num
         self.swapped = swapped
+        self.auth = auth
         self._byte_order = ">" if swapped else "<"
         self.sock = None
         self.seq = 0
@@ -210,7 +215,12 @@ class RawX11Connection:
     def _handshake(self):
         byte_order = 0x42 if self.swapped else 0x6C
         bo = self._byte_order
-        setup = struct.pack(f"{bo}BxHHHHxx", byte_order, 11, 0, 0, 0)
+        auth_name, auth_data = self.auth if self.auth else (b"", b"")
+        setup = struct.pack(
+            f"{bo}BxHHHHxx", byte_order, 11, 0, len(auth_name), len(auth_data)
+        )
+        setup += auth_name + b"\x00" * (-len(auth_name) % 4)
+        setup += auth_data + b"\x00" * (-len(auth_data) % 4)
         assert self.sock
         self.sock.sendall(setup)
 
@@ -294,11 +304,11 @@ class RawX11Connection:
         if not header:
             return None
 
-        rtype = header[0]
+        rtype = header[0] & 0x7F  # strip the SendEvent bit
         bo = self._byte_order
         if rtype == 0:
             return X11Error.from_data(header, bo)
-        elif rtype == 1:
+        elif rtype in (1, 35):  # replies and GenericEvents carry extra data
             extra_len = struct.unpack_from(f"{bo}I", header, 4)[0]
             if extra_len > 0:
                 try:

@@ -12,6 +12,7 @@ XGetDeviceProperty = 39
 
 # XI2 minor opcodes
 XIChangeCursor = 42
+XISelectEvents = 46
 XIQueryVersion = 47
 XIPassiveGrabDevice = 54
 XIPassiveUngrabDevice = 55
@@ -20,6 +21,15 @@ XIGetProperty = 59
 
 XI2_MAJOR = 2
 XI2_MINOR = 4
+
+# XI2 event types (as found in the GenericEvent evtype field)
+XI_KeyPress = 2
+XI_KeyRelease = 3
+XI_RawKeyPress = 13
+XI_RawKeyRelease = 14
+XI_RawButtonPress = 15
+XI_RawButtonRelease = 16
+XI_RawMotion = 17
 
 # Grab types
 XIGrabtypeButton = 0
@@ -74,6 +84,30 @@ class XIQueryVersionRequest:
             self.major,
             self.minor,
         )
+
+
+@dataclass
+class XISelectEventsRequest:
+    """XISelectEvents request with a single event mask.
+
+    ``events`` is a list of XI2 event types to select.
+    """
+
+    opcode: int
+    window: int
+    deviceid: int
+    events: list[int]
+
+    def to_bytes(self, byte_order: str = "<") -> bytes:
+        nbits = max(self.events, default=0) + 1
+        mask_len = (nbits + 31) // 32  # in 4-byte units
+        mask = bytearray(mask_len * 4)
+        for ev in self.events:
+            mask[ev // 8] |= 1 << (ev % 8)
+        body = struct.pack(f"{byte_order}IHxx", self.window, 1)
+        body += struct.pack(f"{byte_order}HH", self.deviceid, mask_len) + bytes(mask)
+        length = (4 + len(body)) // 4
+        return struct.pack(f"{byte_order}BBH", self.opcode, XISelectEvents, length) + body
 
 
 @dataclass
