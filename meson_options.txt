@@ -124,7 +124,6 @@ option('sha1', type: 'combo', choices: ['libc', 'CommonCrypto', 'CryptoAPI', 'li
 option('tests', type: 'boolean', value: true,
        description: 'Build tests for the X server on platforms that support it')
 
-option('dri1', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto', description: 'Build DRI1 extension (default: auto)')
 option('dri2', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto', description: 'Build DRI2 extension (default: auto)')
 option('dri3', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto', description: 'Build DRI3 extension (default: auto)')
 option('drm', type: 'boolean', value: true,

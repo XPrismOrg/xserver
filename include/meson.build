@@ -263,7 +263,6 @@ conf_data.set('XCMISC', '1')
 conf_data.set('XCSECURITY', build_xsecurity ? '1' : false)
 conf_data.set('CONFIG_NAMESPACE', build_namespace ? '1' : false)
 conf_data.set('XDMCP', build_xdmcp ? '1' : false)
-conf_data.set('XF86DRI', build_dri1 ? '1' : false)
 conf_data.set('XF86VIDMODE', 1)
 conf_data.set('XFIXES', '1')
 conf_data.set('XFreeXDGA', build_dga ? '1' : false)
@@ -459,9 +458,7 @@ if build_xorg_sdk
             'dixfont.h',
             'dixfontstr.h',
             'dixstruct.h',
-            'dri.h',
             'dri2.h',
-            'dristruct.h',
             'edid.h',
             'events.h',
             'exa.h',
@@ -521,7 +518,6 @@ if build_xorg_sdk
             'regionstr.h',
             'resource.h',
             'rgb.h',
-            'sarea.h',
             'screenint.h',
             'scrnintstr.h',
             'servermd.h',

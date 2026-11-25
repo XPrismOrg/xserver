@@ -109,9 +109,6 @@
 /* XKB default rules */
 #mesondefine XKB_DFLT_RULES
 
-/* Build DRI extension */
-#mesondefine XF86DRI
-
 /* Build DRI2 extension */
 #mesondefine DRI2
 

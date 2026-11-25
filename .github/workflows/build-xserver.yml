@@ -846,7 +846,7 @@ jobs:
     xserver-build-solaris:
         runs-on: ubuntu-latest
         env:
-            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxnest=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddrm=false -Ddri1=false -Ddri2=true -Ddri3=true
+            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxnest=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddrm=false -Ddri2=true -Ddri3=true
         steps:
             - uses: actions/checkout@v6
             - uses: ./.github/actions/ubuntu-pkg-cache

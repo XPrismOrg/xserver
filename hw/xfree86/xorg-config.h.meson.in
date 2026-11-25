@@ -51,9 +51,6 @@
 /* Default log dir under XDG_STATE_HOME */
 #mesondefine DEFAULT_XDG_STATE_HOME_LOGDIR
 
-/* Building DRI-capable DDX. */
-#mesondefine XF86DRI
-
 /* Build DRI2 extension */
 #mesondefine DRI2
 

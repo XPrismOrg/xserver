@@ -49,7 +49,6 @@
 
 Bool noXFree86VidModeExtension = FALSE;
 Bool noXFree86DGAExtension = FALSE;
-Bool noXFree86DRIExtension = FALSE;
 
 /*
  * DDX-specific extensions.
@@ -67,13 +66,6 @@ static const ExtensionModule extensionModules[] = {
 	XFree86DGAExtensionInit,
 	XF86DGANAME,
 	&noXFree86DGAExtension
-    },
-#endif
-#ifdef XF86DRI
-    {
-        XFree86DRIExtensionInit,
-        "XFree86-DRI",
-        &noXFree86DRIExtension
     },
 #endif
 };

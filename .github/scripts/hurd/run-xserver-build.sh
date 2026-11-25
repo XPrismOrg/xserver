@@ -73,7 +73,7 @@ git checkout FETCH_HEAD
 #   - glx            the GLX extension builds without libdrm (software/indirect)
 # udev + logind stay off (absent on Hurd → static config / input discovery).
 # The DRM-coupled subsystems stay off because Hurd has no DRM kernel interface:
-#   - dri1/dri2/dri3 — libdrm's <drm.h> pulls a nonexistent mach/x86_64/ioccom.h
+#   - dri2/dri3 — libdrm's <drm.h> pulls a nonexistent mach/x86_64/ioccom.h
 #   - glamor         — glamor_egl.c needs DRM_FORMAT_MOD_INVALID + GBM (no GBM
 #                      without DRM); confirmed non-buildable on Hurd
 # Xfbdev (kdrive fbdev) also stays off: it builds hw/kdrive/linux, which needs
@@ -83,7 +83,7 @@ meson setup _build \
     -Dwerror=false \
     -Dxvfb=true -Dxnest=true -Dxorg=true -Dxephyr=true \
     -Dglx=true \
-    -Dxfbdev=false -Dglamor=false -Ddri1=false -Ddri2=false -Ddri3=false \
+    -Dxfbdev=false -Dglamor=false -Ddri2=false -Ddri3=false \
     -Dudev=false -Dsystemd_logind=false
 
 echo "==> meson compile (Xvfb + Xnest + Xorg + Xephyr + glx)"

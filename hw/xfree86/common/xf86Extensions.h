@@ -28,11 +28,6 @@
 
 #include "extnsionst.h"
 
-#ifdef XF86DRI
-extern Bool noXFree86DRIExtension;
-void XFree86DRIExtensionInit(void);
-#endif
-
 #ifdef XF86VIDMODE
 #include <X11/extensions/xf86vmproto.h>
 extern Bool noXFree86VidModeExtension;

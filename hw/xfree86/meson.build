@@ -28,9 +28,6 @@ endif
 subdir('common')
 subdir('compat')
 subdir('ddc')
-if build_dri1
-    subdir('dri')
-endif
 subdir('i2c')
 subdir('loader')
 subdir('modes')
@@ -68,9 +65,6 @@ xorg_link = [
     libxserver_main,
     libxserver_config,
 ]
-if build_dri1
-    xorg_link += xorg_dri
-endif
 
 if host_machine.system() in ['cygwin', 'windows']
     linker_export_flags = '-Wl,--export-all-symbols'
