@@ -202,10 +202,11 @@ Bool XnsLoadConfig(void)
         XNS_LOG("namespace: \"%s\" \n", ns->name);
         struct auth_token *at;
         xorg_list_for_each_entry(at, &ns->auth_tokens, entry) {
-            XNS_LOG("      auth: \"%s\" \"", at->authProto);
-            for (int i=0; i<at->authTokenLen; i++)
-                printf("%02X", (unsigned char)at->authTokenData[i]);
-            printf("\"\n");
+            /* never log the secret itself: server output often ends up
+               in the journal or a display manager log that others can
+               read, and the root cookie grants unconfined access */
+            XNS_LOG("      auth: \"%s\" (%zu bytes)\n", at->authProto,
+                    at->authTokenLen);
         }
     }
 
