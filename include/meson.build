@@ -435,17 +435,6 @@ elif host_machine.system() in ['netbsd', 'openbsd']
     endif
 endif
 
-xwin_data = configuration_data()
-xwin_data.set('HAS_DEVWINDOWS', host_machine.system() == 'cygwin' ? '1' : false,
-              description: 'Has /dev/windows for signaling new win32 messages')
-xwin_data.set('RELOCATE_PROJECTROOT', host_machine.system() == 'windows' ? '1' : false,
-              description: 'Make paths relative to the xserver installation location')
-xwin_data.set10('ENABLE_DEBUG', enable_debugging)
-
-configure_file(output : 'xwin-config.h',
-               input : 'xwin-config.h.meson.in',
-               configuration : xwin_data)
-
 dtrace_hdr = []
 dtrace_tmpl = files('Xserver.d')
 if with_dtrace

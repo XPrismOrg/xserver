@@ -16,6 +16,3 @@ if build_xquartz
     subdir('xquartz')
 endif
 
-if build_xwin
-    subdir('xwin')
-endif

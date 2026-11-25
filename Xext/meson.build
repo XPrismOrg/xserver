@@ -34,7 +34,7 @@ subdir('panoramiX')
 subdir('present')
 subdir('render')
 subdir('composite')
-if build_xwin or build_xquartz
+if build_xquartz
     subdir('pseudoramiX')
 endif
 subdir('randr')

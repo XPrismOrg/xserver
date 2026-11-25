@@ -254,15 +254,6 @@ xorgsdkdir = join_paths(get_option('prefix'), get_option('includedir'), 'xorg')
 ## configure Xnest - nesting X server
 build_xnest = get_option('xnest') != 'false'
 
-build_xwin = false
-if get_option('xwin') == 'auto'
-    if host_machine.system() in ['cygwin', 'windows']
-            build_xwin = true
-    endif
-else
-    build_xwin = get_option('xwin') == 'true'
-endif
-
 build_xquartz = false
 if get_option('xquartz') == 'auto'
     if host_machine.system() == 'darwin'
@@ -300,7 +291,6 @@ summary({
         'Xorg': build_xorg,
         'Xnest': build_xnest,
         'Xvfb': build_xvfb,
-        'Xwin': build_xwin,
         'Xquartz': build_xquartz,
         'Xephyr': build_xephyr,
         'Xfake': build_xfake,
