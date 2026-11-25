@@ -562,11 +562,13 @@ main(int argc, char **argv)
 
     status = 0;
     for (;;) {
-        int sig = sigwaitinfo(&sigs, NULL);
-        if (sig < 0) {
-            if (errno == EINTR)
+        /* sigwait(), not sigwaitinfo(): OpenBSD only has the former */
+        int sig;
+        int err = sigwait(&sigs, &sig);
+        if (err != 0) {
+            if (err == EINTR)
                 continue;
-            perror("sigwaitinfo");
+            fprintf(stderr, "%s: sigwait: %s\n", progname, strerror(err));
             status = 1;
             break;
         }

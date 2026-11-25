@@ -10,6 +10,10 @@ set -e
 
 os=$1
 ./.github/scripts/$os/install-pkg.sh
+# the unit tests compile XKB keymaps; upstream's FreeBSD list lacks the data
+if [ "$os" = freebsd ]; then
+    pkg install -y xkeyboard-config
+fi
 
 if [ "$os" = openbsd ]; then
     PKG_CONFIG_PATH="/usr/X11R6/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/lib/pkgconfig:${PKG_CONFIG_PATH:-}"

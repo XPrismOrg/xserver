@@ -19,11 +19,21 @@ baseline="$srcdir/test/os-ifdefs.baseline"
 os_macros='__linux__|__FreeBSD__|__FreeBSD_kernel__|__OpenBSD__|__NetBSD__|__DragonFly__|__sun|__SVR4|__GNU__|__APPLE__|__CYGWIN__|CSRG_BASED'
 pattern="^[[:space:]]*#[[:space:]]*(if|ifdef|ifndef|elif).*\\b(${os_macros})\\b"
 
+# the server's own sources only: in a git checkout the tracked files (CI
+# puts third-party sources and build trees inside the source directory),
+# otherwise (release tarball) every file
+sources() {
+    if git -C "$srcdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git -C "$srcdir" ls-files -- '*.c' '*.h'
+    else
+        (cd "$srcdir" && find . -name '*.c' -o -name '*.h' | sed 's|^\./||')
+    fi
+}
+
 current() {
     cd "$srcdir"
-    grep -rEc --include='*.c' --include='*.h' "$pattern" . 2>/dev/null |
+    sources | tr '\n' '\0' | xargs -0 grep -Ec "$pattern" 2>/dev/null |
         grep -v ':0$' |
-        sed 's|^\./||' |
         grep -vE '^(os/pal/|hw/xfree86/os-support/|hw/kdrive/os/|test/|build)' |
         LC_ALL=C sort || true
 }
