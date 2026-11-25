@@ -1607,13 +1607,19 @@ __glXQueryServerString(CARD32 name)
 
     cookie = xcb_glx_query_server_string(HostX.conn, HostX.screen, name);
     reply = xcb_glx_query_server_string_reply(HostX.conn, cookie, NULL);
-    str = xcb_glx_query_server_string_string(reply);
+    /* The host server may not support GLX at all (e.g. Xvfb built
+     * without it): the request then fails and there is no reply. */
+    if (!reply)
+        return NULL;
 
-    /* The spec doesn't mention this, but the Xorg server replies with
-     * a string already terminated with '\0'. */
+    str = xcb_glx_query_server_string_string(reply);
     len = xcb_glx_query_server_string_string_length(reply);
-    buf = XNFalloc(len);
+
+    /* The spec doesn't say the string is '\0'-terminated (the Xorg server
+     * happens to do so), so always terminate it ourselves. */
+    buf = XNFalloc(len + 1);
     memcpy(buf, str, len);
+    buf[len] = '\0';
     free(reply);
 
     return buf;
@@ -1638,7 +1644,8 @@ ephyr_glamor_init(ScreenPtr screen)
         return FALSE;
     }
     hostx_glx_exts = __glXQueryServerString(GLX_EXTENSIONS);
-    if (epoxy_extension_in_string(hostx_glx_exts,"GLX_EXT_libglvnd"))
+    if (hostx_glx_exts &&
+        epoxy_extension_in_string(hostx_glx_exts, "GLX_EXT_libglvnd"))
         glvnd_vendors = __glXQueryServerString(GLX_VENDOR_NAMES_EXT);
 
     if (glvnd_vendors) {
