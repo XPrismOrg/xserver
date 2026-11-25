@@ -54,4 +54,12 @@ void peer_identity_release(struct peer_identity *id);
 /** An empty identity: no fields set, pidfd = -1. */
 void peer_identity_init(struct peer_identity *id);
 
+struct _Client;
+/**
+ * The identity recorded when @p client connected, for the security layer.
+ * Never NULL for a real client; fields == 0 if nothing is known (remote
+ * client, or the platform can't tell). Valid for the client's lifetime.
+ */
+const struct peer_identity *ClientPeerIdentity(struct _Client *client);
+
 #endif /* XSERVER_OS_PEER_IDENTITY_H */

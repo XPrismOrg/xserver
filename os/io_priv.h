@@ -25,6 +25,9 @@ typedef struct {
     int flags;
     /* who is on the other end; read once at connect time, see peer_identity.h */
     struct peer_identity peer;
+    /* label of the labeled listener the client came through, or NULL;
+     * see os/listener_priv.h */
+    void *listen_label;
 } OsCommRec, *OsCommPtr;
 
 /**

@@ -16,7 +16,7 @@
 
 #define XNS_EXTENSION_NAME      "X-NAMESPACE"
 #define XNS_MAJOR_VERSION       1
-#define XNS_MINOR_VERSION       0
+#define XNS_MINOR_VERSION       1
 
 /* maximum namespace name length (keeps names config-file expressible) */
 #define XNS_NAME_MAX            255
@@ -32,7 +32,9 @@
 #define X_XnsRemoveAuthToken    7
 #define X_XnsListAuthTokens     8
 #define X_XnsGetClientNamespace 9
-#define XnsNumberRequests       10
+#define X_XnsAddListener        10  /* since 1.1 */
+#define X_XnsRemoveListener     11  /* since 1.1 */
+#define XnsNumberRequests       12
 
 /* capability bits (see struct Xnamespace allow* / superPower) */
 #define XNS_CAPABILITY_MOUSE_MOTION     (1u << 0)
@@ -287,5 +289,50 @@ typedef struct {
     CARD32  pad5;
 } xXnsGetClientNamespaceReply;
 #define sz_xXnsGetClientNamespaceReply 32
+
+/*
+ * AddListener (since 1.1): bind a listening socket to a namespace.
+ *
+ * Two file descriptors are passed with the request (SCM_RIGHTS), in order:
+ *   1. a listening SOCK_STREAM Unix domain socket, bound and listening;
+ *   2. a "close fd" (e.g. the read end of a pipe). When it hangs up or
+ *      becomes readable, the server stops listening on the socket.
+ * Every client accepted on the socket is placed in the namespace,
+ * regardless of the authorization data it sends, and needs no other
+ * authorization. Clients already connected stay connected when the
+ * listener goes away. Deleting the namespace removes its listeners.
+ */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsAddListener */
+    CARD16  length;
+    CARD16  nameLen;
+    CARD16  pad0;
+    /* CARD8 name[nameLen], padded */
+} xXnsAddListenerReq;
+#define sz_xXnsAddListenerReq 8
+
+typedef struct {
+    BYTE    type;
+    CARD8   pad0;
+    CARD16  sequenceNumber;
+    CARD32  length;
+    CARD32  handle;             /* for RemoveListener */
+    CARD32  pad1;
+    CARD32  pad2;
+    CARD32  pad3;
+    CARD32  pad4;
+    CARD32  pad5;
+} xXnsAddListenerReply;
+#define sz_xXnsAddListenerReply 32
+
+/* RemoveListener (since 1.1): stop a listener added with AddListener. */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsRemoveListener */
+    CARD16  length;
+    CARD32  handle;
+} xXnsRemoveListenerReq;
+#define sz_xXnsRemoveListenerReq 8
 
 #endif /* _XSERVER_NAMESPACEPROTO_H */

@@ -13,10 +13,13 @@
  */
 #include <dix-config.h>
 
+#include <unistd.h>
+
 #include <X11/Xmd.h>
 #include <X11/Xproto.h>
 
 #include "dix/dix_priv.h"
+#include "dix/dixstruct_priv.h"
 #include "dix/request_priv.h"
 #include "dix/rpcbuf_priv.h"
 #include "include/dixstruct.h"
@@ -330,6 +333,70 @@ ProcXnsGetClientNamespace(ClientPtr client)
     return X_SEND_REPLY_WITH_RPCBUF(client, reply, buf);
 }
 
+/** @brief Bind a passed listening socket to a namespace (since 1.1). */
+static int
+ProcXnsAddListener(ClientPtr client)
+{
+    SetReqFds(client, 2);
+    X_REQUEST_HEAD_AT_LEAST(xXnsAddListenerReq);
+    X_REQUEST_FIELD_CARD16(nameLen);
+
+    const char *name;
+    X_REQUEST_VAR_BEGIN();
+    X_REQUEST_VAR_FIELD(name, stuff->nameLen);
+    X_REQUEST_VAR_END();
+
+    /* take both fds first, so they are closed on every error path */
+    int listen_fd = ReadFdFromClient(client);
+    int close_fd = ReadFdFromClient(client);
+    int rc = BadValue;
+    CARD32 handle = 0;
+
+    if (listen_fd < 0 || close_fd < 0)
+        goto fail;          /* both fds are required */
+
+    struct Xnamespace *ns = XnsLookup(name, stuff->nameLen);
+    if (!ns) {
+        rc = BadName;
+        goto fail;
+    }
+    /* the root namespace is all-powerful: never hand out a socket into it */
+    if (ns == &ns_root || XnsCaps(ns) & XNS_CAPABILITY_ADMIN) {
+        rc = BadAccess;
+        goto fail;
+    }
+
+    rc = XnsAddListener(ns, listen_fd, close_fd, &handle);
+    if (rc != Success)
+        goto fail;
+
+    xXnsAddListenerReply reply = { .handle = handle };
+    X_REPLY_FIELD_CARD32(handle);
+    return X_SEND_REPLY_SIMPLE(client, reply);
+
+fail:
+    if (listen_fd >= 0)
+        close(listen_fd);
+    if (close_fd >= 0)
+        close(close_fd);
+    return rc;
+}
+
+/** @brief Stop a listener added with AddListener (since 1.1). */
+static int
+ProcXnsRemoveListener(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXnsRemoveListenerReq);
+    X_REQUEST_FIELD_CARD32(handle);
+
+    int rc = XnsRemoveListener(stuff->handle);
+    if (rc != Success)
+        return rc;
+
+    xXnsAckReply reply = { 0 };
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
 /* ------------------------------------------------------------------ *
  *  Dispatch (registered for both proc and sproc - all field swapping
  *  happens inside the handlers via the X_REQUEST_* macros, like DPMS)
@@ -358,6 +425,8 @@ ProcXnsDispatch(ClientPtr client)
     case X_XnsRemoveAuthToken:     return ProcXnsRemoveAuthToken(client);
     case X_XnsListAuthTokens:      return ProcXnsListAuthTokens(client);
     case X_XnsGetClientNamespace:  return ProcXnsGetClientNamespace(client);
+    case X_XnsAddListener:         return ProcXnsAddListener(client);
+    case X_XnsRemoveListener:      return ProcXnsRemoveListener(client);
     default:                       return BadRequest;
     }
 }

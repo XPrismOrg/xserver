@@ -163,12 +163,15 @@ class RawX11Connection:
     Set swapped=True for testing byte-swap code paths (SProcXxx).
     """
 
-    def __init__(self, display_num, swapped=False, auth=None):
+    def __init__(self, display_num, swapped=False, auth=None, path=None):
         """
         :param auth: optional ``(protocol_name, data)`` tuple of bytes sent in
             the connection setup, e.g. ``(b"MIT-MAGIC-COOKIE-1", cookie)``.
+        :param path: Unix socket to connect to instead of the display's
+            regular one.
         """
         self.display_num = display_num
+        self.path = path
         self.swapped = swapped
         self.auth = auth
         self._byte_order = ">" if swapped else "<"
@@ -186,7 +189,7 @@ class RawX11Connection:
     def _connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._peer_pid = None
-        path = f"/tmp/.X11-unix/X{self.display_num}"
+        path = self.path or f"/tmp/.X11-unix/X{self.display_num}"
         try:
             self.sock.connect(path)
         except (ConnectionRefusedError, FileNotFoundError) as e:
@@ -291,6 +294,15 @@ class RawX11Connection:
         self.seq += 1
         assert self.sock
         self.sock.sendall(data)
+        return self.seq
+
+    def send_request_with_fds(self, data: bytes | X11Request, fds: list[int]) -> int:
+        """Like send_request, passing *fds* along (SCM_RIGHTS)."""
+        if isinstance(data, X11Request):
+            data = data.to_bytes(self._byte_order)
+        self.seq += 1
+        assert self.sock
+        socket.send_fds(self.sock, [data], fds)
         return self.seq
 
     def recv_response(self, timeout: float = 5.0) -> X11Error | X11Reply | None:

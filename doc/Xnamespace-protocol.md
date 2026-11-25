@@ -356,6 +356,50 @@ for auditing a namespace's members before a `DeleteNamespace onclients=1`.
 
 This is the protocol view of `XnsClientPriv(client)->ns`.
 
+### 6.10 AddListener (since 1.1)
+
+Bind a listening socket to a namespace. This is how a launcher (a sandbox
+engine, a session manager) labels an application reliably: it creates and
+binds a Unix socket, makes it reachable only from inside the sandbox, and
+hands the listening fd to the server. Every client accepted on that socket
+is placed in the namespace. Unlike an auth cookie, which can be copied out
+of a sandbox and used from anywhere, a socket path can be kept inside it.
+
+```
+  AddListener
+    name: STRING8
+    fds:  2 (passed with the request, SCM_RIGHTS)
+          1. listening SOCK_STREAM Unix domain socket
+          2. close fd, e.g. the read end of a pipe
+  =>
+    handle: CARD32
+```
+
+ * Clients on the socket need no other authorization, and the
+   authorization data they send is ignored: a client that sends another
+   namespace's cookie still lands in this namespace.
+ * When the close fd hangs up (the launcher closed the other end or
+   exited) or becomes readable, the server stops listening on the socket.
+ * Already connected clients stay connected when a listener goes away.
+ * Deleting the namespace removes its listeners. A transient namespace is
+   still removed when its last client leaves, listeners included.
+ * Errors: `BadName` (no such namespace), `BadAccess` (the root namespace,
+   or any namespace with the admin capability: no socket may lead into
+   one), `BadValue` (missing fds, or the first is not a listening Unix
+   stream socket).
+
+### 6.11 RemoveListener (since 1.1)
+
+```
+  RemoveListener
+    handle: CARD32
+  =>
+    (empty)
+```
+
+Stops listening and closes both fds. `BadValue` if no listener has that
+handle.
+
 
 7. Errors
 ---------
@@ -369,7 +413,8 @@ The extension defines no new error codes; it reuses core errors:
  * `BadName`   — namespace name empty, illegal, reserved-delimiter,
    duplicate on create, or not found.
  * `BadValue`  — reserved capability/attribute bit set; bad `onclients`
-   value; empty auth protocol.
+   value; empty auth protocol; unknown listener handle; bad
+   listener fds.
  * `BadMatch`  — token handle does not belong to the named namespace.
  * `BadAlloc`  — out of memory.
 

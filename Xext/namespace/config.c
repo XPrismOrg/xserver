@@ -482,6 +482,9 @@ void XnsDestroyNamespace(struct Xnamespace *ns)
     if (!ns || ns->builtin)
         return;
 
+    /* stop accepting new clients into the namespace before it goes away */
+    XnsRemoveListenersOf(ns);
+
     if (ns->rootWindow) {
         FreeResource(ns->rootWindow->drawable.id, RT_NONE);
         ns->rootWindow = NULL;

@@ -15,6 +15,7 @@ libxserver_namespace = static_library(
 		'hook-send.c',
 		'hook-server.c',
 		'hook-windowproperty.c',
+		'listener.c',
 		'namespace.c',
 		'proto.c',
 	],

@@ -7,6 +7,7 @@
 #include "dix/registry_priv.h"
 #include "os/client_priv.h"
 #include "os/auth.h"
+#include "os/listener_priv.h"
 
 #include "namespace.h"
 #include "hooks.h"
@@ -16,12 +17,23 @@ void hookClientState(CallbackListPtr *pcbl, void *unused, void *calldata)
     XNS_HOOK_HEAD(NewClientInfoRec);
 
     switch (client->clientState) {
-    case ClientStateInitial:
+    case ClientStateInitial: {
+        /* a client that came in through a namespace's own listening
+           socket belongs to that namespace, whatever auth data it sends */
+        struct Xnamespace *bound = XnsListenerNamespace(ClientListenerLabel(client));
+        if (bound) {
+            XnamespaceAssignClient(subj, bound);
+            subj->socketBound = TRUE;
+            break;
+        }
         // better assign *someting* than null -- clients can't do anything yet anyways
         XnamespaceAssignClient(subj, &ns_anon);
         break;
+    }
 
     case ClientStateRunning:
+        if (subj->socketBound)
+            break;
         subj->authId = AuthorizationIDOfClient(client);
 
         short unsigned int name_len = 0, data_len = 0;

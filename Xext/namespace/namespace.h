@@ -46,6 +46,7 @@ struct XnamespaceClientPriv {
     Bool isServer;
     XID authId;
     struct Xnamespace* ns;
+    Bool socketBound;           /* placed by its listener; auth data ignored */
 };
 
 #define NS_NAME_ROOT      "root"
@@ -69,6 +70,13 @@ int  XnsDelete(struct Xnamespace *ns, CARD8 onClients);
 int  XnsSetCaps(struct Xnamespace *ns, CARD32 mask, CARD32 values);
 int  XnsRemoveToken(struct Xnamespace *ns, CARD32 handle);
 CARD32 XnsCountTokens(struct Xnamespace *ns);
+
+/* listening sockets bound to a namespace (listener.c) */
+int XnsAddListener(struct Xnamespace *ns, int listen_fd, int close_fd,
+                   CARD32 *handleOut);
+int XnsRemoveListener(CARD32 handle);
+void XnsRemoveListenersOf(struct Xnamespace *ns);
+struct Xnamespace *XnsListenerNamespace(void *label);
 CARD32 XnsCaps(const struct Xnamespace *ns);
 CARD32 XnsAttrs(const struct Xnamespace *ns);
 struct Xnamespace* XnsFindByAuth(size_t szAuthProto, const char* authProto, size_t szAuthToken, const char* authToken);

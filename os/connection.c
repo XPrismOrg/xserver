@@ -93,6 +93,7 @@ SOFTWARE.
 #include "dix/dix_priv.h"
 #include "dix/dixgrabs_priv.h"
 #include "dix/server_priv.h"
+#include "os/listener_priv.h"
 #include "os/audit_priv.h"
 #include "os/auth.h"
 #include "os/client_priv.h"
@@ -572,7 +573,8 @@ ClientReady(int fd, int xevents, void *data)
 }
 
 static ClientPtr
-AllocNewConnection(XtransConnInfo trans_conn, int fd, CARD32 conn_time)
+AllocNewConnection(XtransConnInfo trans_conn, int fd, CARD32 conn_time,
+                   void *listen_label)
 {
     ClientPtr client;
 
@@ -582,6 +584,9 @@ AllocNewConnection(XtransConnInfo trans_conn, int fd, CARD32 conn_time)
     oc->trans_conn = trans_conn;
     oc->fd = fd;
     oc->conn_time = conn_time;
+    /* must be set before NextAvailableClient(): the ClientStateInitial
+     * callbacks it triggers are where the label is acted on */
+    oc->listen_label = listen_label;
 
     /* Fix the client's identity now, while it is known to be the process
      * that opened the connection. Most platforms can only identify peers
@@ -659,7 +664,7 @@ EstablishNewConnections(int curconn, int ready, void *data)
     if (trans_conn->flags & TRANS_NOXAUTH)
         new_trans_conn->flags = new_trans_conn->flags | TRANS_NOXAUTH;
 
-    if (!AllocNewConnection(new_trans_conn, newconn, connect_time)) {
+    if (!AllocNewConnection(new_trans_conn, newconn, connect_time, NULL)) {
         ErrorConnMax(new_trans_conn);
     }
     return;
@@ -1037,12 +1042,57 @@ AddClientOnOpenFD(int fd)
 
     connect_time = GetTimeInMillis();
 
-    if (!AllocNewConnection(ciptr, fd, connect_time)) {
+    if (!AllocNewConnection(ciptr, fd, connect_time, NULL)) {
         ErrorConnMax(ciptr);
         return FALSE;
     }
 
     return TRUE;
+}
+
+/*
+ * Set up a client on a socket accepted from a labeled listener
+ * (os/listener.c). Like AddClientOnOpenFD(), the client needs no X
+ * authorization: being able to reach the socket is the credential.
+ */
+Bool
+AddLabeledClientOnFD(int fd, void *label)
+{
+    XtransConnInfo ciptr;
+    char port[20];
+
+    snprintf(port, sizeof(port), ":%d", atoi(display));
+    ciptr = _XSERVTransReopenCOTSServer(5, fd, port);   /* 5: local socket */
+    if (ciptr == NULL) {
+        close(fd);
+        return FALSE;
+    }
+
+    _XSERVTransNonBlock(ciptr);
+    ciptr->flags |= TRANS_NOXAUTH;
+
+    if (!AllocNewConnection(ciptr, fd, GetTimeInMillis(), label)) {
+        ErrorConnMax(ciptr);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+void *
+ClientListenerLabel(ClientPtr client)
+{
+    if (!client || !client->osPrivate)
+        return NULL;
+    return ((OsCommPtr) client->osPrivate)->listen_label;
+}
+
+const struct peer_identity *
+ClientPeerIdentity(ClientPtr client)
+{
+    if (!client || !client->osPrivate)
+        return NULL;
+    return &((OsCommPtr) client->osPrivate)->peer;
 }
 
 Bool
