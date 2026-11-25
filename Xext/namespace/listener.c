@@ -12,6 +12,7 @@
 #include <dix-config.h>
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "include/list.h"
 #include "os/listener_priv.h"
@@ -23,15 +24,67 @@ struct xns_listener {
     struct Xnamespace *ns;
     CARD32 handle;
     struct labeled_listener *l;
+    struct XnsAppInfo *app;
 };
 
 static struct xorg_list xns_listeners = { &xns_listeners, &xns_listeners };
 static CARD32 xns_listener_seq;
 
+static char *
+dup_n(const char *s, size_t n)
+{
+    char *r = malloc(n + 1);
+    if (r) {
+        if (n)
+            memcpy(r, s, n);
+        r[n] = '\0';
+    }
+    return r;
+}
+
+struct XnsAppInfo *
+XnsAppInfoNew(const char *appId, size_t appIdLen,
+              const char *instanceId, size_t instanceIdLen,
+              const char *engine, size_t engineLen)
+{
+    struct XnsAppInfo *app = calloc(1, sizeof(*app));
+    if (!app)
+        return NULL;
+    app->refcnt = 1;
+    app->appId = dup_n(appId, appIdLen);
+    app->instanceId = dup_n(instanceId, instanceIdLen);
+    app->engine = dup_n(engine, engineLen);
+    if (!app->appId || !app->instanceId || !app->engine) {
+        XnsAppInfoUnref(app);
+        return NULL;
+    }
+    return app;
+}
+
+struct XnsAppInfo *
+XnsAppInfoRef(struct XnsAppInfo *app)
+{
+    if (app)
+        app->refcnt++;
+    return app;
+}
+
+void
+XnsAppInfoUnref(struct XnsAppInfo *app)
+{
+    if (!app || --app->refcnt > 0)
+        return;
+    free(app->appId);
+    free(app->instanceId);
+    free(app->engine);
+    free(app);
+}
+
 static void
 xns_listener_free(struct xns_listener *xl)
 {
     xorg_list_del(&xl->entry);
+    XnsAppInfoUnref(xl->app);
     free(xl);
 }
 
@@ -47,8 +100,8 @@ xns_listener_closed(struct labeled_listener *l, void *label)
 }
 
 int
-XnsAddListener(struct Xnamespace *ns, int listen_fd, int close_fd,
-               CARD32 *handleOut)
+XnsAddListener(struct Xnamespace *ns, struct XnsAppInfo *app,
+               int listen_fd, int close_fd, CARD32 *handleOut)
 {
     struct xns_listener *xl = calloc(1, sizeof(*xl));
     if (!xl)
@@ -56,8 +109,10 @@ XnsAddListener(struct Xnamespace *ns, int listen_fd, int close_fd,
 
     int err = Success;
     xl->ns = ns;
+    xl->app = XnsAppInfoRef(app);
     xl->l = labeled_listener_add(listen_fd, close_fd, xl, xns_listener_closed, &err);
     if (!xl->l) {
+        XnsAppInfoUnref(xl->app);
         free(xl);
         return err;
     }
@@ -68,8 +123,9 @@ XnsAddListener(struct Xnamespace *ns, int listen_fd, int close_fd,
     xorg_list_append(&xl->entry, &xns_listeners);
 
     *handleOut = xl->handle;
-    XNS_LOG("namespace \"%s\" now listens on fd %d (handle %u)\n",
-            ns->name, listen_fd, (unsigned) xl->handle);
+    XNS_LOG("namespace \"%s\" now listens on fd %d (handle %u, app \"%s\")\n",
+            ns->name, listen_fd, (unsigned) xl->handle,
+            app ? app->appId : "");
     return Success;
 }
 
@@ -102,7 +158,7 @@ XnsRemoveListenersOf(struct Xnamespace *ns)
 }
 
 struct Xnamespace *
-XnsListenerNamespace(void *label)
+XnsListenerNamespace(void *label, struct XnsAppInfo **app)
 {
     struct xns_listener *xl;
 
@@ -111,8 +167,11 @@ XnsListenerNamespace(void *label)
 
     /* only trust labels that are listeners of ours */
     xorg_list_for_each_entry(xl, &xns_listeners, entry) {
-        if (xl == label)
+        if (xl == label) {
+            if (app)
+                *app = XnsAppInfoRef(xl->app);
             return xl->ns;
+        }
     }
     return NULL;
 }

@@ -34,7 +34,10 @@
 #define X_XnsGetClientNamespace 9
 #define X_XnsAddListener        10  /* since 1.1 */
 #define X_XnsRemoveListener     11  /* since 1.1 */
-#define XnsNumberRequests       12
+#define X_XnsGetClientInfo      12  /* since 1.1 */
+#define XnsNumberRequests       13
+
+#define XNS_APP_STRING_MAX      255 /* app id, instance id, engine */
 
 /* capability bits (see struct Xnamespace allow* / superPower) */
 #define XNS_CAPABILITY_MOUSE_MOTION     (1u << 0)
@@ -301,16 +304,27 @@ typedef struct {
  * regardless of the authorization data it sends, and needs no other
  * authorization. Clients already connected stay connected when the
  * listener goes away. Deleting the namespace removes its listeners.
+ *
+ * The launcher may describe the app behind the socket: app id, instance id
+ * and sandbox engine (each up to XNS_APP_STRING_MAX printable ASCII bytes,
+ * may be empty). Every client from the socket carries this description,
+ * see GetClientInfo. It is what the launcher claims, nothing more: the
+ * server cannot check it.
  */
 typedef struct {
     CARD8   reqType;
     CARD8   xnsReqType;         /* X_XnsAddListener */
     CARD16  length;
     CARD16  nameLen;
-    CARD16  pad0;
-    /* CARD8 name[nameLen], padded */
+    CARD16  appIdLen;
+    CARD16  instanceIdLen;
+    CARD16  engineLen;
+    /* CARD8 name[nameLen], padded
+       CARD8 appId[appIdLen], padded
+       CARD8 instanceId[instanceIdLen], padded
+       CARD8 engine[engineLen], padded */
 } xXnsAddListenerReq;
-#define sz_xXnsAddListenerReq 8
+#define sz_xXnsAddListenerReq 12
 
 typedef struct {
     BYTE    type;
@@ -334,5 +348,36 @@ typedef struct {
     CARD32  handle;
 } xXnsRemoveListenerReq;
 #define sz_xXnsRemoveListenerReq 8
+
+/* GetClientInfo (since 1.1): what the server knows about a client. */
+#define XNS_CLIENT_INFO_SOCKET_BOUND  (1u << 0) /* came in via AddListener */
+#define XNS_CLIENT_INFO_PID           (1u << 1) /* pid is valid */
+#define XNS_CLIENT_INFO_UID           (1u << 2) /* uid is valid */
+
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsGetClientInfo */
+    CARD16  length;
+    CARD32  clientResource;     /* a resource of the client; 0 = caller */
+} xXnsGetClientInfoReq;
+#define sz_xXnsGetClientInfoReq 8
+
+typedef struct {
+    BYTE    type;
+    CARD8   flags;              /* XNS_CLIENT_INFO_* */
+    CARD16  sequenceNumber;
+    CARD32  length;
+    CARD32  pid;                /* as seen from the server's pid namespace */
+    CARD32  uid;
+    CARD16  nsNameLen;
+    CARD16  appIdLen;
+    CARD16  instanceIdLen;
+    CARD16  engineLen;
+    CARD32  pad0;
+    CARD32  pad1;
+    /* CARD8 nsName[nsNameLen], padded, then appId, instanceId, engine,
+       each padded */
+} xXnsGetClientInfoReply;
+#define sz_xXnsGetClientInfoReply 32
 
 #endif /* _XSERVER_NAMESPACEPROTO_H */

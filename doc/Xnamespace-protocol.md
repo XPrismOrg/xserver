@@ -367,7 +367,10 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
 
 ```
   AddListener
-    name: STRING8
+    name:        STRING8
+    app-id:      STRING8        (may be empty)
+    instance-id: STRING8        (may be empty)
+    engine:      STRING8        (may be empty)
     fds:  2 (passed with the request, SCM_RIGHTS)
           1. listening SOCK_STREAM Unix domain socket
           2. close fd, e.g. the read end of a pipe
@@ -375,6 +378,11 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
     handle: CARD32
 ```
 
+ * app-id, instance-id and engine describe the app behind the socket
+   (e.g. `org.example.Editor`, a Flatpak instance id, `flatpak`). Each is
+   at most 255 bytes of printable ASCII. Every client from the socket
+   carries them (see GetClientInfo), even after the listener is gone.
+   They are the launcher's claim; the server can't verify them.
  * Clients on the socket need no other authorization, and the
    authorization data they send is ignored: a client that sends another
    namespace's cookie still lands in this namespace.
@@ -385,8 +393,9 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
    still removed when its last client leaves, listeners included.
  * Errors: `BadName` (no such namespace), `BadAccess` (the root namespace,
    or any namespace with the admin capability: no socket may lead into
-   one), `BadValue` (missing fds, or the first is not a listening Unix
-   stream socket).
+   one), `BadValue` (missing fds, the first is not a listening Unix
+   stream socket, or an app string is too long or not printable ASCII),
+   `BadLength`. The passed fds are closed on every error.
 
 ### 6.11 RemoveListener (since 1.1)
 
@@ -399,6 +408,26 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
 
 Stops listening and closes both fds. `BadValue` if no listener has that
 handle.
+
+### 6.12 GetClientInfo (since 1.1)
+
+Everything the server knows about a client: its namespace, the app info
+of the listener it came through, and the identity the OS reported when it
+connected.
+
+```
+  GetClientInfo
+    client-resource: CARD32     (a resource of the client; 0 = caller)
+  =>
+    flags:       CARD8          (1 = came through a listener,
+                                 2 = pid valid, 4 = uid valid)
+    pid:         CARD32         (in the server's pid namespace)
+    uid:         CARD32
+    namespace:   STRING8
+    app-id:      STRING8
+    instance-id: STRING8
+    engine:      STRING8
+```
 
 
 7. Errors

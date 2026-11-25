@@ -24,6 +24,7 @@
 #include "dix/rpcbuf_priv.h"
 #include "include/dixstruct.h"
 #include "include/os.h"
+#include "os/peer_identity.h"
 #include "miext/extinit_priv.h"
 
 #include "namespace.h"
@@ -333,6 +334,18 @@ ProcXnsGetClientNamespace(ClientPtr client)
     return X_SEND_REPLY_WITH_RPCBUF(client, reply, buf);
 }
 
+/* printable ASCII only, so a manager can show it without escaping */
+static Bool
+XnsValidAppString(const char *s, size_t len)
+{
+    if (len > XNS_APP_STRING_MAX)
+        return FALSE;
+    for (size_t i = 0; i < len; i++)
+        if (s[i] < 0x20 || s[i] > 0x7e)
+            return FALSE;
+    return TRUE;
+}
+
 /** @brief Bind a passed listening socket to a namespace (since 1.1). */
 static int
 ProcXnsAddListener(ClientPtr client)
@@ -340,20 +353,46 @@ ProcXnsAddListener(ClientPtr client)
     SetReqFds(client, 2);
     X_REQUEST_HEAD_AT_LEAST(xXnsAddListenerReq);
     X_REQUEST_FIELD_CARD16(nameLen);
+    X_REQUEST_FIELD_CARD16(appIdLen);
+    X_REQUEST_FIELD_CARD16(instanceIdLen);
+    X_REQUEST_FIELD_CARD16(engineLen);
 
-    const char *name;
-    X_REQUEST_VAR_BEGIN();
-    X_REQUEST_VAR_FIELD(name, stuff->nameLen);
-    X_REQUEST_VAR_END();
-
-    /* take both fds first, so they are closed on every error path */
+    /* take both fds first, so they are closed on every error path
+       (including BadLength below) */
     int listen_fd = ReadFdFromClient(client);
     int close_fd = ReadFdFromClient(client);
     int rc = BadValue;
     CARD32 handle = 0;
+    struct XnsAppInfo *app = NULL;
 
+    rc = BadLength;
+    const char *name, *appId, *instanceId, *engine;
+    {
+        X_REQUEST_VAR_BEGIN();
+        /* X_REQUEST_VAR_FIELD returns BadLength directly; use our own
+           bounds check instead so the fds get closed */
+        size_t lens[4] = { stuff->nameLen, stuff->appIdLen,
+                           stuff->instanceIdLen, stuff->engineLen };
+        const char **ptrs[4] = { &name, &appId, &instanceId, &engine };
+        for (int i = 0; i < 4; i++) {
+            size_t adv = pad_to_int32(lens[i]);
+            if (adv > _xreq_left)
+                goto fail;
+            *ptrs[i] = _xreq_ptr;
+            _xreq_ptr += adv;
+            _xreq_left -= adv;
+        }
+        if (_xreq_left != 0)
+            goto fail;
+    }
+
+    rc = BadValue;
     if (listen_fd < 0 || close_fd < 0)
         goto fail;          /* both fds are required */
+    if (!XnsValidAppString(appId, stuff->appIdLen) ||
+        !XnsValidAppString(instanceId, stuff->instanceIdLen) ||
+        !XnsValidAppString(engine, stuff->engineLen))
+        goto fail;
 
     struct Xnamespace *ns = XnsLookup(name, stuff->nameLen);
     if (!ns) {
@@ -366,7 +405,15 @@ ProcXnsAddListener(ClientPtr client)
         goto fail;
     }
 
-    rc = XnsAddListener(ns, listen_fd, close_fd, &handle);
+    app = XnsAppInfoNew(appId, stuff->appIdLen, instanceId, stuff->instanceIdLen,
+                        engine, stuff->engineLen);
+    if (!app) {
+        rc = BadAlloc;
+        goto fail;
+    }
+
+    rc = XnsAddListener(ns, app, listen_fd, close_fd, &handle);
+    XnsAppInfoUnref(app);   /* the listener holds its own reference */
     if (rc != Success)
         goto fail;
 
@@ -395,6 +442,67 @@ ProcXnsRemoveListener(ClientPtr client)
 
     xXnsAckReply reply = { 0 };
     return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
+/** @brief Namespace, app info and peer identity of a client (since 1.1). */
+static int
+ProcXnsGetClientInfo(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXnsGetClientInfoReq);
+    X_REQUEST_FIELD_CARD32(clientResource);
+
+    ClientPtr target = client;
+    if (stuff->clientResource != 0) {
+        int rc = dixLookupResourceOwner(&target, stuff->clientResource, client,
+                                        DixGetAttrAccess);
+        if (rc != Success)
+            return rc;
+    }
+
+    struct XnamespaceClientPriv *priv = XnsClientPriv(target);
+    const char *nsname = (priv && priv->ns) ? priv->ns->name : "";
+    struct XnsAppInfo *app = priv ? priv->app : NULL;
+    const char *appId = app ? app->appId : "";
+    const char *instanceId = app ? app->instanceId : "";
+    const char *engine = app ? app->engine : "";
+
+    CARD8 flags = 0;
+    if (priv && priv->socketBound)
+        flags |= XNS_CLIENT_INFO_SOCKET_BOUND;
+
+    CARD32 pid = 0, uid = 0;
+    const struct peer_identity *id = ClientPeerIdentity(target);
+    if (id && (id->fields & PEER_ID_PID)) {
+        pid = (CARD32) id->pid;
+        flags |= XNS_CLIENT_INFO_PID;
+    }
+    if (id && (id->fields & PEER_ID_UID)) {
+        uid = (CARD32) id->uid;
+        flags |= XNS_CLIENT_INFO_UID;
+    }
+
+    x_rpcbuf_t buf = { .swapped = client->swapped, .err_clear = TRUE };
+    x_rpcbuf_write_string_pad(&buf, nsname);
+    x_rpcbuf_write_string_pad(&buf, appId);
+    x_rpcbuf_write_string_pad(&buf, instanceId);
+    x_rpcbuf_write_string_pad(&buf, engine);
+
+    xXnsGetClientInfoReply reply = {
+        .flags         = flags,
+        .pid           = pid,
+        .uid           = uid,
+        .nsNameLen     = (CARD16) strlen(nsname),
+        .appIdLen      = (CARD16) strlen(appId),
+        .instanceIdLen = (CARD16) strlen(instanceId),
+        .engineLen     = (CARD16) strlen(engine),
+    };
+    X_REPLY_FIELD_CARD32(pid);
+    X_REPLY_FIELD_CARD32(uid);
+    X_REPLY_FIELD_CARD16(nsNameLen);
+    X_REPLY_FIELD_CARD16(appIdLen);
+    X_REPLY_FIELD_CARD16(instanceIdLen);
+    X_REPLY_FIELD_CARD16(engineLen);
+    return X_SEND_REPLY_WITH_RPCBUF(client, reply, buf);
 }
 
 /* ------------------------------------------------------------------ *
@@ -427,6 +535,7 @@ ProcXnsDispatch(ClientPtr client)
     case X_XnsGetClientNamespace:  return ProcXnsGetClientNamespace(client);
     case X_XnsAddListener:         return ProcXnsAddListener(client);
     case X_XnsRemoveListener:      return ProcXnsRemoveListener(client);
+    case X_XnsGetClientInfo:       return ProcXnsGetClientInfo(client);
     default:                       return BadRequest;
     }
 }

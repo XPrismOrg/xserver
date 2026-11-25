@@ -42,11 +42,28 @@ extern struct xorg_list ns_list;
 extern struct Xnamespace ns_root;
 extern struct Xnamespace ns_anon;
 
+/* What the launcher said about the app behind a listener (protocol 1.1).
+   Shared by the listener and its clients; refcounted, so clients keep it
+   after the listener is gone. Strings are never NULL (maybe empty). */
+struct XnsAppInfo {
+    int refcnt;
+    char *appId;                /* e.g. "org.example.Editor" */
+    char *instanceId;           /* e.g. Flatpak instance id */
+    char *engine;               /* e.g. "flatpak", "bubblewrap" */
+};
+
+struct XnsAppInfo *XnsAppInfoNew(const char *appId, size_t appIdLen,
+                                 const char *instanceId, size_t instanceIdLen,
+                                 const char *engine, size_t engineLen);
+struct XnsAppInfo *XnsAppInfoRef(struct XnsAppInfo *app);
+void XnsAppInfoUnref(struct XnsAppInfo *app);
+
 struct XnamespaceClientPriv {
     Bool isServer;
     XID authId;
     struct Xnamespace* ns;
     Bool socketBound;           /* placed by its listener; auth data ignored */
+    struct XnsAppInfo *app;     /* set for socket-bound clients, else NULL */
 };
 
 #define NS_NAME_ROOT      "root"
@@ -72,11 +89,13 @@ int  XnsRemoveToken(struct Xnamespace *ns, CARD32 handle);
 CARD32 XnsCountTokens(struct Xnamespace *ns);
 
 /* listening sockets bound to a namespace (listener.c) */
-int XnsAddListener(struct Xnamespace *ns, int listen_fd, int close_fd,
-                   CARD32 *handleOut);
+int XnsAddListener(struct Xnamespace *ns, struct XnsAppInfo *app,
+                   int listen_fd, int close_fd, CARD32 *handleOut);
 int XnsRemoveListener(CARD32 handle);
 void XnsRemoveListenersOf(struct Xnamespace *ns);
-struct Xnamespace *XnsListenerNamespace(void *label);
+/* namespace (and, if @p app is given, a new reference to the app info) of
+   the listener behind @p label, or NULL if it isn't one of ours */
+struct Xnamespace *XnsListenerNamespace(void *label, struct XnsAppInfo **app);
 CARD32 XnsCaps(const struct Xnamespace *ns);
 CARD32 XnsAttrs(const struct Xnamespace *ns);
 struct Xnamespace* XnsFindByAuth(size_t szAuthProto, const char* authProto, size_t szAuthToken, const char* authToken);

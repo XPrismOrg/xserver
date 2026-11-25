@@ -20,10 +20,12 @@ void hookClientState(CallbackListPtr *pcbl, void *unused, void *calldata)
     case ClientStateInitial: {
         /* a client that came in through a namespace's own listening
            socket belongs to that namespace, whatever auth data it sends */
-        struct Xnamespace *bound = XnsListenerNamespace(ClientListenerLabel(client));
+        struct XnsAppInfo *app = NULL;
+        struct Xnamespace *bound = XnsListenerNamespace(ClientListenerLabel(client), &app);
         if (bound) {
             XnamespaceAssignClient(subj, bound);
             subj->socketBound = TRUE;
+            subj->app = app;
             break;
         }
         // better assign *someting* than null -- clients can't do anything yet anyways
@@ -65,5 +67,7 @@ void hookClientDestroy(CallbackListPtr *pcbl, void *unused, void *calldata)
         return; /* no XNS devprivate assigned ? */
 
     XnamespaceAssignClient(subj, NULL);
+    XnsAppInfoUnref(subj->app);
+    subj->app = NULL;
     /* the devprivate is embedded, so no free() necessary */
 }
