@@ -8,9 +8,6 @@ srcs_xorg_modes = [
     'xf86Rotate.c',
 ]
 
-if build_dga
-    srcs_xorg_modes += 'xf86DiDGA.c'
-endif
 
 xorg_modes = static_library('xorg_modes',
     srcs_xorg_modes,

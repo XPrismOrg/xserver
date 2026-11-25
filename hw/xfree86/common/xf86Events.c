@@ -75,10 +75,6 @@
 #include "xf86_OSlib.h"
 #include "xf86platformBus_priv.h"
 
-#ifdef XFreeXDGA
-#include "dgaproc.h"
-#include "dgaproc_priv.h"
-#endif
 
 #include "inputstr.h"
 #include "xf86Xinput_priv.h"
@@ -534,10 +530,6 @@ xf86VTSwitch(void)
     if(!(dispatchException & DE_TERMINATE))
         assert(!seatd_libseat_controls_session());
 
-#ifdef XFreeXDGA
-    if (!DGAVTSwitch())
-        return;
-#endif
 
     /*
      * Since all screens are currently all in the same state it is sufficient

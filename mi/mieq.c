@@ -332,10 +332,6 @@ ChangeDeviceID(DeviceIntPtr dev, InternalEvent *event)
     case ET_TouchOwnership:
         event->touch_ownership_event.deviceid = dev->id;
         break;
-#ifdef XFreeXDGA
-    case ET_DGAEvent:
-        break;
-#endif
     case ET_RawKeyPress:
     case ET_RawKeyRelease:
     case ET_RawButtonPress:
@@ -404,10 +400,6 @@ CopyGetMasterEvent(DeviceIntPtr sdev,
     if (!sdev || InputDevIsMaster(sdev) || InputDevIsFloating(sdev))
         return NULL;
 
-#ifdef XFreeXDGA
-    if (type == ET_DGAEvent)
-        type = original->dga_event.subtype;
-#endif
 
     switch (type) {
     case ET_KeyPress:

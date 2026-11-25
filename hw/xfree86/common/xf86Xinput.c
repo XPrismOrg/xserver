@@ -103,10 +103,6 @@
 #include <ptrveloc.h>           /* dix pointer acceleration */
 #include <xserver-properties.h>
 
-#ifdef XFreeXDGA
-#include "dgaproc.h"
-#include "dgaproc_priv.h"
-#endif
 
 #include "xkbsrv.h"
 
@@ -1240,83 +1236,6 @@ xf86CheckMotionEvent4DGA(DeviceIntPtr device, int is_absolute,
 {
     int stolen = 0;
 
-#ifdef XFreeXDGA
-    ScreenPtr scr = NULL;
-    int idx = 0, i;
-
-    /* The evdev driver may not always send all axes across. */
-    if (valuator_mask_isset(mask, 0) || valuator_mask_isset(mask, 1)) {
-        scr = miPointerGetScreen(device);
-        if (scr) {
-            int dx = 0, dy = 0;
-
-            idx = scr->myNum;
-
-            if (valuator_mask_isset(mask, 0)) {
-                dx = valuator_mask_get(mask, 0);
-                if (is_absolute)
-                    dx -= device->last.valuators[0];
-                else if (valuator_mask_has_unaccelerated(mask))
-                    dx = valuator_mask_get_unaccelerated(mask, 0);
-            }
-
-            if (valuator_mask_isset(mask, 1)) {
-                dy = valuator_mask_get(mask, 1);
-                if (is_absolute)
-                    dy -= device->last.valuators[1];
-                else if (valuator_mask_has_unaccelerated(mask))
-                    dy = valuator_mask_get_unaccelerated(mask, 1);
-            }
-
-            if (DGAStealMotionEvent(device, idx, dx, dy))
-                stolen = 1;
-        }
-    }
-
-    for (i = 2; i < valuator_mask_size(mask); i++) {
-        AxisInfoPtr ax;
-        double incr;
-        int val, button;
-
-        if (i >= device->valuator->numAxes)
-            break;
-
-        if (!valuator_mask_isset(mask, i))
-            continue;
-
-        ax = &device->valuator->axes[i];
-
-        if (ax->scroll.type == SCROLL_TYPE_NONE)
-            continue;
-
-        if (!scr) {
-            scr = miPointerGetScreen(device);
-            if (!scr)
-                break;
-            idx = scr->myNum;
-        }
-
-        incr = ax->scroll.increment;
-        val = valuator_mask_get(mask, i);
-
-        if (ax->scroll.type == SCROLL_TYPE_VERTICAL) {
-            if (incr * val < 0)
-                button = 4; /* up */
-            else
-                button = 5; /* down */
-        } else { /* SCROLL_TYPE_HORIZONTAL */
-            if (incr * val < 0)
-                button = 6; /* left */
-            else
-                button = 7; /* right */
-        }
-
-        if (DGAStealButtonEvent(device, idx, button, 1) &&
-                DGAStealButtonEvent(device, idx, button, 0))
-            stolen = 1;
-    }
-
-#endif
 
     return stolen;
 }
@@ -1420,14 +1339,6 @@ xf86PostButtonEventM(DeviceIntPtr device,
             flags = POINTER_RELATIVE | POINTER_ACCELERATE;
     }
 
-#ifdef XFreeXDGA
-    if (miPointerGetScreen(device)) {
-        int index = miPointerGetScreen(device)->myNum;
-
-        if (DGAStealButtonEvent(device, index, button, is_down))
-            return;
-    }
-#endif
 
     QueuePointerEvents(device,
                        is_down ? ButtonPress : ButtonRelease, button,
@@ -1437,19 +1348,6 @@ xf86PostButtonEventM(DeviceIntPtr device,
 static void
 xf86PostKeyEvent(DeviceIntPtr device, unsigned int key_code, int is_down)
 {
-#ifdef XFreeXDGA
-    DeviceIntPtr pointer;
-
-    /* Some pointers send key events, paired device is wrong then. */
-    pointer = GetMaster(device, POINTER_OR_FLOAT);
-
-    if (miPointerGetScreen(pointer)) {
-        int index = miPointerGetScreen(pointer)->myNum;
-
-        if (DGAStealKeyEvent(device, index, key_code, is_down))
-            return;
-    }
-#endif
 
     QueueKeyboardEvents(device, is_down ? KeyPress : KeyRelease, key_code);
 }

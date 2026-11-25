@@ -35,9 +35,7 @@ if fallback_driver == 'auto'
     endif
 endif
 
-if build_dga
-    srcs_xorg_common += 'xf86DGA.c'
-endif
+srcs_xorg_common += 'xf86DGAcompat.c'
 
 if build_xv
     srcs_xorg_common += ['xf86xv.c']

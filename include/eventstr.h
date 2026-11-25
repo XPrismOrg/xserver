@@ -63,7 +63,7 @@ enum EventType {
     ET_ProximityOut,
     ET_DeviceChanged,
     ET_Hierarchy,
-    ET_DGAEvent,
+    ET_DGAEvent,                /* unused (DGA removed); kept so later values don't shift */
     ET_RawKeyPress,
     ET_RawKeyRelease,
     ET_RawButtonPress,
@@ -206,25 +206,6 @@ struct _DeviceChangedEvent {
     } keys;
 };
 
-#ifdef XFreeXDGA
-/**
- * DGAEvent, used by DGA to intercept and emulate input events.
- */
-struct _DGAEvent {
-    unsigned char header; /**<  Always ET_Internal */
-    enum EventType type;  /**<  ET_DGAEvent */
-    int length;           /**<  Length in bytes */
-    Time time;            /**<  Time in ms */
-    int subtype;          /**<  KeyPress, KeyRelease, ButtonPress,
-                                ButtonRelease, MotionNotify */
-    int detail;           /**<  Button number or key code */
-    int dx;               /**<  Relative x coordinate */
-    int dy;               /**<  Relative y coordinate */
-    int screen;           /**<  Screen number this event applies to */
-    uint16_t state;       /**<  Core modifier/button state */
-};
-#endif
-
 /**
  * Raw event, contains the data as posted by the device.
  */
@@ -313,9 +294,6 @@ union _InternalEvent {
     DeviceChangedEvent changed_event;
     TouchOwnershipEvent touch_ownership_event;
     BarrierEvent barrier_event;
-#ifdef XFreeXDGA
-    DGAEvent dga_event;
-#endif
     RawDeviceEvent raw_event;
     GestureEvent gesture_event;
 };

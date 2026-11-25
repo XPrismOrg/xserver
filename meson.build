@@ -87,7 +87,6 @@ libselinux_req = '>= 2.0.86'
 xext_req = '>= 1.0.99.4'
 xproto_req = '>= 7.0.31'
 gbm_req = '>= 10.2'
-xf86dgaproto_req = '>= 2.0.99.1'
 xshmfence_req = '>= 1.1'
 
 x11_dep = dependency('x11')
@@ -538,18 +537,6 @@ build_namespace = get_option('namespace')
 
 build_xv = get_option('xv')
 
-build_dga = false
-xf86dgaproto_dep = dependency('', required: false)
-if get_option('dga') == 'auto'
-    xf86dgaproto_dep = dependency('xf86dgaproto', version: xf86dgaproto_req, required: false)
-    if xf86dgaproto_dep.found()
-        build_dga = true
-    endif
-elif get_option('dga') == 'true'
-    xf86dgaproto_dep = dependency('xf86dgaproto', version: xf86dgaproto_req, required: true)
-    build_dga = true
-endif
-
 build_apm = false
 if (get_option('linux_apm') == true and
    host_machine.system() == 'linux')
@@ -601,7 +588,6 @@ common_dep = [
     dri2proto_dep,
     dri3proto_dep,
     xineramaproto_dep,
-    xf86dgaproto_dep,
     xf86vidmodeproto_dep,
     applewmproto_dep,
     dpmsproto_dep,

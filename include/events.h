@@ -30,9 +30,6 @@ typedef struct _TouchOwnershipEvent TouchOwnershipEvent;
 typedef struct _BarrierEvent BarrierEvent;
 typedef struct _GestureEvent GestureEvent;
 
-#ifdef XFreeXDGA
-typedef struct _DGAEvent DGAEvent;
-#endif
 typedef struct _RawDeviceEvent RawDeviceEvent;
 
 typedef union _InternalEvent InternalEvent;

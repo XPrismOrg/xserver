@@ -46,11 +46,6 @@
 #include "xf86RandR12_priv.h"
 #include "xf86Crtc.h"
 
-#ifdef XFreeXDGA
-#include <X11/extensions/xf86dgaproto.h>
-#include "dgaproc.h"
-#include "dgaproc_priv.h"
-#endif
 
 #include "xf86cmap.h"
 
@@ -112,9 +107,6 @@ static void CMapDestroyColormap(ColormapPtr);
 static Bool CMapEnterVT(ScrnInfoPtr);
 static Bool CMapSwitchMode(ScrnInfoPtr, DisplayModePtr);
 
-#ifdef XFreeXDGA
-static int CMapSetDGAMode(ScrnInfoPtr, int, DGADevicePtr);
-#endif
 static int CMapChangeGamma(ScrnInfoPtr, Gamma);
 
 static void ComputeGamma(ScrnInfoPtr, CMapScreenPtr);
@@ -201,9 +193,6 @@ xf86HandleColormaps(ScreenPtr pScreen,
         if ((flags & CMAP_RELOAD_ON_MODE_SWITCH) && pScrn->SwitchMode)
             pScrn->SwitchMode = CMapSwitchMode;
     }
-#ifdef XFreeXDGA
-    pScrn->SetDGAMode = CMapSetDGAMode;
-#endif
     pScrn->ChangeGamma = CMapChangeGamma;
 
     ComputeGamma(pScrn, pScreenPriv);
@@ -481,26 +470,6 @@ CMapSwitchMode(ScrnInfoPtr pScrn, DisplayModePtr mode)
     return FALSE;
 }
 
-#ifdef XFreeXDGA
-static int
-CMapSetDGAMode(ScrnInfoPtr pScrn, int num, DGADevicePtr dev)
-{
-    ScreenPtr pScreen = xf86ScrnToScreen(pScrn);
-    CMapScreenPtr pScreenPriv =
-        (CMapScreenPtr) dixLookupPrivate(&pScreen->devPrivates, CMapScreenKey);
-    int ret;
-
-    ret = (*pScreenPriv->SetDGAMode) (pScrn, num, dev);
-
-    pScreenPriv->isDGAmode = DGAActive(pScrn->scrnIndex);
-
-    if (!pScreenPriv->isDGAmode && GetInstalledmiColormap(pScreen)
-        && xf86ScreenToScrn(pScreen)->vtSema)
-        CMapReinstallMap(GetInstalledmiColormap(pScreen));
-
-    return ret;
-}
-#endif
 
 /**** Utilities ****/
 

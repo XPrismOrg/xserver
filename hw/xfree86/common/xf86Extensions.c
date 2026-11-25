@@ -38,9 +38,6 @@
 #include "Xext/xselinux/xselinux.h"
 #endif
 
-#ifdef XFreeXDGA
-#include <X11/extensions/xf86dgaproto.h>
-#endif
 
 #ifdef XF86VIDMODE
 #include <X11/extensions/xf86vmproto.h>
@@ -59,13 +56,6 @@ static const ExtensionModule extensionModules[] = {
 	XFree86VidModeExtensionInit,
 	XF86VIDMODENAME,
 	&noXFree86VidModeExtension
-    },
-#endif
-#ifdef XFreeXDGA
-    {
-	XFree86DGAExtensionInit,
-	XF86DGANAME,
-	&noXFree86DGAExtension
     },
 #endif
 };

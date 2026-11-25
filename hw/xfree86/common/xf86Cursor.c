@@ -45,10 +45,6 @@
 
 #include "xf86Xinput.h"
 
-#ifdef XFreeXDGA
-#include "dgaproc.h"
-#include "dgaproc_priv.h"
-#endif
 
 typedef struct _xf86EdgeRec {
     short screen;
@@ -200,10 +196,6 @@ xf86SwitchMode(ScreenPtr pScreen, DisplayModePtr mode)
     if (!pScr->vtSema || !mode || !pScr->SwitchMode)
         return FALSE;
 
-#ifdef XFreeXDGA
-    if (DGAActive(pScr->scrnIndex))
-        return FALSE;
-#endif
 
     if (mode == pScr->currentMode)
         return TRUE;

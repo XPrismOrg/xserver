@@ -793,9 +793,6 @@ xf86platformAddDevice(const char *driver_name, int index)
     * don't, will wrap them.
     */
    xf86GPUScreens[i]->EnableDisableFBAccess = xf86EnableDisableFBAccess;
-#ifdef XFreeXDGA
-   xf86GPUScreens[i]->SetDGAMode = xf86SetDGAMode;
-#endif
 
    scr_index = AddGPUScreen(__screenInit, 0, NULL, xf86GPUScreens[i]);
    if (scr_index == -1) {

@@ -235,7 +235,6 @@ conf_data.set('COMPOSITE', '1')
 
 conf_data.set('DAMAGE', '1')
 conf_data.set('DBE', '1')
-conf_data.set('DGA', build_dga ? '1' : false)
 conf_data.set('DPMSExtension', build_dpms ? '1' : false)
 conf_data.set('DRI2', build_dri2 ? '1' : false)
 conf_data.set('DRI3', build_dri3 ? '1' : false)
@@ -265,7 +264,6 @@ conf_data.set('CONFIG_NAMESPACE', build_namespace ? '1' : false)
 conf_data.set('XDMCP', build_xdmcp ? '1' : false)
 conf_data.set('XF86VIDMODE', 1)
 conf_data.set('XFIXES', '1')
-conf_data.set('XFreeXDGA', build_dga ? '1' : false)
 conf_data.set('XINERAMA', build_xinerama ? '1' : false)
 conf_data.set('XINPUT', '1')
 conf_data.set('XRECORD', '1')
@@ -568,9 +566,7 @@ if build_xorg_sdk
         install_data(['dri3.h'], install_dir: xorgsdkdir)
     endif
 
-    if build_dga
-        install_data(['dgaproc.h'], install_dir: xorgsdkdir)
-    endif
+    install_data(['dgaproc.h'], install_dir: xorgsdkdir)
 
     if build_xv
         install_data(['xf86xv.h'], install_dir: xorgsdkdir)
