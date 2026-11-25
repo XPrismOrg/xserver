@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "os/client_priv.h"
 #include "os/pal/backend.h"
 #include "os/pal/pal.h"
 
@@ -19,10 +18,7 @@ pal_process_describe(const struct peer_identity *id, struct pal_process_info *in
     if (!id || !(id->fields & PEER_ID_PID))
         return -ESRCH;
 
-    const char *name = NULL, *args = NULL;
-    DetermineClientCmd(id->pid, &name, &args);  /* platform specific, os/client.c */
-    info->cmd_name = (char *) name;
-    info->cmd_args = (char *) args;
+    pal_process_cmdline(id->pid, &info->cmd_name, &info->cmd_args);
 
     char *record = pal_backend_process_grouping(id->pid);
     if (record) {
@@ -36,6 +32,28 @@ pal_process_describe(const struct peer_identity *id, struct pal_process_info *in
         info->pid_confirmed = true;
 
     return 0;
+}
+
+void
+pal_process_cmdline(pid_t pid, char **cmdname, char **cmdargs)
+{
+    if (cmdname)
+        *cmdname = NULL;
+    if (cmdargs)
+        *cmdargs = NULL;
+    if (pid <= 0)
+        return;
+    if (pal_backend_process_cmdline(pid, cmdname, cmdargs) != 0) {
+        /* a backend may have filled one before failing */
+        if (cmdname) {
+            free(*cmdname);
+            *cmdname = NULL;
+        }
+        if (cmdargs) {
+            free(*cmdargs);
+            *cmdargs = NULL;
+        }
+    }
 }
 
 void

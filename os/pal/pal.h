@@ -82,6 +82,13 @@ int pal_process_describe(const struct peer_identity *id,
 void pal_process_release(struct pal_process_info *info);
 
 /**
+ * Command line of process @p pid, for logs (X-Resource, Xnamespace).
+ * Sets *cmdname to argv[0] and *cmdargs to the other arguments joined by
+ * spaces, malloc'ed, or NULL if unknown. Either pointer may be NULL.
+ */
+void pal_process_cmdline(pid_t pid, char **cmdname, char **cmdargs);
+
+/**
  * Backend hook, exposed for unit tests: extract a sandbox hint from the
  * process grouping record of a process (Linux: /proc/<pid>/cgroup
  * contents). Sets *engine / *app_id to malloc'ed strings, or leaves them

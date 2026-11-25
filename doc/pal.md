@@ -31,7 +31,7 @@ gets.
 | Module | Purpose | Status |
 |---|---|---|
 | identity | Who is on the other end of a socket: uid, gid, pid, Linux pidfd, Solaris zone | Done (`os/pal/identity.c`), all platforms |
-| process | What a peer process is (command line, sandbox hint), for logs and unlabeled-client classification | Done; sandbox hints on Linux only |
+| process | What a peer process is (command line, sandbox hint), for logs and unlabeled-client classification | Done: command lines on every platform (`os/pal/<os>/cmdline.c`), sandbox hints on Linux only |
 | platform | Which OS and input backend this build targets | Done |
 | session | Open DRM/input devices without root, VT/session switching | Interface; stub backend |
 | devices | Enumerate GPUs and input devices, hotplug | Interface; stub backend |
@@ -76,13 +76,13 @@ Notes on the choices:
 
 ## Inventory: OS-specific code today
 
-Outside `os/pal` and the legacy per-OS directories, 33 files have OS
+Outside `os/pal` and the legacy per-OS directories, 32 files have OS
 `#if`s (`test/os-ifdefs.baseline`). By area:
 
 | Area | Files | Moves to |
 |---|---|---|
 | Peer credentials | `os/access.c` | identity (mostly done: `GetLocalClientCreds()` reads the stored identity) |
-| Process command line | `os/client.c` (`/proc`, `kvm`, `sysctl`, Solaris `psinfo`) | process |
+| ~~Process command line~~ | ~~`os/client.c`~~ | Done: `os/pal/{procfs,freebsd,openbsd,sunos,darwin}/cmdline.c` |
 | Console, VT, power management, bell | `hw/xfree86/os-support/*`, `hw/xfree86/common/xf86Init.c` | session |
 | Device and bus discovery | `hw/xfree86/common/xf86AutoConfig.c`, `xf86pciBus.c`, `xf86platformBus.c`, `xf86Configure.c`, `config/udev.c`, `config/wscons.c` | devices |
 | Input devices | `hw/kdrive/os/linux/*`, `config/wscons.c` | input backend (Phase V) |

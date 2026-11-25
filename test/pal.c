@@ -14,7 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 
 #include "os/pal/pal.h"
 #include "tests-common.h"
@@ -127,6 +129,62 @@ pal_process_describes_peer(void)
 }
 
 static void
+pal_cmdline_of_processes(void)
+{
+    char *name = (char *) 0x1, *args = (char *) 0x1;
+
+    /* this test program, started as ".../tests" */
+    pal_process_cmdline(getpid(), &name, &args);
+    assert(name && strstr(name, "tests"));
+    free(name);
+    free(args);
+
+    /* only one of them */
+    name = (char *) 0x1;
+    pal_process_cmdline(getpid(), &name, NULL);
+    assert(name && strstr(name, "tests"));
+    free(name);
+
+    /* no such process, no pid */
+    name = args = (char *) 0x1;
+    pal_process_cmdline(0x7ffffff0, &name, &args);
+    assert(name == NULL && args == NULL);
+    name = args = (char *) 0x1;
+    pal_process_cmdline(0, &name, &args);
+    assert(name == NULL && args == NULL);
+
+    /* a child with known arguments */
+    int pipefd[2];
+    assert(pipe(pipefd) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        close(pipefd[1]);
+        dup2(pipefd[0], 0);    /* "read x" blocks on the pipe */
+        execl("/bin/sh", "/bin/sh", "-c", "read x", "xprism-arg", (char *) NULL);
+        _exit(127);
+    }
+    close(pipefd[0]);
+    /* wait until it has exec'ed: the name changes from "tests" */
+    for (int i = 0; i < 200; i++) {
+        pal_process_cmdline(child, &name, &args);
+        if (name && !strstr(name, "tests"))
+            break;
+        free(name);
+        free(args);
+        name = args = NULL;
+        usleep(10000);
+    }
+    assert(name && strcmp(name, "/bin/sh") == 0);
+    assert(args && strcmp(args, "-c read x xprism-arg") == 0);
+    free(name);
+    free(args);
+    close(pipefd[1]);       /* "read x" sees EOF and exits */
+    kill(child, SIGTERM);
+    waitpid(child, NULL, 0);
+}
+
+static void
 pal_stub_modules_report_unsupported(void)
 {
     /* until the Phase II backends land */
@@ -145,6 +203,7 @@ pal_test(void)
         pal_platform_is_known,
         pal_grouping_hints,
         pal_process_describes_peer,
+        pal_cmdline_of_processes,
         pal_stub_modules_report_unsupported,
         NULL,
     };

@@ -22,7 +22,6 @@ os/Xtranssock.c:2
 os/Xtransutil.c:2
 os/access.c:4
 os/backtrace.c:1
-os/client.c:10
 os/connection.c:1
 os/inputthread.c:2
 os/log.c:2

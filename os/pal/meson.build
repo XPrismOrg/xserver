@@ -27,10 +27,25 @@ srcs_pal = [
     'pal/stub/session.c',
 ]
 
+# sandbox hints and pidfds
 if pal_system == 'linux'
     srcs_pal += 'pal/linux/process.c'
 else
     srcs_pal += 'pal/generic/process.c'
+endif
+
+# process command lines
+srcs_pal += 'pal/procfs/cmdline.c'
+if pal_system in ['freebsd', 'dragonfly']
+    srcs_pal += 'pal/freebsd/cmdline.c'
+elif pal_system == 'openbsd'
+    srcs_pal += 'pal/openbsd/cmdline.c'
+elif pal_system == 'sunos'
+    srcs_pal += 'pal/sunos/cmdline.c'
+elif pal_system == 'darwin'
+    srcs_pal += 'pal/darwin/cmdline.c'
+else
+    srcs_pal += 'pal/procfs/default.c'
 endif
 
 pal_c_args = [
