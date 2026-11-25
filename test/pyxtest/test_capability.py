@@ -6,7 +6,10 @@
 # decides.
 
 import re
+import shutil
 import struct
+import tempfile
+from pathlib import Path
 
 import pytest
 from proto import xi, xtest
@@ -306,3 +309,137 @@ class TestPlainSession:
         assert _get_image(b, b.root_window) == []
         assert _take_clipboard(b) == []
         assert _cap_log(xserver) == []
+
+
+# --- runtime grants and listener ceilings (X-NAMESPACE 1.1) -------------
+
+from test_namespace_listener import Listener, _add_listener, _pad  # noqa: E402
+
+X_XNS_QUERY_NAMESPACE = 4
+X_XNS_GET_CLIENT_INFO = 12
+X_XNS_SET_NAMESPACE_GRANTS = 13
+GRANT_WINDOW_INSPECT = 1 << 6
+GRANT_ALL = 0x7FF
+BAD_VALUE = 2
+
+
+def _manager(xserver):
+    conn = _connect(xserver, ROOT_COOKIE)
+    ext = conn.query_extension("X-NAMESPACE")
+    assert ext
+    return conn, ext.opcode
+
+
+def _set_grants(manager, opcode, ns, grants):
+    name = ns.encode()
+    body = struct.pack("<IHH", grants, len(name), 0) + _pad(name)
+    manager.send_request(struct.pack("<BBH", opcode, X_XNS_SET_NAMESPACE_GRANTS,
+                                     1 + len(body) // 4) + body)
+    return manager.recv_response(timeout=5.0)
+
+
+def _query_grants(manager, opcode, ns):
+    name = ns.encode()
+    body = struct.pack("<HH", len(name), 0) + _pad(name)
+    manager.send_request(struct.pack("<BBH", opcode, X_XNS_QUERY_NAMESPACE,
+                                     1 + len(body) // 4) + body)
+    r = manager.recv_response(timeout=5.0)
+    assert not isinstance(r, X11Error), r
+    return struct.unpack_from("<I", r.data, 24)[0]
+
+
+def _grants_of(manager, opcode, client):
+    """(grants, ceiling) GetClientInfo reports for *client*."""
+    pixmap = client.create_pixmap(1, 1)
+    client.flush_responses(timeout=0.2)
+    manager.send_request(struct.pack("<BBHI", opcode, X_XNS_GET_CLIENT_INFO, 2, pixmap))
+    r = manager.recv_response(timeout=5.0)
+    assert not isinstance(r, X11Error), r
+    return struct.unpack_from("<II", r.data, 24)
+
+
+def _bound_client(xserver, sockdir, ns, ceiling):
+    """A client connected through a listener for *ns* with *ceiling*."""
+    manager, opcode = _manager(xserver)
+    listener = Listener(sockdir, f"{ns}-{ceiling:x}.sock")
+    handle = _add_listener(manager, opcode, ns, [listener.sock.fileno(), listener.close_r],
+                           ceiling=ceiling)
+    assert isinstance(handle, int), handle
+    listener.hand_over()
+    client = RawX11Connection(xserver.display_num, path=listener.path)
+    return client, listener
+
+
+def _inspect_from(xserver, cookie, spy):
+    owner = _connect(xserver, cookie)
+    wid = owner.create_window()
+    return _errors_of(spy, struct.pack("<BxHI", X_GET_WINDOW_ATTRIBUTES, 2, wid))
+
+
+@pytest.fixture
+def sockdir():
+    """Short directory for sockets: tmp_path can be longer than a Unix
+    socket path may be."""
+    d = Path(tempfile.mkdtemp(prefix="xcap"))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+class TestGrantsAndCeilings:
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_runtime_grant_takes_effect(self, xserver):
+        manager, opcode = _manager(xserver)
+        spy = _connect(xserver, SANDBOX_COOKIE)
+        assert _inspect_from(xserver, SANDBOX_COOKIE, spy) == [BAD_ACCESS]
+
+        r = _set_grants(manager, opcode, "sandbox", GRANT_WINDOW_INSPECT)
+        assert not isinstance(r, X11Error), r
+        assert _query_grants(manager, opcode, "sandbox") == GRANT_WINDOW_INSPECT
+        # the same, already connected client: next request is allowed
+        assert _inspect_from(xserver, SANDBOX_COOKIE, spy) == []
+
+        _set_grants(manager, opcode, "sandbox", 0)       # revoke
+        assert _inspect_from(xserver, SANDBOX_COOKIE, spy) == [BAD_ACCESS]
+
+    def test_ceiling_limits_namespace_grants(self, xserver, sockdir):
+        """"granted" holds window.inspect; a listener with ceiling none
+        takes it away from its clients, one with window.inspect doesn't."""
+        limited, l1 = _bound_client(xserver, sockdir, "granted", 0)
+        allowed, l2 = _bound_client(xserver, sockdir, "granted", GRANT_WINDOW_INSPECT)
+        assert _inspect_from(xserver, GRANTED_COOKIE, limited) == [BAD_ACCESS]
+        assert _inspect_from(xserver, GRANTED_COOKIE, allowed) == []
+        # a client of the same namespace via its cookie has no ceiling
+        assert _inspect_from(xserver, GRANTED_COOKIE, _connect(xserver, GRANTED_COOKIE)) == []
+
+    def test_ceiling_survives_later_grants(self, xserver, sockdir):
+        manager, opcode = _manager(xserver)
+        limited, l1 = _bound_client(xserver, sockdir, "sandbox", 0)
+        _set_grants(manager, opcode, "sandbox", GRANT_ALL)
+        assert _inspect_from(xserver, SANDBOX_COOKIE, limited) == [BAD_ACCESS]
+
+    def test_ceiling_grants_nothing_by_itself(self, xserver, sockdir):
+        client, l1 = _bound_client(xserver, sockdir, "sandbox", GRANT_ALL)
+        assert _inspect_from(xserver, SANDBOX_COOKIE, client) == [BAD_ACCESS]
+
+    def test_client_info_reports_grants_and_ceiling(self, xserver, sockdir):
+        manager, opcode = _manager(xserver)
+        client, l1 = _bound_client(xserver, sockdir, "granted", GRANT_WINDOW_INSPECT)
+        grants, ceiling = _grants_of(manager, opcode, client)
+        assert ceiling == GRANT_WINDOW_INSPECT
+        assert grants == GRANT_WINDOW_INSPECT    # granted: inspect+enumerate, AND ceiling
+        grants, ceiling = _grants_of(manager, opcode, _connect(xserver, GRANTED_COOKIE))
+        assert ceiling == 0xFFFFFFFF and grants == GRANT_WINDOW_INSPECT | (1 << 5)
+
+    def test_cannot_grant_builtin_namespaces(self, xserver):
+        manager, opcode = _manager(xserver)
+        for ns in ("root", "anon"):
+            r = _set_grants(manager, opcode, ns, GRANT_WINDOW_INSPECT)
+            assert isinstance(r, X11Error) and r.error_code == BAD_ACCESS, (ns, r)
+
+    def test_unknown_grant_bits_rejected(self, xserver):
+        manager, opcode = _manager(xserver)
+        r = _set_grants(manager, opcode, "sandbox", 1 << 20)
+        assert isinstance(r, X11Error) and r.error_code == BAD_VALUE

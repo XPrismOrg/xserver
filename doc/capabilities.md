@@ -43,9 +43,12 @@ When the build has no request-name registry, the request shows as
     grant window.inspect window.enumerate
   ```
 
-  Namespaces created at runtime (X-NAMESPACE `CreateNamespace`, e.g. by
-  `xns-listen --create`) hold no capabilities yet; the protocol has no way
-  to grant them.
+  At runtime, X-NAMESPACE `SetNamespaceGrants` replaces a namespace's
+  grants (`xns-listen --create --grant ...`). Changes apply from the next
+  request, so revoking is immediate.
+- **Listener ceiling**: a client that came in through a listener holds
+  its namespace's grants AND the listener's ceiling (`AddListener`,
+  `xns-listen --ceiling ...`), whatever the namespace is granted later.
 
 Capabilities are checked on top of Xnamespace's own rules, not instead of
 them: a client needs both to pass.
@@ -83,6 +86,3 @@ confined client is still to do.
 - `CopyArea` with `IncludeInferiors` from the client's *own* window can
   copy other clients' child windows (G1 in `docs/audit-phase1.md`).
 - `input.monitor`: core and XI grabs, `QueryKeymap`.
-- No capability ceiling per listener yet (AD-2): the namespace's grants
-  apply to every client in it.
-- No way to grant capabilities at runtime (protocol).

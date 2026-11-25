@@ -25,18 +25,24 @@ Bool noNamespaceExtension = TRUE;
 DevPrivateKeyRec namespaceClientPrivKeyRec = { 0 };
 
 /* capability policy provider (dix/capability_priv.h) */
-static uint32_t
-XnsCapGrants(ClientPtr client)
+uint32_t
+XnsClientGrants(struct XnamespaceClientPriv *priv)
 {
-    struct XnamespaceClientPriv *priv = XnsClientPriv(client);
-
     if (!priv || priv->isServer)
         return XP_CAP_ALL;
     if (!priv->ns)
         return 0;           /* namespace already deleted */
-    if (priv->ns->superPower)
-        return XP_CAP_ALL;
-    return priv->ns->xpcaps;
+
+    uint32_t grants = priv->ns->superPower ? XP_CAP_ALL : priv->ns->xpcaps;
+    if (priv->app)
+        grants &= priv->app->ceiling;   /* the launcher's limit (AD-2) */
+    return grants;
+}
+
+static uint32_t
+XnsCapGrants(ClientPtr client)
+{
+    return XnsClientGrants(XnsClientPriv(client));
 }
 
 static void

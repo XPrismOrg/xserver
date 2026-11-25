@@ -85,9 +85,14 @@ def _manager(xserver):
     return conn, ext.opcode
 
 
-def _add_listener(conn, opcode, ns_name, fds, app_id=b"", instance_id=b"", engine=b""):
+NO_CEILING = 0xFFFFFFFF
+
+
+def _add_listener(conn, opcode, ns_name, fds, app_id=b"", instance_id=b"", engine=b"",
+                  ceiling=NO_CEILING):
     name = ns_name.encode()
-    body = struct.pack("<HHHH", len(name), len(app_id), len(instance_id), len(engine))
+    body = struct.pack("<HHHHI", len(name), len(app_id), len(instance_id), len(engine),
+                       ceiling)
     for s in (name, app_id, instance_id, engine):
         body += _pad(s)
     req = struct.pack("<BBH", opcode, X_XNS_ADD_LISTENER, 1 + len(body) // 4) + body
@@ -278,7 +283,7 @@ class TestNamespaceListener:
         server stays usable."""
         manager, opcode = _manager(xserver)
         listener = Listener(tmp_path)
-        body = struct.pack("<HHHH", 7, 200, 0, 0) + _pad(b"sandbox")
+        body = struct.pack("<HHHHI", 7, 200, 0, 0, NO_CEILING) + _pad(b"sandbox")
         req = struct.pack("<BBH", opcode, X_XNS_ADD_LISTENER, 1 + len(body) // 4) + body
         manager.send_request_with_fds(req, [listener.sock.fileno(), listener.close_r])
         r = _reply(manager)
@@ -295,7 +300,7 @@ class TestNamespaceListener:
             _add_listener(manager, opcode, "root", fds)             # BadAccess
             _add_listener(manager, opcode, "nosuchns", fds)         # BadName
             _add_listener(manager, opcode, "sandbox", fds, app_id=b"\x01")  # BadValue
-            body = struct.pack("<HHHH", 7, 200, 0, 0) + _pad(b"sandbox")
+            body = struct.pack("<HHHHI", 7, 200, 0, 0, NO_CEILING) + _pad(b"sandbox")
             manager.send_request_with_fds(
                 struct.pack("<BBH", opcode, X_XNS_ADD_LISTENER, 1 + len(body) // 4) + body, fds)
             _reply(manager)                                          # BadLength

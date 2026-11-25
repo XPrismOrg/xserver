@@ -35,7 +35,24 @@
 #define X_XnsAddListener        10  /* since 1.1 */
 #define X_XnsRemoveListener     11  /* since 1.1 */
 #define X_XnsGetClientInfo      12  /* since 1.1 */
-#define XnsNumberRequests       13
+#define X_XnsSetNamespaceGrants 13  /* since 1.1 */
+#define XnsNumberRequests       14
+
+/* XPrism capabilities (grants), see doc/capabilities.md. Bit n is the
+   n-th entry of enum xp_cap in dix/capability_priv.h. Since 1.1. */
+#define XNS_GRANT_CAPTURE_SCREEN      (1u << 0)
+#define XNS_GRANT_CAPTURE_WINDOW      (1u << 1)
+#define XNS_GRANT_INPUT_INJECT        (1u << 2)
+#define XNS_GRANT_INPUT_MONITOR       (1u << 3)
+#define XNS_GRANT_INPUT_VIRTUAL_SEAT  (1u << 4)
+#define XNS_GRANT_WINDOW_ENUMERATE    (1u << 5)
+#define XNS_GRANT_WINDOW_INSPECT      (1u << 6)
+#define XNS_GRANT_WINDOW_MANAGE       (1u << 7)
+#define XNS_GRANT_CLIPBOARD_READ      (1u << 8)
+#define XNS_GRANT_CLIPBOARD_WRITE     (1u << 9)
+#define XNS_GRANT_DISPLAY_CONFIGURE   (1u << 10)
+#define XNS_GRANT_ALL                 0x000007ffu
+#define XNS_NO_CEILING                0xffffffffu /* AddListener: no limit */
 
 #define XNS_APP_STRING_MAX      255 /* app id, instance id, engine */
 
@@ -227,7 +244,7 @@ typedef struct {
     CARD32  attributes;
     CARD32  refcnt;
     CARD32  numTokens;
-    CARD32  pad1;
+    CARD32  grants;             /* XNS_GRANT_*, since 1.1 (was pad) */
     CARD32  pad2;
 } xXnsQueryNamespaceReply;
 #define sz_xXnsQueryNamespaceReply 32
@@ -310,6 +327,10 @@ typedef struct {
  * may be empty). Every client from the socket carries this description,
  * see GetClientInfo. It is what the launcher claims, nothing more: the
  * server cannot check it.
+ *
+ * The ceiling caps the capabilities of every client from the socket: a
+ * client holds its namespace's grants AND the ceiling, whatever the
+ * namespace is granted later.
  */
 typedef struct {
     CARD8   reqType;
@@ -319,12 +340,14 @@ typedef struct {
     CARD16  appIdLen;
     CARD16  instanceIdLen;
     CARD16  engineLen;
+    CARD32  ceiling;            /* most XNS_GRANT_* its clients may ever
+                                   hold; XNS_NO_CEILING for no limit */
     /* CARD8 name[nameLen], padded
        CARD8 appId[appIdLen], padded
        CARD8 instanceId[instanceIdLen], padded
        CARD8 engine[engineLen], padded */
 } xXnsAddListenerReq;
-#define sz_xXnsAddListenerReq 12
+#define sz_xXnsAddListenerReq 16
 
 typedef struct {
     BYTE    type;
@@ -373,11 +396,26 @@ typedef struct {
     CARD16  appIdLen;
     CARD16  instanceIdLen;
     CARD16  engineLen;
-    CARD32  pad0;
-    CARD32  pad1;
+    CARD32  grants;             /* XNS_GRANT_* the client holds now
+                                   (namespace grants AND ceiling) */
+    CARD32  ceiling;            /* its listener's ceiling, or XNS_NO_CEILING */
     /* CARD8 nsName[nsNameLen], padded, then appId, instanceId, engine,
        each padded */
 } xXnsGetClientInfoReply;
 #define sz_xXnsGetClientInfoReply 32
+
+/* SetNamespaceGrants (since 1.1): replace a namespace's XPrism
+   capabilities. Takes effect for its clients' next request. BadAccess for
+   the built-in namespaces. Replies with an empty ack. */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsSetNamespaceGrants */
+    CARD16  length;
+    CARD32  grants;             /* XNS_GRANT_* */
+    CARD16  nameLen;
+    CARD16  pad0;
+    /* CARD8 name[nameLen], padded */
+} xXnsSetNamespaceGrantsReq;
+#define sz_xXnsSetNamespaceGrantsReq 12
 
 #endif /* _XSERVER_NAMESPACEPROTO_H */

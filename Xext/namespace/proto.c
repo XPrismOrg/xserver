@@ -25,6 +25,7 @@
 #include "include/dixstruct.h"
 #include "include/os.h"
 #include "os/peer_identity.h"
+#include "dix/capability_priv.h"
 #include "miext/extinit_priv.h"
 
 #include "namespace.h"
@@ -142,11 +143,13 @@ ProcXnsQueryNamespace(ClientPtr client)
         .attributes   = XnsAttrs(ns),
         .refcnt       = (CARD32) ns->refcnt,
         .numTokens    = XnsCountTokens(ns),
+        .grants       = ns->superPower ? XP_CAP_ALL : ns->xpcaps,
     };
     X_REPLY_FIELD_CARD32(capabilities);
     X_REPLY_FIELD_CARD32(attributes);
     X_REPLY_FIELD_CARD32(refcnt);
     X_REPLY_FIELD_CARD32(numTokens);
+    X_REPLY_FIELD_CARD32(grants);
     return X_SEND_REPLY_SIMPLE(client, reply);
 }
 
@@ -334,6 +337,13 @@ ProcXnsGetClientNamespace(ClientPtr client)
     return X_SEND_REPLY_WITH_RPCBUF(client, reply, buf);
 }
 
+/* the protocol's grant bits are the server's capability bits */
+_Static_assert(XNS_GRANT_ALL == XP_CAP_ALL, "XNS_GRANT_* out of sync with enum xp_cap");
+_Static_assert(XNS_GRANT_DISPLAY_CONFIGURE == XP_CAP_BIT(XP_CAP_DISPLAY_CONFIGURE),
+               "XNS_GRANT_* out of sync with enum xp_cap");
+_Static_assert(XNS_GRANT_CLIPBOARD_READ == XP_CAP_BIT(XP_CAP_CLIPBOARD_READ),
+               "XNS_GRANT_* out of sync with enum xp_cap");
+
 /* printable ASCII only, so a manager can show it without escaping */
 static Bool
 XnsValidAppString(const char *s, size_t len)
@@ -356,6 +366,7 @@ ProcXnsAddListener(ClientPtr client)
     X_REQUEST_FIELD_CARD16(appIdLen);
     X_REQUEST_FIELD_CARD16(instanceIdLen);
     X_REQUEST_FIELD_CARD16(engineLen);
+    X_REQUEST_FIELD_CARD32(ceiling);
 
     /* take both fds first, so they are closed on every error path
        (including BadLength below) */
@@ -411,6 +422,8 @@ ProcXnsAddListener(ClientPtr client)
         rc = BadAlloc;
         goto fail;
     }
+    /* unknown (future) bits are ignored, so XNS_NO_CEILING means no limit */
+    app->ceiling = stuff->ceiling & XP_CAP_ALL;
 
     rc = XnsAddListener(ns, app, listen_fd, close_fd, &handle);
     XnsAppInfoUnref(app);   /* the listener holds its own reference */
@@ -439,6 +452,36 @@ ProcXnsRemoveListener(ClientPtr client)
     int rc = XnsRemoveListener(stuff->handle);
     if (rc != Success)
         return rc;
+
+    xXnsAckReply reply = { 0 };
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
+/** @brief Replace a namespace's XPrism capabilities (since 1.1). */
+static int
+ProcXnsSetNamespaceGrants(ClientPtr client)
+{
+    X_REQUEST_HEAD_AT_LEAST(xXnsSetNamespaceGrantsReq);
+    X_REQUEST_FIELD_CARD32(grants);
+    X_REQUEST_FIELD_CARD16(nameLen);
+
+    const char *name;
+    X_REQUEST_VAR_BEGIN();
+    X_REQUEST_VAR_FIELD(name, stuff->nameLen);
+    X_REQUEST_VAR_END();
+
+    if (stuff->grants & ~XNS_GRANT_ALL)
+        return BadValue;
+
+    struct Xnamespace *ns = XnsLookup(name, stuff->nameLen);
+    if (!ns)
+        return BadName;
+    /* root holds everything anyway; anon is for unauthenticated clients */
+    if ((XnsAttrs(ns) & XNS_ATTR_IMMUTABLE) || ns->superPower)
+        return BadAccess;
+
+    ns->xpcaps = stuff->grants;
+    XNS_LOG("namespace \"%s\" grants now 0x%x\n", ns->name, (unsigned) ns->xpcaps);
 
     xXnsAckReply reply = { 0 };
     return X_SEND_REPLY_SIMPLE(client, reply);
@@ -495,7 +538,11 @@ ProcXnsGetClientInfo(ClientPtr client)
         .appIdLen      = (CARD16) strlen(appId),
         .instanceIdLen = (CARD16) strlen(instanceId),
         .engineLen     = (CARD16) strlen(engine),
+        .grants        = XnsClientGrants(priv),
+        .ceiling       = app ? app->ceiling : XNS_NO_CEILING,
     };
+    X_REPLY_FIELD_CARD32(grants);
+    X_REPLY_FIELD_CARD32(ceiling);
     X_REPLY_FIELD_CARD32(pid);
     X_REPLY_FIELD_CARD32(uid);
     X_REPLY_FIELD_CARD16(nsNameLen);
@@ -536,6 +583,7 @@ ProcXnsDispatch(ClientPtr client)
     case X_XnsAddListener:         return ProcXnsAddListener(client);
     case X_XnsRemoveListener:      return ProcXnsRemoveListener(client);
     case X_XnsGetClientInfo:       return ProcXnsGetClientInfo(client);
+    case X_XnsSetNamespaceGrants:  return ProcXnsSetNamespaceGrants(client);
     default:                       return BadRequest;
     }
 }

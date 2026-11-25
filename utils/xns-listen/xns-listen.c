@@ -43,6 +43,8 @@
 #define X_XnsCreateNamespace        2
 #define X_XnsDeleteNamespace        3
 #define X_XnsAddListener            10
+#define X_XnsSetNamespaceGrants     13
+#define XNS_NO_CEILING              0xffffffffu
 #define XNS_DELETE_KILL_CLIENTS     1
 #define XNS_APP_STRING_MAX          255
 
@@ -56,6 +58,13 @@ static const struct {
     { "xinput",       1u << 3 },
     { "xkeyboard",    1u << 4 },
     /* deliberately no "admin": a socket must never lead into one */
+};
+
+/* XPrism capabilities, in protocol bit order (XNS_GRANT_*) */
+static const char *const grant_names[] = {
+    "capture.screen", "capture.window", "input.inject", "input.monitor",
+    "input.virtual_seat", "window.enumerate", "window.inspect",
+    "window.manage", "clipboard.read", "clipboard.write", "display.configure",
 };
 
 static const char *progname = "xns-listen";
@@ -77,6 +86,11 @@ usage(FILE *f)
 "  -a, --allow CAP[,CAP...]  with --create: capabilities to grant\n"
 "                            (mouse-motion, shape, transparency, xinput,\n"
 "                            xkeyboard); default: none\n"
+"  -g, --grant CAP[,CAP...]  with --create: XPrism capabilities for the\n"
+"                            namespace, e.g. window.inspect,clipboard.read\n"
+"      --ceiling CAP[,CAP...]  most capabilities clients on SOCKET may ever\n"
+"                            hold, whatever the namespace is granted;\n"
+"                            \"none\" for none; default: no limit\n"
 "      --app-id ID           app id, e.g. org.example.Editor\n"
 "      --instance-id ID      instance id, e.g. a Flatpak instance\n"
 "      --engine NAME         sandbox engine, e.g. flatpak, bubblewrap\n"
@@ -240,11 +254,33 @@ xns_delete(const char *name)
 }
 
 static int
+xns_set_grants(const char *name, uint32_t grants)
+{
+    size_t n = strlen(name);
+    uint8_t body[8 + 256] = { 0 };
+    uint16_t nlen = (uint16_t) n;
+    memcpy(body, &grants, 4);
+    memcpy(body + 4, &nlen, 2);
+    size_t off = 8;
+    put_str(body, &off, name, n);
+
+    int xerr;
+    void *r = xns_request(X_XnsSetNamespaceGrants, body, off, NULL, 0, &xerr);
+    if (!r) {
+        fprintf(stderr, "%s: cannot grant capabilities to \"%s\": %s\n",
+                progname, name, xerr_name(xerr));
+        return -1;
+    }
+    free(r);
+    return 0;
+}
+
+static int
 xns_add_listener(const char *name, const char *app_id, const char *instance_id,
-                 const char *engine, int listen_fd, int close_fd)
+                 const char *engine, uint32_t ceiling, int listen_fd, int close_fd)
 {
     const char *strs[4] = { name, app_id, instance_id, engine };
-    size_t lens[4], total = 8;
+    size_t lens[4], total = 12;
     for (int i = 0; i < 4; i++) {
         lens[i] = strlen(strs[i]);
         total += pad4(lens[i]);
@@ -257,7 +293,8 @@ xns_add_listener(const char *name, const char *app_id, const char *instance_id,
         uint16_t l = (uint16_t) lens[i];
         memcpy(body + 2 * i, &l, 2);
     }
-    size_t off = 8;
+    memcpy(body + 8, &ceiling, 4);
+    size_t off = 12;
     for (int i = 0; i < 4; i++)
         put_str(body, &off, strs[i], lens[i]);
 
@@ -297,6 +334,33 @@ parse_caps(const char *list, uint32_t *caps)
         }
         if (i == sizeof(capabilities) / sizeof(capabilities[0])) {
             fprintf(stderr, "%s: unknown capability \"%s\"\n", progname, tok);
+            free(copy);
+            return -1;
+        }
+    }
+    free(copy);
+    return 0;
+}
+
+static int
+parse_grants(const char *list, uint32_t *grants)
+{
+    *grants = 0;
+    if (strcmp(list, "none") == 0)
+        return 0;
+    char *copy = strdup(list), *save = NULL;
+    if (!copy)
+        return -1;
+    for (char *tok = strtok_r(copy, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        size_t i, n = sizeof(grant_names) / sizeof(grant_names[0]);
+        for (i = 0; i < n; i++) {
+            if (strcmp(tok, grant_names[i]) == 0) {
+                *grants |= 1u << i;
+                break;
+            }
+        }
+        if (i == n) {
+            fprintf(stderr, "%s: unknown XPrism capability \"%s\"\n", progname, tok);
             free(copy);
             return -1;
         }
@@ -362,15 +426,17 @@ main(int argc, char **argv)
     const char *display = NULL, *ns = NULL;
     const char *app_id = "", *instance_id = "", *engine = "";
     int create = 0;
-    uint32_t caps = 0;
-    const char *allow = NULL;
+    uint32_t caps = 0, grants = 0, ceiling = XNS_NO_CEILING;
+    const char *allow = NULL, *grant = NULL, *ceiling_arg = NULL;
 
-    enum { OPT_APP_ID = 256, OPT_INSTANCE_ID, OPT_ENGINE };
+    enum { OPT_APP_ID = 256, OPT_INSTANCE_ID, OPT_ENGINE, OPT_CEILING };
     static const struct option opts[] = {
         { "display",     required_argument, NULL, 'd' },
         { "namespace",   required_argument, NULL, 'n' },
         { "create",      no_argument,       NULL, 'c' },
         { "allow",       required_argument, NULL, 'a' },
+        { "grant",       required_argument, NULL, 'g' },
+        { "ceiling",     required_argument, NULL, OPT_CEILING },
         { "app-id",      required_argument, NULL, OPT_APP_ID },
         { "instance-id", required_argument, NULL, OPT_INSTANCE_ID },
         { "engine",      required_argument, NULL, OPT_ENGINE },
@@ -380,12 +446,14 @@ main(int argc, char **argv)
 
     int opt;
     /* "+": stop at the first non-option, so COMMAND's options stay its own */
-    while ((opt = getopt_long(argc, argv, "+d:n:ca:h", opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "+d:n:ca:g:h", opts, NULL)) != -1) {
         switch (opt) {
         case 'd': display = optarg; break;
         case 'n': ns = optarg; break;
         case 'c': create = 1; break;
         case 'a': allow = optarg; break;
+        case 'g': grant = optarg; break;
+        case OPT_CEILING: ceiling_arg = optarg; break;
         case OPT_APP_ID: app_id = optarg; break;
         case OPT_INSTANCE_ID: instance_id = optarg; break;
         case OPT_ENGINE: engine = optarg; break;
@@ -411,6 +479,15 @@ main(int argc, char **argv)
         return 1;
     }
     if (allow && parse_caps(allow, &caps) != 0)
+        return 1;
+    if (grant && !create) {
+        fprintf(stderr, "%s: --grant needs --create (use --ceiling to limit "
+                "clients of an existing namespace)\n", progname);
+        return 1;
+    }
+    if (grant && parse_grants(grant, &grants) != 0)
+        return 1;
+    if (ceiling_arg && parse_grants(ceiling_arg, &ceiling) != 0)
         return 1;
     if (check_app_string("--app-id", app_id) || check_app_string("--instance-id", instance_id) ||
         check_app_string("--engine", engine))
@@ -441,6 +518,8 @@ main(int argc, char **argv)
         if (xns_create(ns, caps) != 0)
             goto out;
         created = 1;
+        if (grants && xns_set_grants(ns, grants) != 0)
+            goto out;
     }
 
     listen_fd = make_listening_socket(sock_path);
@@ -458,7 +537,7 @@ main(int argc, char **argv)
     fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
     fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
     /* xcb closes both fds once they are sent */
-    if (xns_add_listener(ns, app_id, instance_id, engine, listen_fd, pipefd[0]) != 0)
+    if (xns_add_listener(ns, app_id, instance_id, engine, ceiling, listen_fd, pipefd[0]) != 0)
         goto out;
     pipefd[0] = -1;
 

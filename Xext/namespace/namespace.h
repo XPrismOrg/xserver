@@ -52,12 +52,19 @@ struct XnsAppInfo {
     char *appId;                /* e.g. "org.example.Editor" */
     char *instanceId;           /* e.g. Flatpak instance id */
     char *engine;               /* e.g. "flatpak", "bubblewrap" */
+    uint32_t ceiling;           /* most XPrism capabilities its clients may
+                                   hold (XP_CAP_ALL: no limit) */
 };
 
+struct XnamespaceClientPriv;
 struct XnsAppInfo *XnsAppInfoNew(const char *appId, size_t appIdLen,
                                  const char *instanceId, size_t instanceIdLen,
                                  const char *engine, size_t engineLen);
 struct XnsAppInfo *XnsAppInfoRef(struct XnsAppInfo *app);
+
+/* XPrism capabilities a client holds: its namespace's grants, limited by
+   its listener's ceiling (namespace.c) */
+uint32_t XnsClientGrants(struct XnamespaceClientPriv *priv);
 void XnsAppInfoUnref(struct XnsAppInfo *app);
 
 struct XnamespaceClientPriv {

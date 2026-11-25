@@ -371,6 +371,8 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
     app-id:      STRING8        (may be empty)
     instance-id: STRING8        (may be empty)
     engine:      STRING8        (may be empty)
+    ceiling:     CARD32         (XPrism capabilities, see 6.13;
+                                 0xffffffff = no limit)
     fds:  2 (passed with the request, SCM_RIGHTS)
           1. listening SOCK_STREAM Unix domain socket
           2. close fd, e.g. the read end of a pipe
@@ -383,6 +385,11 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
    at most 255 bytes of printable ASCII. Every client from the socket
    carries them (see GetClientInfo), even after the listener is gone.
    They are the launcher's claim; the server can't verify them.
+ * The ceiling is the most a client from the socket may ever hold: it
+   holds its namespace's grants AND the ceiling, even after the namespace
+   is granted more. This is AD-2's capability ceiling: a launcher can add
+   a socket to a shared namespace without handing out everything that
+   namespace may later be granted.
  * Clients on the socket need no other authorization, and the
    authorization data they send is ignored: a client that sends another
    namespace's cookie still lands in this namespace.
@@ -426,12 +433,39 @@ connected.
                                  2 = pid valid, 4 = uid valid)
     pid:         CARD32         (in the server's pid namespace)
     uid:         CARD32
+    grants:      CARD32         (XPrism capabilities it holds now)
+    ceiling:     CARD32         (its listener's, or 0xffffffff)
     namespace:   STRING8
     app-id:      STRING8
     instance-id: STRING8
     engine:      STRING8
 ```
 
+
+### 6.13 SetNamespaceGrants (since 1.1)
+
+Replace a namespace's XPrism capabilities (`doc/capabilities.md`). They
+apply from its clients' next request on, so a grant can be revoked at any
+time.
+
+```
+  SetNamespaceGrants
+    name:   STRING8
+    grants: CARD32
+  =>
+    (empty)
+```
+
+Bits, in this order from bit 0: `capture.screen`, `capture.window`,
+`input.inject`, `input.monitor`, `input.virtual_seat`,
+`window.enumerate`, `window.inspect`, `window.manage`, `clipboard.read`,
+`clipboard.write`, `display.configure` (`XNS_GRANT_*` in
+`namespaceproto.h`). `BadValue` for other bits, `BadAccess` for the
+built-in namespaces (`root` holds everything; `anon` is for
+unauthenticated clients and is never granted anything), `BadName`.
+
+`QueryNamespace` reports a namespace's grants in the former `pad1` field
+(all bits for a superpower namespace).
 
 7. Errors
 ---------

@@ -17,6 +17,10 @@ xns-listen [options] SOCKET [-- COMMAND [ARG...]]
   -c, --create              create the namespace, delete it on exit
   -a, --allow CAP[,CAP...]  with --create: mouse-motion, shape,
                             transparency, xinput, xkeyboard
+  -g, --grant CAP[,CAP...]  with --create: XPrism capabilities for the
+                            namespace (doc/capabilities.md)
+      --ceiling CAP[,CAP...]  most capabilities clients on SOCKET may
+                            ever hold; "none" for none; default no limit
       --app-id ID           e.g. org.example.Editor
       --instance-id ID      e.g. a Flatpak instance id
       --engine NAME         e.g. flatpak, bubblewrap

@@ -182,3 +182,49 @@ class TestXnsListen:
                            env=env, capture_output=True, text=True, timeout=30)
         assert r.returncode == 1
         assert "does not offer X-NAMESPACE" in r.stderr
+
+
+GRANT_WINDOW_INSPECT = 1 << 6
+GRANT_CLIPBOARD_READ = 1 << 8
+
+
+class TestXnsListenGrants:
+    def test_grant_and_ceiling(self, xserver, env, tmp_path):
+        sock = tmp_path / "g.sock"
+        proc = _start(["-n", "app4", "--create",
+                       "--grant", "window.inspect,clipboard.read",
+                       "--ceiling", "window.inspect", str(sock)], env)
+        try:
+            manager, opcode = _manager(xserver)
+            # the namespace got both grants ...
+            name = b"app4"
+            manager.send_request(struct.pack("<BBHHH", opcode, 4, 3, len(name), 0) + name)
+            r = manager.recv_response(timeout=5.0)
+            assert not isinstance(r, X11Error), r
+            assert struct.unpack_from("<I", r.data, 24)[0] == \
+                GRANT_WINDOW_INSPECT | GRANT_CLIPBOARD_READ
+
+            # ... but clients on the socket hold only what the ceiling allows
+            app = RawX11Connection(xserver.display_num, path=str(sock))
+            pixmap = app.create_pixmap(1, 1)
+            app.flush_responses(timeout=0.2)
+            manager.send_request(struct.pack("<BBHI", opcode, X_XNS_GET_CLIENT_INFO, 2, pixmap))
+            r = manager.recv_response(timeout=5.0)
+            assert not isinstance(r, X11Error), r
+            grants, ceiling = struct.unpack_from("<II", r.data, 24)
+            assert (grants, ceiling) == (GRANT_WINDOW_INSPECT, GRANT_WINDOW_INSPECT)
+        finally:
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=5)
+
+    def test_grant_needs_create(self, xserver, env, tmp_path):
+        r = subprocess.run([_tool(), "-n", "x", "--grant", "window.inspect",
+                            str(tmp_path / "s")],
+                           env=env, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 1 and "--grant needs --create" in r.stderr
+
+    def test_unknown_capability_rejected(self, xserver, env, tmp_path):
+        r = subprocess.run([_tool(), "-n", "x", "--create", "--ceiling", "root.everything",
+                            str(tmp_path / "s")],
+                           env=env, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 1 and "unknown XPrism capability" in r.stderr

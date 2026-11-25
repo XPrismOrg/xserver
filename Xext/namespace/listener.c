@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "include/list.h"
+#include "dix/capability_priv.h"
 #include "os/listener_priv.h"
 
 #include "namespace.h"
@@ -51,6 +52,7 @@ XnsAppInfoNew(const char *appId, size_t appIdLen,
     if (!app)
         return NULL;
     app->refcnt = 1;
+    app->ceiling = XP_CAP_ALL;
     app->appId = dup_n(appId, appIdLen);
     app->instanceId = dup_n(instanceId, instanceIdLen);
     app->engine = dup_n(engine, engineLen);
