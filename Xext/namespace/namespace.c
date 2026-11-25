@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <X11/Xmd.h>
 
+#include "dix/capability_priv.h"
 #include "dix/client_priv.h"
 #include "dix/devices_priv.h"
 #include "dix/dix_priv.h"
@@ -22,6 +23,37 @@
 Bool noNamespaceExtension = TRUE;
 
 DevPrivateKeyRec namespaceClientPrivKeyRec = { 0 };
+
+/* capability policy provider (dix/capability_priv.h) */
+static uint32_t
+XnsCapGrants(ClientPtr client)
+{
+    struct XnamespaceClientPriv *priv = XnsClientPriv(client);
+
+    if (!priv || priv->isServer)
+        return XP_CAP_ALL;
+    if (!priv->ns)
+        return 0;           /* namespace already deleted */
+    if (priv->ns->superPower)
+        return XP_CAP_ALL;
+    return priv->ns->xpcaps;
+}
+
+static void
+XnsCapLabel(ClientPtr client, char *buf, size_t len)
+{
+    struct XnamespaceClientPriv *priv = XnsClientPriv(client);
+
+    if (!priv || !priv->ns) {
+        snprintf(buf, len, "no namespace");
+        return;
+    }
+    if (priv->app && priv->app->appId[0])
+        snprintf(buf, len, "namespace \"%s\", app \"%s\"",
+                 priv->ns->name, priv->app->appId);
+    else
+        snprintf(buf, len, "namespace \"%s\"", priv->ns->name);
+}
 
 void
 NamespaceExtensionInit(void)
@@ -51,6 +83,8 @@ NamespaceExtensionInit(void)
           XaceRegisterCallback(XACE_RESOURCE_ACCESS, hookResourceAccess, NULL) &&
           XaceRegisterCallback(XACE_SEND_ACCESS, hookSend, NULL)))
         FatalError("NamespaceExtensionInit: allocation failure\n");
+
+    XpCapSetProvider(XnsCapGrants, XnsCapLabel);
 
     /* Do the serverClient */
     struct XnamespaceClientPriv *srv = XnsClientPriv(serverClient);

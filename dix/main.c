@@ -86,6 +86,7 @@ Equipment Corporation.
 #include <X11/fonts/libxfont2.h>
 
 #include "config/hotplug_priv.h"
+#include "dix/capability_priv.h"
 #include "dix/atom_priv.h"
 #include "dix/callback_priv.h"
 #include "dix/cursor_priv.h"
@@ -195,6 +196,10 @@ dix_main(int argc, char *argv[], char *envp[])
     if (screenInfo.numScreens < 1)
         FatalError("no screens found");
     LogMessageVerb(X_INFO, 1, "Output(s) initialized\n");
+
+    /* before the extensions, so a policy provider among them (Xnamespace)
+       finds the capability checks in place */
+    XpCapInit();
 
     InitExtensions(argc, argv);
     LogMessageVerb(X_INFO, 1, "Extensions initialized\n");

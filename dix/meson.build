@@ -6,6 +6,7 @@ srcs_dix = [
     'connsetup.c',
     'cursor.c',
     'devices.c',
+    'capability.c',
     'dispatch.c',
     'display.c',
     'dixfonts.c',

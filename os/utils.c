@@ -104,6 +104,7 @@ __stdcall unsigned long GetTickCount(void);
 #include <netdb.h>
 #endif
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/input_priv.h"
 #include "dix/settings_priv.h"
@@ -276,6 +277,9 @@ UseMsg(void)
     ErrorF("+byteswappedclients    Allow clients with endianness different to that of the server\n");
     ErrorF("-byteswappedclients    Prohibit clients with endianness different to that of the server\n");
     ErrorF("-c                     turns off key-click\n");
+    ErrorF("-capmode off|audit|enforce  capability checks: none, log what\n"
+           "                       would be denied (default), or deny\n"
+           "                       (experimental)\n");
     ErrorF("c #                    key-click volume (0-100)\n");
     ErrorF("-cc int                default color visual class\n");
     ErrorF("-nocursor              disable the cursor\n");
@@ -479,6 +483,18 @@ ProcessCommandLine(int argc, char *argv[])
         else if (strcmp(argv[i], "c") == 0) {
             if (++i < argc)
                 defaultKeyboardControl.click = atoi(argv[i]);
+            else
+                UseMsg();
+        }
+        else if (strcmp(argv[i], "-capmode") == 0) {
+            if (++i >= argc)
+                UseMsg();
+            else if (strcmp(argv[i], "off") == 0)
+                xpCapMode = XP_CAP_MODE_OFF;
+            else if (strcmp(argv[i], "audit") == 0)
+                xpCapMode = XP_CAP_MODE_AUDIT;
+            else if (strcmp(argv[i], "enforce") == 0)
+                xpCapMode = XP_CAP_MODE_ENFORCE;
             else
                 UseMsg();
         }

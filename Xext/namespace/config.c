@@ -6,6 +6,7 @@
 #include <string.h>
 #include <X11/Xdefs.h>
 
+#include "dix/capability_priv.h"
 #include "os/auth.h"
 #include "include/os.h"
 #include "include/dix.h"
@@ -164,6 +165,20 @@ static void parseLine(char *line, struct Xnamespace **walk_ns)
     if (strcmp(token, "superpower") == 0)
     {
         curr->superPower = TRUE;
+        return;
+    }
+
+    /* "grant capture.window clipboard.read ..." - XPrism capabilities */
+    if (strcmp(token, "grant") == 0)
+    {
+        while ((token = strtok(NULL, " \t")) != NULL)
+        {
+            int cap = XpCapFromName(token);
+            if (cap < 0)
+                XNS_LOG("unknown capability: %s\n", token);
+            else
+                curr->xpcaps |= XP_CAP_BIT(cap);
+        }
         return;
     }
 

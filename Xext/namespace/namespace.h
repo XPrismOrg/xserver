@@ -31,6 +31,8 @@ struct Xnamespace {
     Bool allowXInput;
     Bool allowXKeyboard;
     Bool superPower;
+    uint32_t xpcaps;            /* XPrism capabilities (dix/capability_priv.h);
+                                   superPower implies all of them */
     Bool autoRemove;           /* destroy when the last client exits */
     struct xorg_list auth_tokens;
     CARD32 tokenHandleSeq;      /* monotonic per-namespace handle counter */
