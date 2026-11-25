@@ -48,12 +48,22 @@ run_test_in_child(const testfunc_t* (*suite)(void), const char *funcname)
         cpid = fork();
         if (cpid) {
             waitpid(cpid, &csts, 0);
-            if (!WIFEXITED(csts))
+            if (WIFSIGNALED(csts)) {
+                /* e.g. a failed assert(): SIGABRT. Report it as a
+                   failure; exit_code may still hold an earlier test
+                   function's 0 here, which used to hide such failures. */
+                exit_code = 128 + WTERMSIG(csts);
                 goto child_failed;
+            }
+            if (!WIFEXITED(csts)) {
+                exit_code = 1;
+                goto child_failed;
+            }
             exit_code = WEXITSTATUS(csts);
             if (exit_code != 0) {
     child_failed:
                 printf(" FAIL\n");
+                fflush(stdout);
                 exit(exit_code);
             }
         } else {

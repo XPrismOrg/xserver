@@ -208,15 +208,23 @@ static void logging_format(void)
     read_log_msg(logmsg);
     assert(strcmp(logmsg, "(EE) test message\n") == 0);
 
-    /* long buf is truncated to "....en\n" */
+    /* A message longer than the log buffer is cut to fit and still ends
+       the line. The "(EE) " prefix shares the 1024 byte buffer, so the
+       line is 1023 characters and the message's "end" is cut off. (This
+       used to expect "....en\n", which no version of the truncation
+       produces; the test runner hid the failure, see tests-common.c.) */
     LogMessageVerb(X_ERROR, 1, buf);
     read_log_msg(logmsg);
-    assert(strcmp(&logmsg[strlen(logmsg) - 3], "en\n") == 0);
+    assert(strlen(logmsg) == sizeof(buf) - 1);
+    assert(strncmp(logmsg, "(EE) ....", 9) == 0);
+    assert(strcmp(&logmsg[strlen(logmsg) - 3], "..\n") == 0);
 
     /* same thing, this time as string substitution */
     LogMessageVerb(X_ERROR, 1, "%s", buf);
     read_log_msg(logmsg);
-    assert(strcmp(&logmsg[strlen(logmsg) - 3], "en\n") == 0);
+    assert(strlen(logmsg) == sizeof(buf) - 1);
+    assert(strncmp(logmsg, "(EE) ....", 9) == 0);
+    assert(strcmp(&logmsg[strlen(logmsg) - 3], "..\n") == 0);
 
     /* strings containing placeholders should just work */
     LogMessageVerb(X_ERROR, 1, "%s\n", str);
