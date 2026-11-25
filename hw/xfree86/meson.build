@@ -4,7 +4,6 @@ xorg_inc = include_directories(
     'common',
     'ddc',
     'i2c',
-    'int10',
     'loader',
     'modes',
     'os-support',
@@ -113,12 +112,6 @@ subdir('exa')
 subdir('fbdevhw')
 if build_glamor and build_gbm
     subdir('glamor_egl')
-endif
-if int10 != 'false'
-    if int10 == 'x86emu'
-        subdir('x86emu')
-    endif
-    subdir('int10')
 endif
 subdir('shadowfb')
 if build_vgahw

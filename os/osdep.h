@@ -166,10 +166,8 @@ OsSigHandlerPtr OsSignal(int sig, OsSigHandlerPtr handler);
 
 void OsInit(void);
 
-_X_EXPORT /* needed by the int10 module, but should not be used by OOT drivers */
 void OsBlockSignals(void);
 
-_X_EXPORT /* needed by the int10 module, but should not be used by OOT drivers */
 void OsReleaseSignals(void);
 
 void OsResetSignals(void);

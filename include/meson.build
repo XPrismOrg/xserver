@@ -583,8 +583,4 @@ if build_xorg_sdk
     if build_mitshm
         install_data(['shmint.h'], install_dir: xorgsdkdir)
     endif
-
-    if int10 != 'false'
-        install_data(['xf86int10.h', 'vbe.h', 'vbeModes.h'], install_dir: xorgsdkdir)
-    endif
 endif

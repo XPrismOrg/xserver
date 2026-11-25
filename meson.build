@@ -302,17 +302,6 @@ if build_ipv6 and not have_AF_INET6
 endif
 message('IPv6 support: ' + (build_ipv6 ? 'YES' : 'NO'))
 
-int10 = get_option('int10')
-if int10 == 'auto'
-    int10 = 'x86emu'
-    if host_machine.cpu_family() in ['ppc', 'ppc64'] and host_machine.system() == 'freebsd'
-        int10 = 'stub'
-    endif
-    if host_machine.cpu_family() == 'arm'
-        int10 = 'stub'
-    endif
-endif
-
 hal_dep = []
 if hal_option == 'auto'
     if not build_udev
