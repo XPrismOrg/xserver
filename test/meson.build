@@ -217,7 +217,8 @@ if build_xorg
         unit_c_args += ['-DRES_TESTS']
     endif
 
-    if meson.get_compiler('c').has_link_argument('-Wl,-wrap')
+    # -wrap needs a symbol name; a bare -Wl,-wrap fails with GNU ld 2.4x
+    if meson.get_compiler('c').has_link_argument('-Wl,-wrap,xserver_ldwrap_probe')
        # LTO breaks with -Wl,-wrap on certain configurations
        unit_c_args += ['-fno-lto']
        unit_sources += [

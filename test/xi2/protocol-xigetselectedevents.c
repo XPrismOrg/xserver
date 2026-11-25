@@ -171,6 +171,10 @@ test_XIGetSelectedEvents(void)
 
     init_simple();
     client = init_client(0, NULL);
+    /* XISetEventMask() records the selecting client by a resource ID from
+       FakeClientID(), which needs the client's resource table; without
+       one the ID names client 0 and the selection is never found again */
+    assert(InitClientResources(&client));
 
     request_init(&request, XIGetSelectedEvents);
 

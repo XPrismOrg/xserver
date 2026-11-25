@@ -287,6 +287,11 @@ init_simple(void)
 
 WRAP_FUNCTION(dixWriteToClient, void, ClientPtr client, int len, void *data)
 {
+    /* replies are now written as header + payload buffer, and an empty
+       payload arrives as a zero-length write with a NULL buffer; it carries
+       nothing, and the per-test reply checkers expect only real data */
+    if (len == 0)
+        return;
     IMPLEMENT_WRAP_FUNCTION(dixWriteToClient, client, len, data);
 }
 
