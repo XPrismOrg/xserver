@@ -45,12 +45,8 @@ if host_machine.system() == 'linux'
     endif
 
 
-    # this is ugly because the code is also
-    if build_apm or build_acpi
-        srcs_xorg_os_support += 'linux/lnx_apm.c'
-        if build_acpi
-            srcs_xorg_os_support += 'linux/lnx_acpi.c'
-        endif
+    if build_acpi
+        srcs_xorg_os_support += ['linux/lnx_pm.c', 'linux/lnx_acpi.c']
     else
         srcs_xorg_os_support += 'shared/pm_noop.c'
     endif

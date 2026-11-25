@@ -102,8 +102,6 @@ option('xcsecurity', type: 'boolean', value: false,
        description: 'Security extension')
 option('xv', type: 'boolean', value: true,
        description: 'Xv extension')
-option('linux_apm', type: 'boolean', value: true,
-       description: 'APM support on Linux')
 option('linux_acpi', type: 'boolean', value: true,
        description: 'ACPI support on Linux')
 option('mitshm', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',

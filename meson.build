@@ -537,14 +537,6 @@ build_namespace = get_option('namespace')
 
 build_xv = get_option('xv')
 
-build_apm = false
-if (get_option('linux_apm') == true and
-   host_machine.system() == 'linux')
-    if cc.has_header('linux/apm_bios.h')
-        build_apm = true
-    endif
-endif
-
 build_acpi = false
 if (get_option('linux_acpi') == true and
    host_machine.system() == 'linux')

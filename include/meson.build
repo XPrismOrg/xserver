@@ -288,7 +288,6 @@ conf_data.set('CONFIG_DEBUG_WRITETOCLIENT',
 conf_data.set('CONFIG_DEBUG_WRITETOCLIENT_BACKTRACE',
               debug_writetoclient == 'backtrace' ? '1' : false)
 
-conf_data.set('HAVE_APM', (build_apm or build_acpi) ? '1' : false)
 conf_data.set('HAVE_ACPI', build_acpi ? '1' : false)
 
 enable_debugging = get_option('buildtype') == 'debug'
