@@ -152,7 +152,9 @@ def _wait_refused(listener, xserver, timeout=3.0):
     while time.monotonic() < deadline:
         try:
             _connect_via(listener, xserver).close()
-        except X11ConnectionError:
+        except (X11ConnectionError, OSError):
+            # refused, or reset: a connection queued just before the server
+            # closed the socket is dropped, never accepted
             return True
         time.sleep(0.05)
     return False
