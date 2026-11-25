@@ -254,20 +254,6 @@ xorgsdkdir = join_paths(get_option('prefix'), get_option('includedir'), 'xorg')
 ## configure Xnest - nesting X server
 build_xnest = get_option('xnest') != 'false'
 
-build_xquartz = false
-if get_option('xquartz') == 'auto'
-    if host_machine.system() == 'darwin'
-            build_xquartz = true
-    endif
-else
-    build_xquartz = get_option('xquartz') == 'true'
-endif
-
-build_rootless = false
-if build_xquartz
-    build_rootless = true
-endif
-
 build_xvfb = get_option('xvfb')
 
 build_xephyr = get_option('xephyr')
@@ -281,7 +267,6 @@ build_xmodesetting = get_option('xmodesetting')
 build_xserver = (build_xorg or
                  build_xnest or
                  build_xvfb or
-                 build_xquartz or
                  build_xephyr or
                  build_xfake or
                  build_xfbdev or
@@ -291,7 +276,6 @@ summary({
         'Xorg': build_xorg,
         'Xnest': build_xnest,
         'Xvfb': build_xvfb,
-        'Xquartz': build_xquartz,
         'Xephyr': build_xephyr,
         'Xfake': build_xfake,
         'Xfbdev': build_xfbdev,
@@ -569,10 +553,6 @@ else
 endif
 
 build_dpms = get_option('dpms')
-if build_xquartz
-    build_dpms = false
-endif
-
 build_screensaver = get_option('screensaver')
 build_res = get_option('xres')
 if build_res
@@ -776,9 +756,6 @@ if build_xserver
     subdir('miext/damage')
     subdir('miext/shadow')
     subdir('miext/sync')
-    if build_rootless
-        subdir('miext/rootless')
-    endif
     subdir('Xext')
     if build_glamor
         subdir('glamor')

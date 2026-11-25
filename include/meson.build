@@ -298,11 +298,6 @@ conf_data.set('HAVE_ACPI', build_acpi ? '1' : false)
 enable_debugging = get_option('buildtype') == 'debug'
 conf_data.set('DEBUG', enable_debugging ? '1' : false)
 
-if build_rootless
-    conf_data.set('ROOTLESS', build_rootless ? '1' : false)
-    conf_data.set('ROOTLESS_SAFEALPHA', 1)
-endif
-
 #
 # for xorg-server.h only
 #

@@ -34,8 +34,6 @@ extern Bool noNamespaceExtension;
 
 extern Bool PanoramiXExtensionDisabledHack;
 
-extern Bool noPseudoramiXExtension;
-
 extern char *namespaceConfigFile;
 
 void CompositeExtensionInit(void);
@@ -66,7 +64,6 @@ void XvExtensionInit(void);
 void XvMCExtensionInit(void);
 #endif
 void dri3_extension_init(void);
-void PseudoramiXExtensionInit(void);
 void present_extension_init(void);
 void NamespaceExtensionInit(void);
 

@@ -401,7 +401,6 @@ CopyGetMasterEvent(DeviceIntPtr sdev,
 
     verify_internal_event(original);
 
-    /* ET_XQuartz has sdev == NULL */
     if (!sdev || InputDevIsMaster(sdev) || InputDevIsFloating(sdev))
         return NULL;
 

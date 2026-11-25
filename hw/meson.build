@@ -12,7 +12,4 @@ if build_xorg
     subdir('xfree86')
 endif
 
-if build_xquartz
-    subdir('xquartz')
-endif
 

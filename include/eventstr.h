@@ -72,7 +72,7 @@ enum EventType {
     ET_RawTouchBegin,
     ET_RawTouchUpdate,
     ET_RawTouchEnd,
-    ET_XQuartz,
+    ET_XQuartz,                 /* unused (XQuartz removed); kept so later values don't shift */
     ET_BarrierHit,
     ET_BarrierLeave,
     ET_GesturePinchBegin,
@@ -298,18 +298,6 @@ struct _GestureEvent {
     uint32_t flags;   /**< Flags to be copied into the generated event */
 };
 
-#ifdef XQUARTZ
-#define XQUARTZ_EVENT_MAXARGS 5
-struct _XQuartzEvent {
-    unsigned char header; /**< Always ET_Internal */
-    enum EventType type;  /**< Always ET_XQuartz */
-    int length;           /**< Length in bytes */
-    Time time;            /**< Time in ms. */
-    int subtype;          /**< Subtype defined by XQuartz DDX */
-    uint32_t data[XQUARTZ_EVENT_MAXARGS]; /**< Up to 5 32bit values passed to handler */
-};
-#endif
-
 /**
  * Event type used inside the X server for input event
  * processing.
@@ -329,9 +317,6 @@ union _InternalEvent {
     DGAEvent dga_event;
 #endif
     RawDeviceEvent raw_event;
-#ifdef XQUARTZ
-    XQuartzEvent xquartz_event;
-#endif
     GestureEvent gesture_event;
 };
 

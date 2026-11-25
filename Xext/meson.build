@@ -34,9 +34,6 @@ subdir('panoramiX')
 subdir('present')
 subdir('render')
 subdir('composite')
-if build_xquartz
-    subdir('pseudoramiX')
-endif
 subdir('randr')
 subdir('record')
 subdir('xcmisc')
