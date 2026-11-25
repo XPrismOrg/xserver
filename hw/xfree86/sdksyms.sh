@@ -94,12 +94,6 @@ cat > sdksyms.c << EOF
 
 # include "dri3.h"
 
-/* hw/xfree86/vgahw/Makefile.am -- module */
-/*
-#include "vgaHW.h"
- */
-
-
 /* hw/xfree86/fbdevhw/Makefile.am -- module */
 /*
 #include "fbdevhw.h"

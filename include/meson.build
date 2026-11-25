@@ -343,7 +343,6 @@ conf_data.set_quoted('XKB_DFLT_RULES', get_option('xkb_default_rules'))
 conf_data.set('XORGSERVER', build_xorg ? '1' : false)
 conf_data.set_quoted('XCONFIGFILE', 'xorg.conf')
 conf_data.set_quoted('__XSERVERNAME__', 'Xorg')
-conf_data.set('WITH_VGAHW', build_vgahw ? '1' : false)
 
 conf_data.set('CSRG_BASED', csrg_based ? '1' : false)
 conf_data.set('CONFIG_BSD_CONSOLE',
@@ -529,7 +528,6 @@ if build_xorg_sdk
             'vndserver.h',
             'window.h',
             'windowstr.h',
-            'vgaHW.h',
             'xaarop.h',
             'xf86.h',
             'xf86cmap.h',

@@ -525,15 +525,6 @@ endif
 
 build_modesetting = libdrm_dep.found() and dri2proto_dep.found() and build_gbm
 
-build_vgahw = false
-if get_option('vgahw') == 'auto'
-    if host_machine.system() not in ['darwin', 'windows', 'cygwin']
-        build_vgahw = true
-    endif
-else
-    build_vgahw = get_option('vgahw') == 'true'
-endif
-
 build_dpms = get_option('dpms')
 build_screensaver = get_option('screensaver')
 build_res = get_option('xres')

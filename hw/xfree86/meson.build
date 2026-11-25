@@ -10,7 +10,6 @@ xorg_inc = include_directories(
     'os-support/bus',
     'parser',
     'ramdac',
-    'vgahw',
 )
 
 xorg_c_args = []
@@ -114,9 +113,6 @@ if build_glamor and build_gbm
     subdir('glamor_egl')
 endif
 subdir('shadowfb')
-if build_vgahw
-    subdir('vgahw')
-endif
 
 subdir('drivers')
 
