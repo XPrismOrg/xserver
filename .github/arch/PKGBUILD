@@ -4,7 +4,7 @@
 # based on artist's Xlibre PKGBUILD for Artix
 
 pkgbase="xlibre-xserver"
-pkgname=("${pkgbase}"{,-bootstrap,-common,-devel,-xephyr,-xnest,-xvfb})
+pkgname=("${pkgbase}"{,-bootstrap,-common,-devel,-xephyr,-xvfb})
 pkgver=25.999.999 # FIXME
 pkgrel=1
 arch=('aarch64' 'x86_64')
@@ -47,7 +47,6 @@ build() {
     "${_builddir}"
     -D ipv6=true
     -D xvfb=true
-    -D xnest=true
     -D xcsecurity=true
     -D xorg=true
     -D xephyr=true
@@ -92,8 +91,8 @@ package_xlibre-xserver() {
          "${pkgdir}/usr/lib/xorg/protocol.txt" \
          "${pkgdir}/usr/share/man/man1/Xserver.1"
 
-  # xephyr, xnest, xvfb
-  find "${pkgdir}" -type f,l \( -name '*Xephyr*' -o -name '*Xnest*' -o -name '*Xvfb*' \) -delete
+  # xephyr, xvfb
+  find "${pkgdir}" -type f,l \( -name '*Xephyr*' -o -name '*Xvfb*' \) -delete
 }
 
 package_xlibre-xserver-bootstrap() {
@@ -123,8 +122,8 @@ package_xlibre-xserver-bootstrap() {
     "${pkgdir}/usr/lib/xorg/protocol.txt" \
     "${pkgdir}/usr/share/man/man1/Xserver.1"
 
-  # xephyr, xnest, xvfb
-  find ${pkgdir} -type f,l \( -name '*Xephyr*' -o -name '*Xnest*' -o -name '*Xvfb*' \) -delete
+  # xephyr, xvfb
+  find ${pkgdir} -type f,l \( -name '*Xephyr*' -o -name '*Xvfb*' \) -delete
 }
 
 package_xlibre-xserver-common() {
@@ -168,19 +167,6 @@ package_xlibre-xserver-xephyr() {
   meson install -C "${_builddir}" --destdir "${pkgdir}"
 
   find "${pkgdir}" -type f,l ! -name '*Xephyr*' -delete
-}
-
-package_xlibre-xserver-xnest() {
-  pkgdesc="A nested XLibre server that runs as an X application"
-  depends=('glibc' 'libtirpc' 'libunwind' 'libx11' 'libxau' 'libxdmcp'
-           'libxext' 'libxfont2' 'nettle' 'pixman>=0.27.2'
-           'systemd-libs>=209' "${pkgbase}-common=${pkgver}-${pkgrel}")
-  provides=('xorg-server-xnest' 'xlibre-server-xnest')
-  conflicts=('xorg-server-xnest' 'xlibre-server-xnest')
-
-  meson install -C "${_builddir}" --destdir "${pkgdir}"
-
-  find "${pkgdir}" -type f,l ! -name '*Xnest*' -delete
 }
 
 package_xlibre-xserver-xvfb() {

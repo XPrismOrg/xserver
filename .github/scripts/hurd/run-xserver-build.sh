@@ -81,7 +81,7 @@ git checkout FETCH_HEAD
 echo "==> meson setup (Xvfb + Xnest + Xorg + Xephyr + glx — the servers that build on Hurd)"
 meson setup _build \
     -Dwerror=false \
-    -Dxvfb=true -Dxnest=true -Dxorg=true -Dxephyr=true \
+    -Dxvfb=true -Dxorg=true -Dxephyr=true \
     -Dglx=true \
     -Dxfbdev=false -Dglamor=false -Ddri2=false -Ddri3=false \
     -Dudev=false -Dsystemd_logind=false

@@ -280,7 +280,7 @@ export FDO_CI_CONCURRENT=\${FDO_CI_CONCURRENT:-2}
 export PKG_CONFIG_PATH="/opt/xorgproto/lib/pkgconfig:/opt/xorgproto/share/pkgconfig:\${PKG_CONFIG_PATH:-}"
 
 if [ -z "\$MESON_ARGS" ]; then
-    MESON_ARGS="-Dprefix=/usr -Dwerror=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxephyr=true -Dxfbdev=false"
+    MESON_ARGS="-Dprefix=/usr -Dwerror=true -Dxorg=true -Dxvfb=true -Dxephyr=true -Dxfbdev=false"
 fi
 
 echo "=== [$(date)] meson setup ==="

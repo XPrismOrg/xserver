@@ -244,9 +244,6 @@ endif
 
 xorgsdkdir = join_paths(get_option('prefix'), get_option('includedir'), 'xorg')
 
-## configure Xnest - nesting X server
-build_xnest = get_option('xnest') != 'false'
-
 build_xvfb = get_option('xvfb')
 
 build_xephyr = get_option('xephyr')
@@ -258,7 +255,6 @@ build_xfbdev = get_option('xfbdev')
 build_xmodesetting = get_option('xmodesetting')
 
 build_xserver = (build_xorg or
-                 build_xnest or
                  build_xvfb or
                  build_xephyr or
                  build_xfake or
@@ -267,7 +263,6 @@ build_xserver = (build_xorg or
 
 summary({
         'Xorg': build_xorg,
-        'Xnest': build_xnest,
         'Xvfb': build_xvfb,
         'Xephyr': build_xephyr,
         'Xfake': build_xfake,

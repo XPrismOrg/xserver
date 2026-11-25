@@ -649,7 +649,6 @@ Controlling the server once started:
 Server-specific man pages:
 .BR Xorg (1),
 .BR Xephyr (1),
-.BR Xnest (1),
 .BR Xvfb (1),
 .BR Xquartz (1),
 .BR XWin (1).

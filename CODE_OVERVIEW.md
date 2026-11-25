@@ -41,7 +41,7 @@ layer builds on those below.
        +==========================================================+
        | Xorg (hw/xfree86/: modes, drivers, int10)                |
        +----------------------------+-----------------------------+
-       | Xnest (hw/xnest/: nested)    | Xvfb (hw/vfb/: virtual)   |
+       | Xephyr (hw/kdrive/: nested) | Xvfb (hw/vfb/: virtual)   |
        +------------------------------+---------------------------+
        | Xquartz (hw/xquartz/: macOS) | XWin (hw/xwin/: Windows)  |
        +----------------------------------------------------------+

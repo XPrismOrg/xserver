@@ -31,7 +31,7 @@ RUN MACHINE="$(gcc -dumpmachine)" && \
     meson setup _build \
         -Dprefix=/opt/x11 \
         -Dxorg-sdk=true -Dxorg=true \
-        -Dxephyr=false -Dxvfb=false -Dxnest=false -Dxfbdev=false \
+        -Dxephyr=false -Dxvfb=false -Dxfbdev=false \
         -Dwerror=false -Dxcsecurity=false && \
     ninja -C _build install
 

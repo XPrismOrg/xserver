@@ -25,7 +25,7 @@ concurrency:
 jobs:
     xserver-build-ubuntu-no-gbm:
         env:
-            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dgbm=false -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=true -Dtest_xephyr_gles=false
+            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dgbm=false -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false
             LIBGL_ALWAYS_SOFTWARE: 1
             GALLIUM_DRIVER: llvmpipe
             PIGLIT_PLATFORM: x11_egl
@@ -67,7 +67,7 @@ jobs:
 
     xserver-build-ubuntu:
         env:
-            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=true -Dtest_xephyr_gles=false
+            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false
             LIBGL_ALWAYS_SOFTWARE: 1
             GALLIUM_DRIVER: llvmpipe
             PIGLIT_PLATFORM: x11_egl
@@ -129,10 +129,10 @@ jobs:
                   export LD_LIBRARY_PATH="$X11_PREFIX/lib/$MACHINE:$X11_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
                   ./go-x11proto/contrib/xnamespace/run-xnamespace-test.sh
 
-            # The nested servers (Xephyr, Xnest) need a parent X display; reuse
+            # The nested server (Xephyr) needs a parent X display; reuse
             # the Xvfb we just built as that parent. Xfbdev is skipped: it needs
             # a real /dev/fb0, which CI runners don't have.
-            - name: X-NAMESPACE conformance test (Xephyr, Xnest)
+            - name: X-NAMESPACE conformance test (Xephyr)
               env:
                   XNS_TEST_FLAGS: -v
               run: |
@@ -161,11 +161,6 @@ jobs:
                   echo "::group::Xephyr"
                   XNS_XSERVER="$build/hw/kdrive/ephyr/Xephyr" \
                   XNS_XSERVER_ARGS="-screen 1280x1024x24" \
-                      "$runner" || rc=1
-                  echo "::endgroup::"
-                  echo "::group::Xnest"
-                  XNS_XSERVER="$build/hw/xnest/Xnest" \
-                  XNS_XSERVER_ARGS="-geometry 1280x1024" \
                       "$runner" || rc=1
                   echo "::endgroup::"
                   exit "$rc"
@@ -276,7 +271,7 @@ jobs:
 
     xserver-build-ubuntu-debug:
         env:
-            MESON_ARGS: --buildtype=debug -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=true -Dtest_xephyr_gles=false
+            MESON_ARGS: --buildtype=debug -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false
             LIBGL_ALWAYS_SOFTWARE: 1
             GALLIUM_DRIVER: llvmpipe
             PIGLIT_PLATFORM: x11_egl
@@ -320,7 +315,7 @@ jobs:
         # use). Kept separate from xserver-build-ubuntu* because valgrind is
         # slow and this only needs Xvfb, not the full DDX/XTS/piglit matrix.
         env:
-            MESON_ARGS: --buildtype=debug -Dprefix=/usr -Dxorg=false -Dxvfb=true -Dxnest=false -Dxephyr=false -Dwerror=true
+            MESON_ARGS: --buildtype=debug -Dprefix=/usr -Dxorg=false -Dxvfb=true -Dxephyr=false -Dwerror=true
         runs-on: ubuntu-latest
         steps:
             - name: Check out repository code
@@ -578,7 +573,7 @@ jobs:
     xserver-build-mingw32-ubuntu:
         runs-on: ubuntu-latest
         env:
-            MESON_ARGS: -Dprefix=/home/runner/x11 --cross-file=.github/scripts/mingw32/cross-i686-w64-mingw32.txt -Dwerror=true -Dglx=false -Dlisten_tcp=true -Dxv=true -Dxvfb=true -Dxnest=true -Dxephyr=true -Dxfbdev=false
+            MESON_ARGS: -Dprefix=/home/runner/x11 --cross-file=.github/scripts/mingw32/cross-i686-w64-mingw32.txt -Dwerror=true -Dglx=false -Dlisten_tcp=true -Dxv=true -Dxvfb=true -Dxephyr=true -Dxfbdev=false
         steps:
             - name: Check out repository code
               uses: actions/checkout@v6
@@ -616,7 +611,7 @@ jobs:
             github.event_name != 'pull_request' ||
             github.event.pull_request.head.repo.full_name != github.repository
         env:
-            MESON_ARGS: -Dprefix=/tmp -Dglx=false -Dxnest=false -Dxfbdev=false
+            MESON_ARGS: -Dprefix=/tmp -Dglx=false -Dxfbdev=false
             X11_PREFIX: /Users/runner/x11
             X11_BUILD_DIR: /Users/runner/build-deps
         runs-on: macos-latest
@@ -677,7 +672,7 @@ jobs:
         timeout-minutes: 90
         env:
             MYTOKEN : ${{ secrets.MYTOKEN }}
-            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=false
+            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxvfb=true -Dxfbdev=false
         steps:
             - uses: actions/checkout@v6
             - uses: ./.github/actions/ubuntu-pkg-cache
@@ -732,7 +727,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 90
         env:
-            MESON_ARGS: -Dwerror=true -Dxephyr=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=false
+            MESON_ARGS: -Dwerror=true -Dxephyr=true -Dxorg=true -Dxvfb=true -Dxfbdev=false
         steps:
             - uses: actions/checkout@v6
             - uses: ./.github/actions/ubuntu-pkg-cache
@@ -788,7 +783,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 90
         env:
-            MESON_ARGS: -Dwerror=true -Dxephyr=true -Dxorg=true -Dxvfb=true -Dxnest=true -Dxfbdev=false
+            MESON_ARGS: -Dwerror=true -Dxephyr=true -Dxorg=true -Dxvfb=true -Dxfbdev=false
             LDFLAGS: "-Wl,--no-fatal-warnings"
         steps:
             - uses: actions/checkout@v6
@@ -846,7 +841,7 @@ jobs:
     xserver-build-solaris:
         runs-on: ubuntu-latest
         env:
-            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxnest=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddrm=false -Ddri2=true -Ddri3=true
+            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddrm=false -Ddri2=true -Ddri3=true
         steps:
             - uses: actions/checkout@v6
             - uses: ./.github/actions/ubuntu-pkg-cache
@@ -870,7 +865,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 90
         env:
-            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxnest=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddri2=false -Ddri3=false
+            MESON_ARGS: -Dwerror=true -Dxvfb=true -Dxorg=false -Dxephyr=false -Dxfbdev=false -Ddri2=false -Ddri3=false
         steps:
             - uses: actions/checkout@v6
             - uses: ./.github/actions/ubuntu-pkg-cache
@@ -943,7 +938,7 @@ jobs:
             # deprecated") that -Werror (-Werror=cpp) turns fatal in every TU using
             # libbsd. That's a musl/libbsd toolchain quirk, not an xserver warning, so
             # it can't be fixed in-tree (unlike solaris/gentoo/openbsd, now tightened).
-            MESON_ARGS: -Dprefix=/usr -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxnest=true -Dxfbdev=false -Dsystemd_logind=false -Dwerror=false
+            MESON_ARGS: -Dprefix=/usr -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxfbdev=false -Dsystemd_logind=false -Dwerror=false
         steps:
             # actions/checkout is a JS action; GitHub's bundled Node is
             # glibc-linked, so musl-based Alpine needs gcompat to run it.
@@ -997,7 +992,7 @@ jobs:
         container:
             image: ghcr.io/x11libre/xserver-gentoo-deps:${{ needs.gentoo-deps-image.outputs.tag }}
         env:
-            MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxnest=true -Dxfbdev=false -Dsystemd_logind=false
+            MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxfbdev=false -Dsystemd_logind=false
         steps:
             - name: Check out repository code
               uses: actions/checkout@v6
@@ -1016,7 +1011,7 @@ jobs:
             # an entitlement on public runners.
             image: almalinux:${{ matrix.rhelver }}
         env:
-            MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxnest=true -Dxfbdev=false -Dsystemd_logind=false
+            MESON_ARGS: -Dprefix=/usr -Dwerror=true -Dxcsecurity=true -Dxorg=true -Dxephyr=true -Dxvfb=true -Dxfbdev=false -Dsystemd_logind=false
         steps:
             - name: Check out repository code
               uses: actions/checkout@v6

@@ -12,8 +12,6 @@ option('xmodesetting', type: 'boolean', value: false,
        description: 'Enable the kdrive KMS device X server')
 option('glamor', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
        description: 'Enable glamor (default yes for Xorg builds)')
-option('xnest', type: 'combo', choices: ['true', 'false', 'auto'], value: 'auto',
-       description: 'Enable Xnest nested X server')
 option('xvfb', type: 'boolean', value: true,
        description: 'Enable Xvfb X server')
 
