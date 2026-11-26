@@ -337,7 +337,7 @@ vfbParseColorSpace(const char *arg, CompositeColorSpaceRec *cs)
         { "p3", { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290 } },
         { "bt2020", { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290 } },
     };
-    static const char *const transfers[] = { "srgb", "gamma22", "linear", "pq" };
+    static const char *const transfers[] = { "srgb", "gamma22", "linear", "pq", "hlg" };
     char buf[64], *t, *n, *end;
     unsigned i;
 
@@ -368,7 +368,7 @@ vfbParseColorSpace(const char *arg, CompositeColorSpaceRec *cs)
             return FALSE;
         cs->transfer = i;
     }
-    if (cs->transfer == 3) {    /* PQ: SDR white at 203 cd/m^2 (BT.2408) */
+    if (cs->transfer >= 3) {    /* PQ, HLG: SDR white at 203 cd/m^2 (BT.2408) */
         cs->refWhite = 203;
         cs->minLum = 0.005;
         cs->maxLum = 1000;
@@ -395,7 +395,8 @@ ddxUseMsg(void)
            "                       layout (default: right of the previous one)\n");
     ErrorF("-colorspace P[,T[,N]]  colour space the last -screen's output shows:\n"
            "                       primaries srgb, p3 or bt2020; transfer srgb,\n"
-           "                       gamma22, linear or pq; peak N cd/m^2 (pq)\n");
+           "                       gamma22, linear, pq or hlg; peak N cd/m^2\n"
+           "                       (pq, hlg)\n");
     ErrorF("-pixdepths list-of-int support given pixmap depths\n");
     ErrorF("+/-render		   turn on/off RENDER extension support"
            "(default on)\n");

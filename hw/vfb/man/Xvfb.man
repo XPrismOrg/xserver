@@ -68,7 +68,8 @@ Sets the colour space that the output of the screen given by the last
 \fB\-screen\fP option shows, for testing colour management with the
 built-in compositor (\fB\-compositor on\fP): \fIprimaries\fP is
 \fBsrgb\fP, \fBp3\fP or \fBbt2020\fP, \fItransfer\fP \fBsrgb\fP (the
-default), \fBgamma22\fP, \fBlinear\fP or \fBpq\fP. For \fBpq\fP (HDR),
+default), \fBgamma22\fP, \fBlinear\fP, \fBpq\fP or \fBhlg\fP. For \fBpq\fP and
+\fBhlg\fP (HDR),
 SDR white is shown at 203 cd/m\(S2 and \fIpeak\fP is the display's peak
 luminance in cd/m\(S2, 203 to 10000, by default 1000. A depth\-30 screen
 gives HDR outputs their precision. By default, outputs are sRGB.

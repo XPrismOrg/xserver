@@ -105,15 +105,16 @@ sRGB they are converted too; on sRGB outputs, as in version 0.1, they
 cost nothing.
 
 - **Reference white** is shown at the output's reference white: SDR
-  white is full scale on SDR outputs, and 203 cd/m² on a PQ output.
+  white is full scale on SDR outputs, and 203 cd/m² on PQ and HLG
+  outputs (75% HLG signal on a 1000 cd/m² display, ITU-R BT.2408).
 - **Tone mapping**: content brighter than the output can show (PQ and
   HLG with maxLum above what the output's peak is relative to reference
   white) is compressed with the ITU-R BT.2390 EETF so that maxLum lands
   on the output's peak; on SDR outputs that is SDR white. Below the knee
   of the curve nothing changes.
 - **Gamut mapping**: a colour that the output cannot show is moved
-  towards the grey of its own luminance until it fits (on a PQ output,
-  up to its peak). That keeps its hue (P3's pure red on an sRGB output
+  towards the grey of its own luminance until it fits (on HDR outputs,
+  up to their peak). That keeps its hue (P3's pure red on an sRGB output
   becomes the most saturated sRGB red of the same hue, not sRGB's pure
   red with its channels clipped).
 
@@ -124,7 +125,14 @@ are sRGB and are converted the same way.
 A full-screen window is shown directly (without composition) only when
 it is shown as it is: its colour space is the output's, and for PQ, its
 reference white is the output's and its maxLum no higher than the
-output's peak.
+output's peak. HLG content on an HLG output is always shown as it is:
+HLG is scene-referred, and the display's system gamma adapts the signal
+to its own peak (BT.2100), whatever peak the content was graded on.
+
+On an HLG output, everything else is converted to display light for the
+output's peak (its maxLum) and encoded with the inverse of the BT.2100
+OOTF for that peak, so the display shows it at the intended
+luminance.
 
 The CPU and the GPU (glamor) do the same conversion, and the tests
 check both against the same reference values.
@@ -276,7 +284,5 @@ encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
   taken as linear.
 - One colour space per screen: on the modesetting driver, screens with
   several monitors will need one per CRTC.
-- Outputs with the HLG transfer function are not supported (content
-  with it is).
 - Hardware cursors (modesetting) will need the same conversion as the
   software cursor, which is converted (step 5).

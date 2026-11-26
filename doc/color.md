@@ -3,7 +3,7 @@
 Status: being implemented. Steps 1 to 4 are done: the colour library
 (`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
 [XPRISM-COLOR 0.2](xprism-color-protocol.md) with window descriptions,
-output colour spaces in Xvfb, including HDR (PQ) outputs, and, with
+output colour spaces in Xvfb, including HDR (PQ and HLG) outputs, and, with
 glamor, composition in linear light in half float; the conversion runs
 on the GPU with glamor. The modesetting driver remains, see Steps.
 
@@ -129,9 +129,12 @@ Phase II, for vkms in CI or real hardware.
    64-bit-per-pixel buffers of step 3.
 3. Done: output colour spaces in Xvfb (`-colorspace`, per screen),
    `GetOutputColorSpace`, and composition for wide-gamut SDR and for
-   HDR (PQ) outputs: every window is converted into the output's space
-   and composed in its encoding; windows already in it are shown as
-   they are, and can be shown directly.
+   HDR (PQ and HLG) outputs: every window is converted into the
+   output's space and composed in its encoding; windows already in it
+   are shown as they are, and can be shown directly. HLG outputs encode
+   with the inverse of the BT.2100 OOTF for their peak, so SDR white is
+   75% signal on a 1000 cd/m² display (BT.2408); HLG content goes to
+   them unchanged, as HLG is scene-referred.
 4. Done: composition in linear light with glamor, on outputs other
    than sRGB: windows, the root background and shadows are converted to
    the output's linear light in half float, blended there (translucent

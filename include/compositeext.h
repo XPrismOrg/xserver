@@ -65,9 +65,11 @@ typedef struct {
     Bool tone;
     float toneKnee;             /* relative to refWhite */
     float toneSrcPQ, toneMaxL, toneKS;
-    int outTransfer;            /* sRGB, gamma 2.2, linear or PQ */
+    int outTransfer;            /* sRGB, gamma 2.2, linear, PQ or HLG */
     float outRefWhite;          /* cd/m^2 */
     float outPeak;              /* relative to outRefWhite; 1 for SDR */
+    float outMaxLum;            /* the output's peak, cd/m^2 (HLG) */
+    float outHlgGamma;          /* its HLG system gamma */
     /* composition in linear light: src is a floating point pixmap, its
        channels not limited to 1 (then transfer is linear); dst is one,
        given linear values up to outPeak (then outTransfer is linear) */

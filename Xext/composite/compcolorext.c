@@ -103,6 +103,13 @@ colorIsSRGB(const XpColorSpace *cs)
 
 /* ---- outputs ------------------------------------------------------------ */
 
+/* An output whose signal goes beyond SDR white (PQ, HLG) */
+static bool
+colorIsHDR(const XpColorSpace *cs)
+{
+    return cs->transfer == XpColorTransferPQ || cs->transfer == XpColorTransferHLG;
+}
+
 static XpColorSpace outputSpace[MAXSCREENS];
 static bool outputSet[MAXSCREENS];         /* else sRGB */
 
@@ -135,7 +142,7 @@ CompositeSetOutputColorSpace(ScreenPtr pScreen, const CompositeColorSpaceRec *sp
     if (!space || colorIsSRGB(&cs)) {
         outputSet[s] = false;
     } else if (space->transfer < XpColorTransferSRGB ||
-               space->transfer > XpColorTransferPQ ||
+               space->transfer > XpColorTransferHLG ||
                !(cs.refWhite > 0) || cs.maxLum < cs.refWhite ||
                !xpColorRGBToXYZ(&cs.primaries, unused)) {
         LogMessageVerb(X_WARNING, 1, "compositor: screen %d: unsupported output "
@@ -154,6 +161,21 @@ bool
 compColorOutputIsSRGB(ScreenPtr pScreen)
 {
     return !outputSet[pScreen->myNum];
+}
+
+/* cs as content in it is decoded for out: HLG is scene-referred, so on
+   an HLG output its OOTF is the display's, whatever peak the content
+   was graded on, and decoding and encoding are each other's inverse. */
+static XpColorSpace
+colorSource(const XpColorSpace *cs, const XpColorSpace *out)
+{
+    XpColorSpace src = *cs;
+
+    if (cs->transfer == XpColorTransferHLG && out->transfer == XpColorTransferHLG) {
+        src.refWhite = out->refWhite;
+        src.maxLum = out->maxLum;
+    }
+    return src;
 }
 
 /* Whether content in space cs is shown as it is on output out. */
@@ -255,9 +277,11 @@ typedef struct {
     double knee, peak;          /* relative to the output's reference white */
     float toneLut[TONE_LUT + 1];
     bool encodeSRGB;            /* else xpColorEncode */
+    bool encodeHLG;             /* whole pixels: the OOTF needs luminance */
     /* converted pixels: UI contents repeat the same few colours */
     CARD32 cacheKey[COLOR_CACHE], cacheVal[COLOR_CACHE];
     bool cacheSet[COLOR_CACHE];
+    XpColorSpace src;           /* cs as it is decoded for out */
 } ColorConv;
 
 static float encodeLut[ENCODE_LUT + 1];
@@ -295,14 +319,16 @@ colorConvInit(ColorConv *cv, const XpColorSpace *cs, const XpColorSpace *out)
     double srcMax, dstMax;
 
     memset(cv, 0, sizeof(*cv));
-    cv->cs = cs;
+    cv->src = colorSource(cs, out);
+    cs = cv->cs = &cv->src;
     cv->out = out;
     if (!xpColorConversion(&cs->primaries, &out->primaries, cv->m) ||
         !xpColorRGBToXYZ(&out->primaries, toXYZ))
         return false;
     for (int i = 0; i < 3; i++)
         cv->outLuma[i] = toXYZ[1][i];
-    cv->outPeak = out->transfer == XpColorTransferPQ ? out->maxLum / out->refWhite : 1;
+    cv->outPeak = colorIsHDR(out) ? out->maxLum / out->refWhite : 1;
+    cv->encodeHLG = out->transfer == XpColorTransferHLG;
     cv->hlg = cs->transfer == XpColorTransferHLG;
     for (int i = 0; i <= DECODE_LUT; i++)
         cv->decode[i] = (float) xpColorDecode(cs, (double) i / DECODE_LUT);
@@ -356,6 +382,13 @@ colorConvertPixel(const ColorConv *cv, const double in[3], double out[3])
             s = fmin(s, (p - y) / (out[c] - y));
         else if (out[c] < 0)
             s = fmin(s, y / (y - out[c]));
+    }
+    if (cv->encodeHLG) {
+        double v[3];
+        for (int c = 0; c < 3; c++)
+            v[c] = y + s * (out[c] - y);
+        xpColorEncodeRGB(cv->out, v, out);
+        return;
     }
     for (int c = 0; c < 3; c++) {
         double v = y + s * (out[c] - y);
@@ -435,7 +468,9 @@ colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
 {
     XpColorMatrix m, toXYZ, outXYZ;
     double srcMax, dstMax;
+    XpColorSpace src = colorSource(cs, out);
 
+    cs = &src;
     memset(p, 0, sizeof(*p));
     if (!xpColorConversion(&cs->primaries, &out->primaries, m) ||
         !xpColorRGBToXYZ(&cs->primaries, toXYZ) ||
@@ -453,8 +488,9 @@ colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
     p->hlgGamma = (float) (1.2 + 0.42 * log10(cs->maxLum / 1000));
     p->outTransfer = out->transfer;
     p->outRefWhite = (float) out->refWhite;
-    p->outPeak = (float) (out->transfer == XpColorTransferPQ ?
-                          out->maxLum / out->refWhite : 1);
+    p->outPeak = (float) (colorIsHDR(out) ? out->maxLum / out->refWhite : 1);
+    p->outMaxLum = (float) out->maxLum;
+    p->outHlgGamma = (float) (1.2 + 0.42 * log10(out->maxLum / 1000));
     if (colorTonePeaks(cs, out, &srcMax, &dstMax)) {
         double srcPQ = xpColorNitsToPQ(srcMax);
         double maxL = xpColorNitsToPQ(dstMax) / srcPQ;
@@ -532,8 +568,11 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
            (the rest is within it). */
         if (mode == COLOR_FROM_LINEAR ||
             (mode == COLOR_TO_LINEAR && colorShownAsIs(cs, out)))
+            /* HLG's signal ends at the display's peak */
             params.outPeak = (float) (out->transfer == XpColorTransferPQ ?
-                                      XpColorMaxLuminance / out->refWhite : 1);
+                                      XpColorMaxLuminance / out->refWhite :
+                                      out->transfer == XpColorTransferHLG ?
+                                      out->maxLum / out->refWhite : 1);
         if ((*accel) (src, dst, pRegion, &params))
             return;
     }

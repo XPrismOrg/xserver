@@ -55,6 +55,8 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     glUniform1f(glGetUniformLocation(prog->prog, "color_ks"), c->toneKS);
     glUniform3f(glGetUniformLocation(prog->prog, "color_out"),
                 c->outTransfer, c->outRefWhite, c->outPeak);
+    glUniform2f(glGetUniformLocation(prog->prog, "color_out_hlg"),
+                c->outMaxLum, c->outHlgGamma);
     glUniform2f(glGetUniformLocation(prog->prog, "color_float"),
                 c->srcFloat ? 1.0f : 0.0f, c->dstFloat ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(prog->prog, "color_dst_max"), args->dst_max);
@@ -72,6 +74,7 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "uniform vec4 color_tone;\n" /* on, knee, PQ(maxLum), maxL */      \
     "uniform float color_ks;\n"                                         \
     "uniform vec3 color_out;\n" /* transfer, refWhite, peak */         \
+    "uniform vec2 color_out_hlg;\n" /* peak cd/m^2, system gamma */    \
     "uniform vec2 color_float;\n" /* src, dst: half float, unclamped */ \
     "uniform float color_dst_max;\n" /* 255, 1023; 0: float */         \
     "float pq_to_nits(float v) {\n"                                     \
@@ -88,6 +91,10 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "}\n"                                                               \
     "float srgb_enc(float v) {\n"                                       \
     "  return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055;\n" \
+    "}\n"                                                               \
+    "float hlg_oetf(float e) {\n"                                       \
+    "  return e <= 1.0 / 12.0 ? sqrt(3.0 * max(e, 0.0)) :\n"           \
+    "    min(0.17883277 * log(12.0 * e - 0.28466892) + 0.55991073, 1.0);\n" \
     "}\n"                                                               \
     "float hlg_scene(float v) {\n"                                      \
     "  return v <= 0.5 ? v * v / 3.0 :\n"                               \
@@ -111,7 +118,14 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "  if (tf < 1.5) return pow(o, vec3(1.0 / 2.2));\n"                 \
     "  if (tf < 2.5) return o;\n"                                       \
     "  o *= color_out.y;\n"                                             \
-    "  return vec3(nits_to_pq(o.r), nits_to_pq(o.g), nits_to_pq(o.b));\n" \
+    "  if (tf < 3.5)\n"                                                 \
+    "    return vec3(nits_to_pq(o.r), nits_to_pq(o.g), nits_to_pq(o.b));\n" \
+    /* HLG: invert the OOTF Fd = Lw Ys^(g-1) E, with Yd = Lw Ys^g */    \
+    "  float lw = color_out_hlg.x, g = color_out_hlg.y;\n"              \
+    "  vec3 f = max(o, vec3(0.0)) / lw;\n"                              \
+    "  float ys = pow(min(dot(color_out_luma, f), 1.0), 1.0 / g);\n"     \
+    "  vec3 e = ys > 0.0 ? f / pow(ys, g - 1.0) : vec3(0.0);\n"         \
+    "  return vec3(hlg_oetf(e.r), hlg_oetf(e.g), hlg_oetf(e.b));\n"      \
     "}\n"                                                               \
     "float gamut_scale(float c, float y, float s) {\n"                  \
     "  float p = color_out.z;\n"                                        \

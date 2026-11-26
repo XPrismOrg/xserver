@@ -7,15 +7,16 @@
 #
 # Expected pixels come from the reference in test_color.py.
 
+import math
 import os
 import resource
 import struct
 import subprocess
 
 import pytest
-from test_color import (BT2020, GREY, ORANGE, P3, SRGB, TF_GAMMA22, TF_PQ,
+from test_color import (BT2020, GREY, ORANGE, P3, SRGB, TF_GAMMA22, TF_HLG, TF_PQ,
                         TF_SRGB, XY, Color, _apply, _inv, _mul, _window, desc,
-                        nits_to_pq, pq_to_nits, srgb_decode, srgb_encode,
+                        hlg_grey, nits_to_pq, pq_to_nits, srgb_decode, srgb_encode,
                         to_xyz, tone_map)
 from test_compositor import (RED, SCREEN_H, SCREEN_W, _becomes_direct,
                              _get_image, _is_composited)
@@ -344,8 +345,107 @@ class TestPQOutput:
         assert _becomes_direct(x, w)
 
 
+def hlg_oetf(e):
+    a = 0.17883277
+    b, c = 1 - 4 * a, 0.5 - a * math.log(4 * a)
+    return math.sqrt(3 * max(e, 0)) if e <= 1 / 12 else a * math.log(12 * e - b) + c
+
+
+def hlg_encode(rgb, luma, peak=1000):
+    """Relative linear display light (1 = 203 cd/m^2) to an HLG signal for
+    a display of the given peak: the inverse of the BT.2100 OOTF
+    Fd = Lw Ys^(gamma-1) E, then the OETF."""
+    gamma = 1.2 + 0.42 * math.log10(peak / 1000)
+    f = [max(c, 0) * 203 / peak for c in rgb]
+    ys = min(sum(w * c for w, c in zip(luma, f)), 1.0) ** (1 / gamma)
+    return [hlg_oetf(c / ys ** (gamma - 1) if ys > 0 else 0) for c in f]
+
+
+class TestHLGOutput:
+    """BT.2020 with HLG, on a 1000 cd/m^2 display, depth 30."""
+
+    PEAK = 1000
+
+    @pytest.fixture
+    def xserver_args(self):
+        return ["-br", "-compositor", "on", "-screen", "0", "1280x1024x30",
+                "-colorspace", f"bt2020,hlg,{self.PEAK}"]
+
+    def test_reported(self, xvfb):
+        x = Color(xvfb)
+        got = get_output(x, output_id(x))
+        assert got[:3] == (1, BT2020, TF_HLG)
+        assert got[4:] == (203, 50, self.PEAK)
+
+    def test_sdr_white(self, xvfb):
+        """BT.2408: SDR white (203 cd/m^2) is 75% HLG on a 1000 cd/m^2
+        display."""
+        x = Color(xvfb)
+        _window(x, px30(0xFFFFFF))
+        got = channels10(raw_pixel(x, 150, 150))
+        assert all(abs(c - round(0.75 * 1023)) <= 3 for c in got), got
+        # and as the display shows it, it is 203 cd/m^2 again
+        assert abs(hlg_grey(got[0] / 1023, self.PEAK) - 203) < 3
+
+    @pytest.mark.parametrize("pixel", [ORANGE, RED, GREY])
+    def test_sdr_colours(self, xvfb, pixel):
+        x = Color(xvfb)
+        _window(x, px30(pixel))
+        luma = to_xyz(XY[BT2020])[1]
+        lin = shown(rgb30(px30(pixel)), XY[SRGB], srgb_decode, XY[BT2020], lambda v: v,
+                    self.PEAK / 203)
+        want = [round(c * 1023) for c in hlg_encode(lin, luma, self.PEAK)]
+        got = channels10(raw_pixel(x, 150, 150))
+        assert all(abs(g - w) <= 3 for g, w in zip(got, want)), (got, want)
+
+    def test_hlg_content_as_it_is(self, xvfb):
+        """HLG is scene-referred: the signal goes to the display unchanged,
+        whatever peak the content was graded on; the display's own system
+        gamma adapts it (BT.2100)."""
+        x = Color(xvfb)
+        w = _window(x, px30(0xC08040))
+        assert x.set(w, desc(BT2020, TF_HLG, max_lum=1000)) == []
+        want = channels10(px30(0xC08040))
+        got = channels10(raw_pixel(x, 150, 150))
+        assert all(abs(g - w) <= 3 for g, w in zip(got, want)), (got, want)
+
+    def test_pq_content(self, xvfb):
+        """PQ greys within the display's peak keep their luminance."""
+        x = Color(xvfb)
+        w = _window(x, 0x000000)
+        assert x.set(w, desc(BT2020, TF_PQ, max_lum=self.PEAK)) == []
+        for nits in (n for n in (20, 100, 203, 390, 500, 950) if n <= self.PEAK):
+            v = round(nits_to_pq(nits) * 1023)
+            x.fill(w, (v << 20) | (v << 10) | v, 0, 0, 100, 100)
+            got = channels10(raw_pixel(x, 150, 150))
+            shows = hlg_grey(got[0] / 1023, self.PEAK)
+            assert abs(shows - pq_to_nits(v / 1023)) <= 0.02 * nits + 1, (nits, got, shows)
+
+    def test_fullscreen_hlg_window_is_shown_directly(self, xvfb):
+        x = Color(xvfb)
+        w = _window(x, px30(0xC08040), 0, 0, SCREEN_W, SCREEN_H)
+        assert x.set(w, desc(BT2020, TF_HLG, max_lum=1000)) == []
+        x.sync()
+        assert _becomes_direct(x, w)
+
+
+class TestHLGOutputDim(TestHLGOutput):
+    """A 400 cd/m^2 display: system gamma 1.03, SDR white higher up."""
+
+    PEAK = 400
+
+    def test_sdr_white(self, xvfb):
+        x = Color(xvfb)
+        _window(x, px30(0xFFFFFF))
+        got = channels10(raw_pixel(x, 150, 150))
+        luma = to_xyz(XY[BT2020])[1]
+        want = round(hlg_encode([1, 1, 1], luma, self.PEAK)[0] * 1023)
+        assert want > round(0.75 * 1023) + 20
+        assert all(abs(c - want) <= 3 for c in got), (got, want)
+
+
 @pytest.mark.parametrize("arg", ["foo", "p3,foo", "srgb,srgb,1000", "bt2020,pq,100",
-                                 "bt2020,pq,20000", "bt2020,pq,x"])
+                                 "bt2020,pq,20000", "bt2020,pq,x", "bt2020,hlg,100"])
 def test_bad_option(arg):
     xvfb = os.environ.get("XVFB_PATH")
     if not xvfb:
