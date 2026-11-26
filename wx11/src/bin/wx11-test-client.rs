@@ -3,7 +3,10 @@
 // A minimal Wayland client for WX11's tests: one xdg_toplevel filled with
 // a colour, from an shm buffer. Prints what happens on stdout, one line
 // each: "drawn W H" once the compositor shows a frame, "configure W H"
-// for a size asked for, "closed" when asked to close (then exits).
+// for a size asked for, "closed" when asked to close (then exits), and the
+// input it gets: "keymap", "keyboard enter|leave", "key CODE pressed|released"
+// (evdev codes), "modifiers DEPRESSED", "pointer enter X Y", "pointer leave",
+// "motion X Y", "button CODE pressed|released", "axis vertical|horizontal V".
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 
@@ -12,9 +15,10 @@ use std::io::Write;
 use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
+    wl_shm_pool, wl_surface,
 };
-use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
+use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle, WEnum};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
 struct App {
@@ -90,6 +94,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_compositor" => app.compositor = Some(registry.bind(name, 4, qh, ())),
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
+                "wl_seat" => {
+                    let _: wl_seat::WlSeat = registry.bind(name, 5, qh, ());
+                }
                 _ => {}
             }
         }
@@ -168,6 +175,100 @@ impl Dispatch<wl_callback::WlCallback, (i32, i32)> for App {
     ) {
         if let wl_callback::Event::Done { .. } = event {
             say(format!("drawn {} {}", size.0, size.1));
+        }
+    }
+}
+
+impl Dispatch<wl_seat::WlSeat, ()> for App {
+    fn event(
+        _: &mut App,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<App>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(caps),
+        } = event
+        {
+            if caps.contains(wl_seat::Capability::Keyboard) {
+                seat.get_keyboard(qh, ());
+            }
+            if caps.contains(wl_seat::Capability::Pointer) {
+                seat.get_pointer(qh, ());
+            }
+        }
+    }
+}
+
+fn pressed(state: WEnum<wl_keyboard::KeyState>) -> &'static str {
+    match state {
+        WEnum::Value(wl_keyboard::KeyState::Pressed) => "pressed",
+        _ => "released",
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
+    fn event(
+        _: &mut App,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        match event {
+            wl_keyboard::Event::Keymap { size, .. } if size > 0 => say("keymap".into()),
+            wl_keyboard::Event::Enter { .. } => say("keyboard enter".into()),
+            wl_keyboard::Event::Leave { .. } => say("keyboard leave".into()),
+            wl_keyboard::Event::Key { key, state, .. } => {
+                say(format!("key {key} {}", pressed(state)))
+            }
+            wl_keyboard::Event::Modifiers { mods_depressed, .. } => {
+                say(format!("modifiers {mods_depressed}"))
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for App {
+    fn event(
+        _: &mut App,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        match event {
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => say(format!("pointer enter {surface_x} {surface_y}")),
+            wl_pointer::Event::Leave { .. } => say("pointer leave".into()),
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => say(format!("motion {surface_x} {surface_y}")),
+            wl_pointer::Event::Button { button, state, .. } => {
+                let s = match state {
+                    WEnum::Value(wl_pointer::ButtonState::Pressed) => "pressed",
+                    _ => "released",
+                };
+                say(format!("button {button:#x} {s}"))
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => {
+                let a = match axis {
+                    WEnum::Value(wl_pointer::Axis::VerticalScroll) => "vertical",
+                    _ => "horizontal",
+                };
+                say(format!("axis {a} {value}"))
+            }
+            _ => {}
         }
     }
 }

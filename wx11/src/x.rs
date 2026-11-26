@@ -7,7 +7,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::{
     AtomEnum, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask,
-    ImageFormat, PropMode, WindowClass,
+    ImageFormat, NotifyDetail, PropMode, WindowClass,
 };
 use x11rb::protocol::Event as XEvent;
 use x11rb::rust_connection::RustConnection;
@@ -18,6 +18,29 @@ pub enum Event {
     Close(u32),
     /// the window's size changed
     Resized(u32, u32, u32),
+    /// the window got (true) or lost the keyboard focus
+    Focus(u32, bool),
+    /// a key went down (true) or up; X keycode (= xkb keycode), time
+    Key(u32, u32, bool, u32),
+    /// the pointer entered the window, at x, y
+    Enter(u32, f64, f64, u32),
+    /// the pointer left the window
+    Leave(u32, u32),
+    /// the pointer moved to x, y in the window
+    Motion(u32, f64, f64, u32),
+    /// an X pointer button went down (true) or up
+    Button(u32, u8, bool, u32),
+}
+
+/// the keyboard layout the X server uses (_XKB_RULES_NAMES), for the
+/// Wayland keymap: rules, model, layout, variant, options
+#[derive(Default, Debug)]
+pub struct KeyboardLayout {
+    pub rules: String,
+    pub model: String,
+    pub layout: String,
+    pub variant: String,
+    pub options: String,
 }
 
 pub struct XSide {
@@ -30,6 +53,7 @@ pub struct XSide {
     wm_delete_window: u32,
     net_wm_name: u32,
     utf8_string: u32,
+    xkb_rules_names: u32,
 }
 
 impl XSide {
@@ -44,6 +68,7 @@ impl XSide {
         let wm_delete_window = atom("WM_DELETE_WINDOW")?;
         let net_wm_name = atom("_NET_WM_NAME")?;
         let utf8_string = atom("UTF8_STRING")?;
+        let xkb_rules_names = atom("_XKB_RULES_NAMES")?;
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
         Ok(XSide {
@@ -56,7 +81,36 @@ impl XSide {
             wm_delete_window,
             net_wm_name,
             utf8_string,
+            xkb_rules_names,
         })
+    }
+
+    /// the keyboard layout set on the X server, empty fields if unknown
+    pub fn keyboard_layout(&self) -> KeyboardLayout {
+        let value = self
+            .conn
+            .get_property(
+                false,
+                self.root,
+                self.xkb_rules_names,
+                AtomEnum::STRING,
+                0,
+                1024,
+            )
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.value)
+            .unwrap_or_default();
+        let mut f = value
+            .split(|&b| b == 0)
+            .map(|s| String::from_utf8_lossy(s).into_owned());
+        KeyboardLayout {
+            rules: f.next().unwrap_or_default(),
+            model: f.next().unwrap_or_default(),
+            layout: f.next().unwrap_or_default(),
+            variant: f.next().unwrap_or_default(),
+            options: f.next().unwrap_or_default(),
+        }
     }
 
     pub fn fd(&self) -> OwnedFd {
@@ -74,9 +128,17 @@ impl XSide {
 
     pub fn create_window(&self, w: u32, h: u32, title: &str, app_id: &str) -> u32 {
         let win = self.conn.generate_id().expect("X resource id");
-        let aux = CreateWindowAux::new()
-            .background_pixel(0)
-            .event_mask(EventMask::STRUCTURE_NOTIFY);
+        let aux = CreateWindowAux::new().background_pixel(0).event_mask(
+            EventMask::STRUCTURE_NOTIFY
+                | EventMask::FOCUS_CHANGE
+                | EventMask::KEY_PRESS
+                | EventMask::KEY_RELEASE
+                | EventMask::BUTTON_PRESS
+                | EventMask::BUTTON_RELEASE
+                | EventMask::POINTER_MOTION
+                | EventMask::ENTER_WINDOW
+                | EventMask::LEAVE_WINDOW,
+        );
         let _ = self.conn.create_window(
             self.depth,
             win,
@@ -96,6 +158,15 @@ impl XSide {
             self.wm_protocols,
             AtomEnum::ATOM,
             &[self.wm_delete_window],
+        );
+        // WM_HINTS: flags InputHint, input True, so that window managers
+        // give the window the keyboard focus
+        let _ = self.conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            AtomEnum::WM_HINTS,
+            AtomEnum::WM_HINTS,
+            &[1, 1, 0, 0, 0, 0, 0, 0, 0],
         );
         if !app_id.is_empty() {
             // WM_CLASS: instance and class, both the app id
@@ -182,6 +253,34 @@ impl XSide {
                 XEvent::ConfigureNotify(c) => {
                     out.push(Event::Resized(c.window, c.width as u32, c.height as u32))
                 }
+                // focus moves between windows (not pointer-only details)
+                XEvent::FocusIn(f) if f.detail != NotifyDetail::POINTER => {
+                    out.push(Event::Focus(f.event, true))
+                }
+                XEvent::FocusOut(f) if f.detail != NotifyDetail::POINTER => {
+                    out.push(Event::Focus(f.event, false))
+                }
+                XEvent::KeyPress(k) => out.push(Event::Key(k.event, k.detail as u32, true, k.time)),
+                XEvent::KeyRelease(k) => {
+                    out.push(Event::Key(k.event, k.detail as u32, false, k.time))
+                }
+                XEvent::ButtonPress(b) => out.push(Event::Button(b.event, b.detail, true, b.time)),
+                XEvent::ButtonRelease(b) => {
+                    out.push(Event::Button(b.event, b.detail, false, b.time))
+                }
+                XEvent::MotionNotify(m) => out.push(Event::Motion(
+                    m.event,
+                    m.event_x as f64,
+                    m.event_y as f64,
+                    m.time,
+                )),
+                XEvent::EnterNotify(e) => out.push(Event::Enter(
+                    e.event,
+                    e.event_x as f64,
+                    e.event_y as f64,
+                    e.time,
+                )),
+                XEvent::LeaveNotify(e) => out.push(Event::Leave(e.event, e.time)),
                 _ => {}
             }
         }

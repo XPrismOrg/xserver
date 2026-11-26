@@ -23,6 +23,11 @@ Options: `--display DISPLAY` (default `$DISPLAY`), `--socket NAME` (in
 - the window manager resizing (a configure with the new size) and closing
   (`WM_DELETE_WINDOW` becomes `xdg_toplevel.close`)
 - frame callbacks
+- input: the keyboard (with the X server's layout, from
+  `_XKB_RULES_NAMES`) follows the X focus; pointer motion, enter and
+  leave, buttons and the wheel go to the toplevel under the pointer. The X
+  server has already decided who gets the input (including XPrism's
+  capability checks); WX11 only passes it on
 
 Buffers are copied into the window with `PutImage` for now.
 
@@ -30,8 +35,7 @@ Buffers are copied into the window with `PutImage` for now.
 
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
-- input: XInput2 to `wl_seat` pointer, keyboard and touch, one seat per
-  XPrism seat
+- touch, and one `wl_seat` per XPrism seat (XInput2)
 - popups as override-redirect windows, subsurfaces, alpha (ARGB visual)
 - clipboard and drag and drop, bridged to X selections and XDND
 - a security context per Wayland client (AD-2)

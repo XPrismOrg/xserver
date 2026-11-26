@@ -4,9 +4,10 @@
 // (DECISIONS.md AD-3). Each xdg_toplevel becomes a real X window that any
 // X11 window manager manages; its buffers are drawn into that window.
 //
-// This first version copies shm buffers in with PutImage. Zero-copy
-// dma-buf (DRI3 PixmapFromBuffers + Present), input, popups, clipboard
-// and drag and drop follow (Phase VI).
+// Buffers are copied in with PutImage. Input comes from the X window's
+// core events: the X server has already decided which client gets it, so
+// WX11 only forwards to the toplevel of the window the event arrived on.
+// Its keymap is the X server's keyboard layout (_XKB_RULES_NAMES).
 
 mod x;
 
@@ -14,10 +15,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::delegate_compositor;
 use smithay::delegate_seat;
 use smithay::delegate_shm;
 use smithay::delegate_xdg_shell;
+use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
@@ -26,7 +30,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::Serial;
+use smithay::utils::{Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
@@ -56,6 +60,8 @@ pub struct State {
     seat_state: SeatState<State>,
     #[allow(dead_code)]
     seat: Seat<State>,
+    keyboard: KeyboardHandle<State>,
+    pointer: PointerHandle<State>,
     x: XSide,
     toplevels: HashMap<smithay::reexports::wayland_server::backend::ObjectId, Toplevel>,
     start: Instant,
@@ -194,6 +200,109 @@ impl State {
         self.toplevels.values().find(|t| t.window == Some(window))
     }
 
+    fn surface_for_window(&self, window: u32) -> Option<WlSurface> {
+        self.toplevel_for_window(window)
+            .map(|t| t.surface.wl_surface().clone())
+    }
+
+    /// pointer motion inside window (each toplevel's surface is at the
+    /// origin of its own X window)
+    fn pointer_motion(&mut self, window: u32, x: f64, y: f64, time: u32) {
+        let focus = self
+            .surface_for_window(window)
+            .map(|s| (s, (0.0, 0.0).into()));
+        let pointer = self.pointer.clone();
+        pointer.motion(
+            self,
+            focus,
+            &MotionEvent {
+                location: (x, y).into(),
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn pointer_button(&mut self, button: u8, pressed: bool, time: u32) {
+        let pointer = self.pointer.clone();
+        // X buttons 4-7 are wheel steps: up, down, left, right
+        if (4..=7).contains(&button) {
+            if !pressed {
+                return;
+            }
+            let (axis, sign) = match button {
+                4 => (Axis::Vertical, -1.0),
+                5 => (Axis::Vertical, 1.0),
+                6 => (Axis::Horizontal, -1.0),
+                _ => (Axis::Horizontal, 1.0),
+            };
+            let frame = AxisFrame::new(time)
+                .source(AxisSource::Wheel)
+                .value(axis, sign * 15.0)
+                .v120(axis, (sign * 120.0) as i32);
+            pointer.axis(self, frame);
+            pointer.frame(self);
+            return;
+        }
+        // linux/input-event-codes.h: BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, then
+        // BTN_SIDE, BTN_EXTRA for X buttons 8 and 9
+        let code = match button {
+            1 => 0x110,
+            2 => 0x112,
+            3 => 0x111,
+            8 => 0x113,
+            9 => 0x114,
+            _ => return,
+        };
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+                button: code,
+                state: if pressed {
+                    ButtonState::Pressed
+                } else {
+                    ButtonState::Released
+                },
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn keyboard_focus(&mut self, window: u32, focused: bool) {
+        let surface = self.surface_for_window(window);
+        let keyboard = self.keyboard.clone();
+        let current = keyboard.current_focus();
+        if focused {
+            if surface.is_some() && surface != current {
+                keyboard.set_focus(self, surface, SERIAL_COUNTER.next_serial());
+            }
+        } else if surface.is_some() && surface == current {
+            keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        }
+    }
+
+    fn key(&mut self, window: u32, keycode: u32, pressed: bool, time: u32) {
+        // a key event goes to the window X sent it to; make sure that one
+        // has the Wayland focus (FocusIn may come after a fast key)
+        self.keyboard_focus(window, true);
+        let keyboard = self.keyboard.clone();
+        keyboard.input::<(), _>(
+            self,
+            keycode.into(),
+            if pressed {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            },
+            SERIAL_COUNTER.next_serial(),
+            time,
+            |_, _, _| FilterResult::Forward,
+        );
+    }
+
     /// what the X server told us: the window manager closing or
     /// resizing a window
     fn handle_x_events(&mut self) {
@@ -202,6 +311,33 @@ impl State {
                 x::Event::Close(win) => {
                     if let Some(t) = self.toplevel_for_window(win) {
                         t.surface.send_close();
+                    }
+                }
+                x::Event::Focus(win, focused) => self.keyboard_focus(win, focused),
+                x::Event::Key(win, code, pressed, time) => self.key(win, code, pressed, time),
+                x::Event::Enter(win, px, py, time) | x::Event::Motion(win, px, py, time) => {
+                    self.pointer_motion(win, px, py, time)
+                }
+                x::Event::Leave(win, time) => {
+                    let pointer = self.pointer.clone();
+                    let left = self.surface_for_window(win);
+                    if left.is_none() || pointer.current_focus() != left {
+                        continue;
+                    }
+                    pointer.motion(
+                        self,
+                        None,
+                        &MotionEvent {
+                            location: (0.0, 0.0).into(),
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time,
+                        },
+                    );
+                    pointer.frame(self);
+                }
+                x::Event::Button(win, button, pressed, time) => {
+                    if self.surface_for_window(win).is_some() {
+                        self.pointer_button(button, pressed, time)
                     }
                 }
                 x::Event::Resized(win, w, h) => {
@@ -258,6 +394,10 @@ impl XdgShellHandler for State {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let id = surface.wl_surface().id();
+        if self.keyboard.current_focus().as_ref() == Some(surface.wl_surface()) {
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        }
         self.hide(&id);
         self.toplevels.remove(&id);
     }
@@ -384,10 +524,30 @@ fn main() {
         .expect("X source");
 
     let mut seat_state = SeatState::new();
-    let seat = seat_state.new_wl_seat(&dh, "seat0");
+    let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+    let layout = x.keyboard_layout();
+    let options = (!layout.options.is_empty()).then(|| layout.options.clone());
+    let xkb = XkbConfig {
+        rules: &layout.rules,
+        model: &layout.model,
+        layout: &layout.layout,
+        variant: &layout.variant,
+        options,
+    };
+    // the X server's layout; xkbcommon's defaults if it cannot be compiled
+    let keyboard = seat
+        .add_keyboard(xkb, 600, 25)
+        .or_else(|e| {
+            eprintln!("wx11: keyboard layout {layout:?}: {e}; using the default layout");
+            seat.add_keyboard(XkbConfig::default(), 600, 25)
+        })
+        .expect("keyboard");
+    let pointer = seat.add_pointer();
     let mut state = State {
         seat_state,
         seat,
+        keyboard,
+        pointer,
         compositor: CompositorState::new::<State>(&dh),
         shm: ShmState::new::<State>(&dh, vec![]),
         xdg: XdgShellState::new::<State>(&dh),
