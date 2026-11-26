@@ -103,6 +103,7 @@ typedef struct {
     bool active;                /* we hold Manual redirection of root */
     bool yielded;               /* a legacy compositor holds it */
     bool fullDamage;            /* repaint everything next frame */
+    bool rootHidden;            /* the root had no clip: frames skipped */
     SceneNodeRec *nodes;        /* previous frame */
     int numNodes;
     /* root background as last painted */
@@ -1765,6 +1766,19 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
        it composes pending changes first: a frame must not start another */
     if (sceneInFrame || (fromHook && compSceneHold))
         return;
+
+    /* While the screen isn't ours (a DDX on another VT empties the root
+       window's clip), painting would be clipped away yet the damage
+       counted as shown. Keep the damage, and repaint everything when the
+       clip comes back: what was on the screen meanwhile is unknown. */
+    if (!RegionNotEmpty(&pScreen->root->borderClip)) {
+        ss->rootHidden = true;
+        return;
+    }
+    if (ss->rootHidden) {
+        ss->rootHidden = false;
+        ss->fullDamage = true;
+    }
     sceneInFrame = true;
     sceneUpdateDirect(pScreen, ss, !fromHook);
 
