@@ -162,5 +162,6 @@ Phase II, for vkms in CI or real hardware.
    and the compositor shows that CRTC in the monitor's HDR space (one
    space per CRTC). Checked on vkms only so far (which has neither
    property, nor an EDID): it needs an HDR monitor. Remaining: wide-gamut
-   SDR monitors from their EDID primaries, fp16 scanout, the hardware
-   cursor's conversion.
+   SDR monitors from their EDID primaries, fp16 scanout. Hardware cursor
+   images are converted for their CRTC's space
+   (`CompositeCrtcConvertARGB`).

@@ -53,6 +53,7 @@
 
 #include <xf86drm.h>
 #include "xf86Crtc.h"
+#include "xf86Cursor.h"
 #include "drmmode_bo.h"
 
 #include <cursorstr.h>
@@ -2192,11 +2193,24 @@ drmmode_load_cursor_argb_check(xf86CrtcPtr crtc, CARD32 *image)
     drmmode_crtc->cursor_src_x = src_x;
     drmmode_crtc->cursor_src_y = src_y;
 
+    /* XPrism: as the CRTC's monitor shows it (HDR, ...) */
+    CARD32 *shown = NULL;
+    if (crtc->randr_crtc) {
+        size_t n = (size_t) image_width * image_height;
+        shown = malloc(n * sizeof(CARD32));
+        if (shown) {
+            memcpy(shown, image, n * sizeof(CARD32));
+            if (CompositeCrtcConvertARGB(crtc->scrn->pScreen, crtc->randr_crtc, shown, n))
+                image = shown;
+        }
+    }
+
     /* cursor should be mapped already */
     drmmode_paint_cursor(drmmode_cursor.bo, cursor_pitch, cursor_width, cursor_height,
                          image, image_width, image_height,
                          drmmode_crtc, crop_width, crop_height,
                          rotation, src_x, src_y);
+    free(shown);
 
     /* set cursor width and height here for drmmode_show_cursor */
     drmmode_crtc->cursor_width  = cursor_width;
@@ -3740,6 +3754,9 @@ drmmode_output_set_property(xf86OutputPtr output, Atom property,
             drmmode_output->hdr = !on;
             return FALSE;
         }
+        /* the hardware cursor's image, for the CRTC's new space */
+        if (crtc && output->scrn->pScreen)
+            xf86CursorResetCursor(output->scrn->pScreen);
         return TRUE;
     }
 

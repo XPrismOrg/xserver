@@ -288,5 +288,6 @@ encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
   space composed for, and windows are not shown directly. Without glamor,
   composition is then in 10-bit PQ (if any CRTC is HDR), and saturated
   colours on SDR CRTCs come back slightly off near black.
-- Hardware cursors (modesetting) will need the same conversion as the
-  software cursor, which is converted (step 5).
+- Hardware cursors (modesetting) are converted for their CRTC's space
+  with the same code as the software cursor's ARGB images; that path is
+  tested, the driver's use of it needs a monitor that is not sRGB.

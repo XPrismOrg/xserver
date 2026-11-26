@@ -914,14 +914,56 @@ CompositeOutputPixel(ScreenPtr pScreen, CARD32 pixel)
     return compColorConvertPixel(pScreen, PictureWindowFormat(pScreen->root), pixel);
 }
 
+/* n premultiplied a8r8g8b8 sRGB pixels as space out shows them, in
+   place: cursor images, for the software cursor and hardware ones */
+static bool
+colorConvertARGB(const XpColorSpace *out, CARD32 *px, int n)
+{
+    static const ColorLayout argb = {
+        .shift = { 16, 8, 0, 24 }, .mask = { 0xff, 0xff, 0xff, 0xff },
+    };
+    ColorConv *cv = calloc(1, sizeof(*cv));
+
+    if (!cv || !colorConvInit(cv, &xpColorSpaceSRGB, out)) {
+        free(cv);
+        return false;
+    }
+    colorConvertSpan(cv, &argb, &argb, px, n);
+    free(cv);
+    return true;
+}
+
 PixmapPtr
 CompositeOutputPixmap(ScreenPtr pScreen, PixmapPtr argb)
 {
-    PictFormatPtr format = PictureMatchFormat(pScreen, 32, PICT_a8r8g8b8);
+    int w = argb->drawable.width, h = argb->drawable.height;
 
-    if (!outputSet[pScreen->myNum] || !format || argb->drawable.depth != 32)
+    if (!outputSet[pScreen->myNum] || argb->drawable.depth != 32 ||
+        argb->drawable.bitsPerPixel != 32)
         return NULL;
-    return colorCopy(pScreen, argb, format, false);
+    CARD32 *px = calloc((size_t) w * h, sizeof(CARD32));
+    PixmapPtr dst = px ? (*pScreen->CreatePixmap) (pScreen, w, h, 32, 0) : NULL;
+    GCPtr pGC = dst ? GetScratchGC(32, pScreen) : NULL;
+    if (pGC) {
+        (*pScreen->GetImage) (&argb->drawable, 0, 0, w, h, ZPixmap, ~0UL, (char *) px);
+        colorConvertARGB(colorOutput(pScreen), px, w * h);
+        ValidateGC(&dst->drawable, pGC);
+        (*pGC->ops->PutImage) (&dst->drawable, pGC, 32, 0, 0, w, h, 0, ZPixmap, (char *) px);
+        FreeScratchGC(pGC);
+    } else if (dst) {
+        dixDestroyPixmap(dst, 0);
+        dst = NULL;
+    }
+    free(px);
+    return dst;
+}
+
+Bool
+CompositeCrtcConvertARGB(ScreenPtr pScreen, RRCrtcPtr crtc, CARD32 *px, int n)
+{
+    const XpColorSpace *cs = colorCrtcSpace(pScreen, crtc);
+
+    return !colorIsSRGB(cs) && colorConvertARGB(cs, px, n);
 }
 
 /* An sRGB colour (8-bit, for the root background and shadows) as the

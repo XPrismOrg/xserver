@@ -131,4 +131,12 @@ extern _X_EXPORT void CompositeSetCrtcColorSpace(ScreenPtr pScreen, struct _rrCr
 extern _X_EXPORT CARD32 CompositeOutputPixel(ScreenPtr pScreen, CARD32 pixel);
 extern _X_EXPORT PixmapPtr CompositeOutputPixmap(ScreenPtr pScreen, PixmapPtr argb);
 
+/*
+ * XPrism: a hardware cursor's image (n premultiplied a8r8g8b8 sRGB
+ * pixels) as CRTC crtc's monitor shows it, converted in place; FALSE
+ * if it shows sRGB, and the image is unchanged.
+ */
+extern _X_EXPORT Bool CompositeCrtcConvertARGB(ScreenPtr pScreen, struct _rrCrtc *crtc,
+                                               CARD32 *px, int n);
+
 #endif                          /* _COMPOSITEEXT_H_ */
