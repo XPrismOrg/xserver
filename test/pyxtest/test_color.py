@@ -227,7 +227,7 @@ def _window(x, pixel, x0=100, y0=100, w=100, h=100):
 # ---- protocol --------------------------------------------------------------
 
 def test_version(xvfb):
-    assert Color(xvfb).version() == (0, 2)
+    assert Color(xvfb).version() == (0, 3)
 
 
 def test_unset_window_is_srgb(xvfb):
@@ -309,7 +309,7 @@ def test_bad_length(xvfb):
 
 def test_swapped_client(xvfb):
     x = Color(xvfb, swapped=True)
-    assert x.version() == (0, 2)
+    assert x.version() == (0, 3)
     creator = Color(xvfb)               # core requests: Client packs them little-endian
     w = _window(creator, RED)
     assert creator.sync() == []

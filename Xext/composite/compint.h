@@ -259,6 +259,8 @@ void compColorEncodeCrtcs(ScreenPtr pScreen, PicturePtr pDst, int dx, int dy,
 /* whether the CRTCs' colour spaces or where they are changed since the
    last call: everything must be composed again */
 bool compColorCrtcsChanged(ScreenPtr pScreen);
+/* OutputColorSpaceNotify for outputs whose space changed (0.3) */
+void compColorCheckOutputs(ScreenPtr pScreen);
 
 /*
  * compoverlay.c

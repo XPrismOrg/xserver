@@ -142,6 +142,28 @@ static int crtcShownCount[MAXSCREENS];
 
 static int colorOtherCrtcs(ScreenPtr pScreen, ColorCrtcShownRec *out);
 
+/* OutputColorSpaceNotify selections (0.3) */
+typedef struct _ColorSelect {
+    struct _ColorSelect *next;
+    ClientPtr client;
+    WindowPtr pWin;
+    XID id;                     /* a resource of the client's */
+} ColorSelectRec, *ColorSelectPtr;
+
+static ColorSelectPtr colorSelects;
+static RESTYPE colorSelectType;
+static int colorEventBase;
+
+/* what each output showed when last checked */
+typedef struct {
+    RROutputPtr output;
+    XpColorSpace cs;
+} ColorOutputSeenRec;
+
+static ColorOutputSeenRec *outputSeen[MAXSCREENS];
+static int outputSeenCount[MAXSCREENS];
+
+
 static const XpColorSpace *
 colorOutput(ScreenPtr pScreen)
 {
@@ -162,6 +184,17 @@ colorCrtcSpace(ScreenPtr pScreen, RRCrtcPtr crtc)
         if (crtcSpaces[pScreen->myNum][i].crtc == crtc)
             return &crtcSpaces[pScreen->myNum][i].cs;
     return colorScreenSpace(pScreen);
+}
+
+/* What output shows: its CRTC's space; off, that of the only CRTC it
+   can use, or else the screen's */
+static const XpColorSpace *
+colorOutputSpaceOf(RROutputPtr output)
+{
+    RRCrtcPtr crtc = output->crtc ? output->crtc :
+        output->numCrtcs == 1 ? output->crtcs[0] : NULL;
+
+    return crtc ? colorCrtcSpace(output->pScreen, crtc) : colorScreenSpace(output->pScreen);
 }
 
 static bool
@@ -1095,6 +1128,11 @@ compColorEncodeLinear(ScreenPtr pScreen, PixmapPtr pLin, int ox, int oy,
 void
 compColorWindowDestroy(WindowPtr pWin)
 {
+    for (ColorSelectPtr s = colorSelects, next; s; s = next) {
+        next = s->next;
+        if (s->pWin == pWin)
+            FreeResource(s->id, RT_NONE);
+    }
     if (!dixPrivateKeyRegistered(&colorWinKeyRec))
         return;
     ColorWinPtr cw = colorWin(pWin);
@@ -1116,6 +1154,9 @@ compColorCloseScreen(ScreenPtr pScreen)
     outputSet[s] = screenSet[s] = false;
     memset(crtcSpaces[s], 0, sizeof(crtcSpaces[s]));
     crtcShownCount[s] = 0;
+    free(outputSeen[s]);
+    outputSeen[s] = NULL;
+    outputSeenCount[s] = 0;
 }
 
 /* ---- CRTCs showing other colour spaces ----------------------------------- */
@@ -1447,12 +1488,7 @@ ProcXpColorGetOutputColorSpace(ClientPtr client)
         return rc;
     }
 
-    /* what its CRTC's monitor shows; off, what the only CRTC it can
-       have would show, else the screen's */
-    RRCrtcPtr crtc = output->crtc ? output->crtc :
-        output->numCrtcs == 1 ? output->crtcs[0] : NULL;
-    const XpColorSpace *cs = crtc ?
-        colorCrtcSpace(output->pScreen, crtc) : colorScreenSpace(output->pScreen);
+    const XpColorSpace *cs = colorOutputSpaceOf(output);
     CARD8 primaries = XpColorPrimariesCustom;
     for (CARD8 p = XpColorPrimariesSRGB; p <= XpColorPrimariesLast; p++)
         if (!memcmp(&cs->primaries, namedPrimaries[p], sizeof(XpColorPrimaries)))
@@ -1479,6 +1515,147 @@ ProcXpColorClearWindowColorSpace(ClientPtr client)
     return Success;
 }
 
+/* ---- OutputColorSpaceNotify (0.3) ---------------------------------------- */
+
+static int
+colorSelectFree(void *value, XID id)
+{
+    for (ColorSelectPtr *p = &colorSelects; *p; p = &(*p)->next) {
+        if (*p == value) {
+            *p = (*p)->next;
+            break;
+        }
+    }
+    free(value);
+    return Success;
+}
+
+/* The outputs of pScreen with what they show now, in out (the caller
+   frees it); their number. */
+static int
+colorOutputsNow(ScreenPtr pScreen, ColorOutputSeenRec **out)
+{
+    rrScrPrivPtr pScrPriv = dixPrivateKeyRegistered(rrPrivKey) ? rrGetScrPriv(pScreen) : NULL;
+
+    *out = NULL;
+    if (!pScrPriv || !pScrPriv->numOutputs)
+        return 0;
+    *out = calloc(pScrPriv->numOutputs, sizeof(**out));
+    if (!*out)
+        return 0;
+    for (int i = 0; i < pScrPriv->numOutputs; i++)
+        (*out)[i] = (ColorOutputSeenRec) {
+            .output = pScrPriv->outputs[i],
+            .cs = *colorOutputSpaceOf(pScrPriv->outputs[i]),
+        };
+    return pScrPriv->numOutputs;
+}
+
+static void
+colorSendOutputNotify(ScreenPtr pScreen, RROutputPtr output)
+{
+    for (ColorSelectPtr s = colorSelects; s; s = s->next) {
+        if (s->pWin->drawable.pScreen != pScreen || s->client->clientGone)
+            continue;
+        xXpColorOutputColorSpaceNotifyEvent ev = {
+            .type = colorEventBase + XpColorOutputColorSpaceNotify,
+            .sequenceNumber = s->client->sequence,
+            .window = s->pWin->drawable.id,
+            .output = output->id,
+            .timestamp = currentTime.milliseconds,
+        };
+        WriteEventsToClient(s->client, 1, (xEvent *) &ev);
+    }
+}
+
+void
+compColorCheckOutputs(ScreenPtr pScreen)
+{
+    int s = pScreen->myNum;
+    ColorOutputSeenRec *now;
+    int n;
+
+    if (!colorSelects)
+        return;
+    n = colorOutputsNow(pScreen, &now);
+    if (!now && n)
+        return;
+    for (int i = 0; i < n; i++) {
+        bool seen = false, same = false;
+        for (int j = 0; j < outputSeenCount[s]; j++) {
+            if (outputSeen[s][j].output == now[i].output) {
+                seen = true;
+                same = colorSameSpace(&outputSeen[s][j].cs, &now[i].cs);
+                break;
+            }
+        }
+        /* new outputs (hotplug) are announced by RandR */
+        if (seen && !same)
+            colorSendOutputNotify(pScreen, now[i].output);
+    }
+    free(outputSeen[s]);
+    outputSeen[s] = now;
+    outputSeenCount[s] = n;
+}
+
+static void
+colorSwapOutputNotify(xEvent *from, xEvent *to)
+{
+    xXpColorOutputColorSpaceNotifyEvent *f = (void *) from, *t = (void *) to;
+
+    *t = *f;
+    swaps(&t->sequenceNumber);
+    swapl(&t->window);
+    swapl(&t->output);
+    swapl(&t->timestamp);
+}
+
+static int
+ProcXpColorSelectOutputInput(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpColorSelectOutputInputReq);
+    X_REQUEST_FIELD_CARD32(window);
+
+    WindowPtr pWin;
+    int rc = dixLookupWindow(&pWin, stuff->window, client, DixReadAccess);
+    if (rc != Success) {
+        client->errorValue = stuff->window;
+        return rc;
+    }
+    if (stuff->enable > 1) {
+        client->errorValue = stuff->enable;
+        return BadValue;
+    }
+    ColorSelectPtr found = NULL;
+    for (ColorSelectPtr s = colorSelects; s; s = s->next)
+        if (s->client == client && s->pWin == pWin)
+            found = s;
+    if (!stuff->enable) {
+        if (found)
+            FreeResource(found->id, RT_NONE);
+        return Success;
+    }
+    if (found)
+        return Success;
+    ColorSelectPtr s = calloc(1, sizeof(*s));
+    if (!s)
+        return BadAlloc;
+    *s = (ColorSelectRec) {
+        .next = colorSelects, .client = client, .pWin = pWin,
+        .id = FakeClientID(client->index),
+    };
+    if (!AddResource(s->id, colorSelectType, s))
+        return BadAlloc;        /* AddResource frees it */
+    /* the first one: what the outputs show now, to compare with */
+    if (!colorSelects) {
+        int scr = pWin->drawable.pScreen->myNum;
+        free(outputSeen[scr]);
+        outputSeenCount[scr] = colorOutputsNow(pWin->drawable.pScreen, &outputSeen[scr]);
+    }
+    colorSelects = s;
+    return Success;
+}
+
 static int
 ProcXpColorDispatch(ClientPtr client)
 {
@@ -1495,6 +1672,8 @@ ProcXpColorDispatch(ClientPtr client)
         return ProcXpColorClearWindowColorSpace(client);
     case X_XpColorGetOutputColorSpace:
         return ProcXpColorGetOutputColorSpace(client);
+    case X_XpColorSelectOutputInput:
+        return ProcXpColorSelectOutputInput(client);
     default:
         return BadRequest;
     }
@@ -1503,8 +1682,17 @@ ProcXpColorDispatch(ClientPtr client)
 void
 compColorExtensionInit(void)
 {
-    if (!AddExtension(XPRISM_COLOR_NAME, 0, 0, ProcXpColorDispatch,
-                      ProcXpColorDispatch, NULL, StandardMinorOpcode))
+    ExtensionEntry *ext;
+
+    colorSelectType = CreateNewResourceType(colorSelectFree, "XpColorOutputSelect");
+    if (!colorSelectType ||
+        !(ext = AddExtension(XPRISM_COLOR_NAME, XpColorNumberEvents, 0,
+                             ProcXpColorDispatch, ProcXpColorDispatch, NULL,
+                             StandardMinorOpcode))) {
         LogMessageVerb(X_WARNING, 1, "compositor: cannot add %s\n",
                        XPRISM_COLOR_NAME);
+        return;
+    }
+    colorEventBase = ext->eventBase;
+    EventSwapVector[colorEventBase + XpColorOutputColorSpaceNotify] = colorSwapOutputNotify;
 }

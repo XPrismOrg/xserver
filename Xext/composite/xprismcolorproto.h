@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * XPRISM-COLOR protocol, version 0.2 (wire format).
+ * XPRISM-COLOR protocol, version 0.3 (wire format).
  *
  * Applications say which colour space their windows' pixels are in; the
  * server's scene compositor converts them for the outputs. See
@@ -13,13 +13,18 @@
 
 #define XPRISM_COLOR_NAME           "XPRISM-COLOR"
 #define XPRISM_COLOR_MAJOR          0
-#define XPRISM_COLOR_MINOR          2
+#define XPRISM_COLOR_MINOR          3
 
 #define X_XpColorQueryVersion       0
 #define X_XpColorSetWindowColorSpace 1
 #define X_XpColorGetWindowColorSpace 2
 #define X_XpColorClearWindowColorSpace 3
 #define X_XpColorGetOutputColorSpace 4  /* 0.2 */
+#define X_XpColorSelectOutputInput  5   /* 0.3 */
+
+/* events (0.3) */
+#define XpColorOutputColorSpaceNotify 0
+#define XpColorNumberEvents         1
 
 /* primaries */
 #define XpColorPrimariesCustom      0   /* the xy coordinates sent */
@@ -132,5 +137,30 @@ typedef struct {
 #define sz_xXpColorGetOutputColorSpaceReq 8
 
 typedef xXpColorGetWindowColorSpaceReply xXpColorGetOutputColorSpaceReply;
+
+/* 0.3: OutputColorSpaceNotify events, for the outputs of window's
+   screen, on or off */
+typedef struct {
+    CARD8 reqType;
+    CARD8 colorReqType;
+    CARD16 length;
+    CARD32 window;
+    BOOL enable;
+    CARD8 pad1;
+    CARD16 pad2;
+} xXpColorSelectOutputInputReq;
+#define sz_xXpColorSelectOutputInputReq 12
+
+/* 0.3: what output shows changed; GetOutputColorSpace says what */
+typedef struct {
+    BYTE type;
+    BYTE pad1;
+    CARD16 sequenceNumber;
+    CARD32 window;              /* as selected */
+    CARD32 output;
+    CARD32 timestamp;
+    CARD32 pad2, pad3, pad4, pad5;
+} xXpColorOutputColorSpaceNotifyEvent;
+#define sz_xXpColorOutputColorSpaceNotifyEvent 32
 
 #endif /* XPRISM_COLOR_PROTO_H */

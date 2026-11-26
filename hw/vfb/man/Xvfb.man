@@ -80,6 +80,9 @@ Sets the colour space that one CRTC of the screen given by the last
 whole screen, so that the screen's monitors differ. CRTCs are numbered
 from 0 and must have been given with \fB\-crtcs\fP before. Only the
 first CRTC is on at start; clients turn on the others through RandR.
+Each output also has a \fBCOLORSPACE\fP property (a string, as
+\fB\-colorspace\fP takes it; empty for the screen's) that changes
+what its CRTC shows at run time.
 .TP 4
 .B "\-pixdepths \fIlist-of-depths\fP"
 This option specifies a list of pixmap depths that the server should

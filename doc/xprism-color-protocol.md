@@ -1,4 +1,4 @@
-# XPRISM-COLOR extension, version 0.2
+# XPRISM-COLOR extension, version 0.3
 
 The XPRISM-COLOR extension lets applications say which colour space the
 pixels of their windows are in: sRGB, wide-gamut spaces such as Display
@@ -6,7 +6,8 @@ P3 and BT.2020, or HDR content encoded with the PQ or HLG transfer
 functions. The [built-in compositor](compositor.md) then shows each
 window converted for the output it is on, so applications do not need
 to know what the output is. Version 0.2 adds outputs in colour spaces
-other than sRGB, including HDR outputs, and `GetOutputColorSpace`. See
+other than sRGB, including HDR outputs, and `GetOutputColorSpace`;
+version 0.3 an event when what an output shows changes. See
 [color.md](color.md) for the design.
 
 The wire format is defined in `Xext/composite/xprismcolorproto.h`.
@@ -250,8 +251,39 @@ Returns what the compositor shows on the output, in the form of
 own space; an output gets its CRTC's (when it is off, that of the only
 CRTC it can use, or else the screen's). Applications can use it
 to choose what to render, for example HDR only where an output can
-show it. An event when it changes will come with the modesetting
-driver, where outputs change at run time; on Xvfb they do not.
+show it, and select `OutputColorSpaceNotify` to hear when that changes.
+
+### SelectOutputInput (0.3)
+
+```
+SelectOutputInput
+    window: WINDOW
+    enable: BOOL
+
+Errors: Window, Value
+```
+
+With `enable` True, the client gets an `OutputColorSpaceNotify` event
+whenever what an output of the window's screen shows changes: a monitor
+turned to HDR or back (modesetting's `HDR` output property), another
+monitor on the connector, an output moved to a CRTC showing another
+space. False stops them. The selection ends with the window or the
+client.
+
+### OutputColorSpaceNotify (0.3)
+
+```
+OutputColorSpaceNotify
+    window: WINDOW          (as selected)
+    output: OUTPUT
+    timestamp: TIMESTAMP
+```
+
+What `output` shows changed; `GetOutputColorSpace` says what it shows
+now. Outputs that appear are announced by RandR instead. Xvfb changes
+an output's space at run time through its `COLORSPACE` output property
+(a string as `-colorspace` takes it; empty for the screen's), as
+plugging in another monitor would.
 
 ## Performance
 
@@ -275,7 +307,7 @@ the window alone; each frame also uses a half float buffer as large as
 what changed. A frame costs within 1 ms of composing in the output's
 encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
 
-## Limitations of version 0.2
+## Limitations of version 0.3
 
 - Composition in linear light needs glamor on desktop GL. Otherwise
   composition is in the output's encoding, and converted copies have

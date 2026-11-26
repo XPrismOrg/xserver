@@ -77,6 +77,7 @@ from The Open Group.
 #include "miline.h"
 #include "glx_extinit.h"
 #include "randrstr.h"
+#include <X11/Xatom.h>
 #include "compositeext.h"
 
 #ifdef GLAMOR
@@ -1139,6 +1140,37 @@ vfbRRGetInfo(ScreenPtr pScreen, Rotation *rotations)
     return TRUE;
 }
 
+/*
+ * XPrism: the COLORSPACE output property, as -colorspace takes it
+ * ("p3", "bt2020,pq,1000"; empty: the screen's), changes what the
+ * output's CRTC shows at run time, as plugging in another monitor would.
+ */
+static Atom vfbColorSpaceAtom;
+
+static Bool
+vfbRROutputSetProperty(ScreenPtr pScreen, RROutputPtr output, Atom property,
+                       RRPropertyValuePtr value)
+{
+    CompositeColorSpaceRec cs;
+    char spec[64];
+
+    if (property != vfbColorSpaceAtom)
+        return TRUE;
+    if (value->type != XA_STRING || value->format != 8 ||
+        value->size >= (long) sizeof(spec) || output->numCrtcs != 1)
+        return FALSE;
+    memcpy(spec, value->data, value->size);
+    spec[value->size] = '\0';
+    if (!spec[0]) {
+        CompositeSetCrtcColorSpace(pScreen, output->crtcs[0], NULL);
+        return TRUE;
+    }
+    if (!vfbParseColorSpace(spec, &cs))
+        return FALSE;
+    CompositeSetCrtcColorSpace(pScreen, output->crtcs[0], &cs);
+    return TRUE;
+}
+
 static Bool
 vfbRandRInit(ScreenPtr pScreen)
 {
@@ -1159,7 +1191,8 @@ vfbRandRInit(ScreenPtr pScreen)
     pScrPriv->rrGetInfo = vfbRRGetInfo;
     pScrPriv->rrCrtcSet = vfbRRCrtcSet;
     pScrPriv->rrScreenSetSize = vfbRRScreenSetSize;
-    pScrPriv->rrOutputSetProperty = NULL;
+    pScrPriv->rrOutputSetProperty = vfbRROutputSetProperty;
+    vfbColorSpaceAtom = MakeAtom("COLORSPACE", strlen("COLORSPACE"), TRUE);
 #if RANDR_13_INTERFACE
     pScrPriv->rrOutputGetProperty = NULL;
 #endif
@@ -1195,6 +1228,11 @@ vfbRandRInit(ScreenPtr pScreen)
         if (!RROutputSetConnection(output, RR_Connected))
             return FALSE;
         if (!RROutputSetPhysicalSize(output, mmWidth, mmHeight))
+            return FALSE;
+        if (RRConfigureOutputProperty(output, vfbColorSpaceAtom, FALSE, FALSE, FALSE,
+                                      0, NULL) ||
+            RRChangeOutputProperty(output, vfbColorSpaceAtom, XA_STRING, 8,
+                                   PropModeReplace, 0, "", FALSE, FALSE))
             return FALSE;
 
         /* Setup a Mode and notify only for CRTCs with Outputs */

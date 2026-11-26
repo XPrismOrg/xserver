@@ -2,7 +2,8 @@
 
 Status: being implemented. Steps 1 to 4 are done, step 5 in part: the colour library
 (`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
-[XPRISM-COLOR 0.2](xprism-color-protocol.md) with window descriptions,
+[XPRISM-COLOR 0.3](xprism-color-protocol.md) with window descriptions
+and an event when an output's space changes,
 output colour spaces in Xvfb, including HDR (PQ and HLG) outputs, and, with
 glamor, composition in linear light in half float; the conversion runs
 on the GPU with glamor. The modesetting driver remains, see Steps.

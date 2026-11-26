@@ -58,6 +58,7 @@ if pytest.found()
      'test_color.py',
      'test_color_output.py',
      'test_color_crtcs.py',
+     'test_color_events.py',
      'test_display_sockets.py',
      'test_color_linear.py',
      'test_color_cursor.py',

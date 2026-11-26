@@ -2005,6 +2005,7 @@ sceneBlockHandler(void *data, void *timeout)
         sceneActivate(pScreen, ss);
         if (ss->active)
             sceneFrame(pScreen, ss, false);
+        compColorCheckOutputs(pScreen);
         /* wake up when held-back damage is due: the main loop computed its
            timeout before calling us, so a timer set now would not count */
         if (ss->active && RegionNotEmpty(&ss->deferred)) {
