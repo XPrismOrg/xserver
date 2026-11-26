@@ -986,10 +986,17 @@ FreeWindowResources(WindowPtr pWin)
         RegionDestroy(wClipShape(pWin));
     if (wInputShape(pWin))
         RegionDestroy(wInputShape(pWin));
-    if (pWin->borderIsPixel == FALSE)
+    /* the window destroy hooks below may still paint the window (the
+       built-in compositor ends its redirection there): with no pixmaps */
+    if (pWin->borderIsPixel == FALSE) {
         dixDestroyPixmap(pWin->border.pixmap, 0);
-    if (pWin->backgroundState == BackgroundPixmap)
+        pWin->borderIsPixel = TRUE;
+        pWin->border.pixel = 0;
+    }
+    if (pWin->backgroundState == BackgroundPixmap) {
         dixDestroyPixmap(pWin->background.pixmap, 0);
+        pWin->backgroundState = None;
+    }
 
     DeleteAllWindowProperties(pWin);
 
