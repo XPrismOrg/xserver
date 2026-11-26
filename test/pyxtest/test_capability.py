@@ -581,7 +581,11 @@ class TestExtensions:
     def test_confined(self, xserver):
         seen = _extensions(_connect(xserver, GRANTED_COOKIE))
         assert seen <= self.REVIEWED, seen - self.REVIEWED
-        assert {"Composite", "RANDR", "RENDER", "XPRISM-COLOR"} <= seen
+        # XPRISM-COLOR comes with the built-in compositor (-compositor off
+        # leaves it out)
+        offered = _extensions(_connect(xserver, ROOT_COOKIE))
+        assert {"Composite", "RANDR", "RENDER"} | ({"XPRISM-COLOR"} & offered) <= seen
+        assert "Composite" in offered
 
     def test_allow_extension_does_not_reopen_the_blacklist(self, xserver):
         seen = _extensions(_connect(xserver, SANDBOX_COOKIE))
