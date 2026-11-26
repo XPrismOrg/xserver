@@ -240,6 +240,31 @@ class TestProtocolSemantics:
         data = _get_image(x, w, 80, 20)
         assert struct.unpack_from("<I", data, 32)[0] & 0xFFFFFF == RED
 
+    def test_include_inferiors_drawing_right_after_move(self, xvfb):
+        """Move a window and draw over it on the root in one batch: the
+        compositor composes the move just before the drawing, and the
+        drawing must still reach the window (the X Test Suite's
+        XDrawImageString-9 failed this way under load)."""
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)
+        gc = x.c.alloc_id()
+        x.req(X_CREATE_GC, 0, struct.pack("<IIIII", gc, x.root,
+                                          GC_FOREGROUND | GC_SUBWINDOW_MODE,
+                                          GREEN, INCLUDE_INFERIORS))
+        assert x.sync() == []
+        move = struct.pack("<IHxxi", w, CONFIG_X, 300)
+        fill = struct.pack("<IIhhHH", x.root, gc, 310, 110, 20, 20)
+        batch = (struct.pack("<BBH", X_CONFIGURE_WINDOW, 0, 1 + len(move) // 4) + move +
+                 struct.pack("<BBH", X_POLY_FILL_RECTANGLE, 0, 1 + len(fill) // 4) + fill)
+        x.c.seq += 1                    # two requests in one write
+        x.c.send_request(batch)
+        data = _get_image(x, w, 20, 20)
+        assert isinstance(data, bytes), data
+        assert struct.unpack_from("<I", data, 32)[0] & 0xFFFFFF == GREEN
+        assert x.pixel(320, 120) == GREEN
+        assert x.pixel(340, 140) == RED
+
     def test_get_image_of_window_partly_off_screen(self, xvfb):
         x = Client(xvfb)
         w = x.window(SCREEN_W - 50, 100, 100, 100, RED)

@@ -1335,6 +1335,18 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
     sceneInFrame = true;
     sceneUpdateDirect(pScreen, ss, !fromHook);
 
+    /* Composed before a drawing operation on the root window, this frame
+       paints on the root itself. Each of its operations ends by
+       reporting rootDrawnDamage's pending region, which already holds
+       the outer operation's area: sceneRootDrawnReport ignores reports
+       during a frame, and the outer operation would find nothing left
+       to report, so it would never be copied to the windows. Keep that
+       pending area aside and give it back afterwards. */
+    RegionRec pending;
+    RegionNull(&pending);
+    if (fromHook && ss->rootDrawnDamage)
+        RegionCopy(&pending, DamagePendingRegion(ss->rootDrawnDamage));
+
     RegionNull(&damage);
     int n = sceneSnapshot(pScreen, ss, &wins, &nodes, &damage);
     if (ss->fullDamage) {
@@ -1355,6 +1367,10 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
     free(ss->nodes);
     ss->nodes = nodes;
     ss->numNodes = n;
+    if (ss->rootDrawnDamage && RegionNotEmpty(&pending))
+        RegionUnion(DamagePendingRegion(ss->rootDrawnDamage),
+                    DamagePendingRegion(ss->rootDrawnDamage), &pending);
+    RegionUninit(&pending);
     sceneInFrame = false;
 }
 
