@@ -628,17 +628,19 @@ ProcessCommandLine(int argc, char *argv[])
         else if (strcmp(argv[i], "-listen") == 0) {
             if (++i < argc) {
                 if (_XSERVTransListen(argv[i]))
-                    ErrorF("Failed to enable listen for %s transport",
+                    ErrorF("-listen %s: no such transport (use unix, tcp or local)\n",
                            argv[i]);
             }
             else
                 UseMsg();
         }
         else if (strcmp(argv[i],"-noreset") == 0){
-            ErrorF("Argument -noreset is removed in XLibre (for more context: https://github.com/orgs/X11Libre/discussions/424 )\n");
+            ErrorF("Ignoring -noreset: the server no longer resets when its last client leaves, so it is not needed "
+                   "(removed in XLibre, see https://github.com/orgs/X11Libre/discussions/424)\n");
         }
         else if(strcmp(argv[i],"-reset") == 0){
-            ErrorF("Argument -reset is removed in XLibre (for more context: https://github.com/orgs/X11Libre/discussions/424 )\n");
+            ErrorF("Ignoring -reset: the server no longer resets when its last client leaves "
+                   "(removed in XLibre, see https://github.com/orgs/X11Libre/discussions/424)\n");
         }
         else if (strcmp(argv[i], "-p") == 0) {
             if (++i < argc)

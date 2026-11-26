@@ -124,7 +124,7 @@ static Bool formatsDone = FALSE;
 static void
 xf86PrintBanner(void)
 {
-    xf86ErrorFVerb(0, "\nXLibre X Server %s", XLIBRE_VERSION_STRING);
+    xf86ErrorFVerb(0, "\nXPrism X Server, based on XLibre %s", XLIBRE_VERSION_STRING);
 
 #ifdef XORG_CUSTOM_VERSION
     xf86ErrorFVerb(0, " (%s)", XORG_CUSTOM_VERSION);
@@ -829,10 +829,11 @@ ddxGiveUp(enum ExitCode error)
 void
 ddxFatalError(const char *f, va_list args)
 {
-    ErrorF("\nPlease consult the XLibre support: https://www.xlibre.net/\n");
+    ErrorF("\nXPrism stopped because of the error above.\n");
     if (xf86LogFile && xf86LogFileWasOpened)
-        ErrorF("Please also check the log file at \"%s\" for additional "
-               "information.\n", xf86LogFile);
+        ErrorF("The log file \"%s\" has the details; the lines marked (EE) "
+               "and (WW) before the end usually say what went wrong.\n", xf86LogFile);
+    ErrorF("If you report the problem, attach that log file.\n");
     ErrorF("\n");
 }
 

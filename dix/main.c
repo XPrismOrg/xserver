@@ -194,7 +194,11 @@ dix_main(int argc, char *argv[], char *envp[])
     InitOutput(argc, argv);
 
     if (screenInfo.numScreens < 1)
-        FatalError("no screens found");
+        FatalError("no screens found: no display driver could set up a screen.\n"
+                   "Check the log for (EE) lines from the drivers. Usual causes: the driver\n"
+                   "named in a Device section is not installed, no GPU it supports was found,\n"
+                   "or this session may not open the GPU (start the server from a text\n"
+                   "console or a display manager, so that logind or seatd grants it)\n");
     LogMessageVerb(X_INFO, 1, "Output(s) initialized\n");
 
     /* before the extensions, so a policy provider among them (Xnamespace)

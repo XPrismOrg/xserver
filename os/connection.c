@@ -269,7 +269,8 @@ CreateWellKnownSockets(void)
                 CloseWellKnownConnections();
         }
         if (!found)
-            FatalError("Failed to find a socket to listen on");
+            FatalError("Failed to find a free display number to listen on: every one is in use,\n"
+                       "or the socket directory /tmp/.X11-unix is not writable\n");
         snprintf(dynamic_display, sizeof(dynamic_display), "%d", i);
         display = dynamic_display;
         LogSetDisplay();
@@ -296,7 +297,9 @@ CreateWellKnownSockets(void)
 
     if (ListenTransCount == 0 && !NoListenAll)
         FatalError
-            ("Cannot establish any listening sockets - Make sure an X server isn't already running");
+            ("Cannot listen on display :%s: another X server is probably running on it\n"
+             "(see /tmp/.X11-unix/X%s and /tmp/.X%s-lock). Choose another display\n"
+             "number, or let the server pick one with -displayfd\n", display, display, display);
 
 #if !defined(WIN32)
     OsSignal(SIGPIPE, SIG_IGN);
