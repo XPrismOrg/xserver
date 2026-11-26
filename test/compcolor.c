@@ -228,6 +228,8 @@ compcolor_tonemap(void)
     double srcPQ = xpColorNitsToPQ(1000);
     double ks = 1.5 * xpColorNitsToPQ(400) / srcPQ - 0.5;
     double knee = xpColorPQToNits(ks * srcPQ);
+    near(xpColorToneMapKnee(1000, 400), knee, 1e-9, "knee");
+    near(xpColorToneMapKnee(1000, 1000), 1000, 0, "no knee");
     assert(knee > 100 && knee < 400);
     near(xpColorToneMap(100, 1000, 400), 100, 1e-9, "below the knee");
     near(xpColorToneMap(knee * 0.99, 1000, 400), knee * 0.99, 1e-9, "at the knee");

@@ -95,4 +95,7 @@ double xpColorNitsToPQ(double nits);
  */
 double xpColorToneMap(double nits, double srcMax, double dstMax);
 
+/* The luminance below which xpColorToneMap changes nothing, cd/m^2. */
+double xpColorToneMapKnee(double srcMax, double dstMax);
+
 #endif /* _XSERVER_COMPCOLOR_H_ */

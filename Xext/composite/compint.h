@@ -220,6 +220,21 @@ void compSceneValidate(ScreenPtr pScreen);
 extern int compSceneHold;
 
 /*
+ * compcolorext.c: XPRISM-COLOR, windows' colour spaces
+ */
+
+bool compColorScreenInit(ScreenPtr pScreen);
+void compColorExtensionInit(void);
+/* 0 if top-level window top is shown as it is; otherwise a value that
+   changes whenever its conversion does */
+unsigned compColorState(WindowPtr top);
+/* pRegion (screen coordinates) of top was drawn on */
+void compColorDamage(WindowPtr top, RegionPtr pRegion);
+/* what to show for top: content, or content converted */
+PixmapPtr compColorSource(WindowPtr top, PixmapPtr content);
+void compColorWindowDestroy(WindowPtr pWin);
+
+/*
  * compoverlay.c
  */
 

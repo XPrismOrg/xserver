@@ -1,8 +1,10 @@
 # Colour management, wide gamut and HDR (Phase IV design)
 
-Status: design, being implemented. Step 1 (the colour library,
-`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`) is done;
-nothing else is implemented yet unless a section says so.
+Status: being implemented. Steps 1 and 2 are done: the colour library
+(`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`) and
+[XPRISM-COLOR 0.1](xprism-color-protocol.md), with which windows are
+converted for sRGB outputs. Nothing else is implemented yet unless a
+section says so.
 
 ## Goals
 
@@ -59,10 +61,10 @@ it, not the window manager:
   the description is the parameters above. Applies to the window's
   contents; child windows inherit it unless they set their own.
 - `GetWindowColorSpace(window)`
-- `GetOutputColorSpace(output)`: what the compositor targets on a RandR
-  output, so that applications can choose what to render (for example
-  render HDR only where some output can show it), and an event when it
-  changes.
+- `GetOutputColorSpace(output)` (step 3): what the compositor targets on
+  a RandR output, so that applications can choose what to render (for
+  example render HDR only where some output can show it), and an event
+  when it changes.
 
 Content in wide-gamut or HDR spaces needs more than 8 bits per channel:
 applications use depth-30 visuals (10 bits per channel) as today, and a
@@ -110,9 +112,12 @@ Phase II, for vkms in CI or real hardware.
    BT.2087's BT.709 to BT.2020, ST 2084's PQ curve and BT.2408's
    reference white for PQ and HLG, and the BT.2390 EETF's knee and
    peak.
-2. XPRISM-COLOR window descriptions; the compositor converts tagged
-   windows to sRGB outputs (gamut mapping), composing in linear light
-   only when some window or output needs it.
+2. Done: XPRISM-COLOR window descriptions
+   ([xprism-color-protocol.md](xprism-color-protocol.md)); the compositor
+   converts described windows for sRGB outputs, with gamut mapping and
+   tone mapping of HDR content to SDR white, on the CPU. Composition
+   stays in sRGB; composition in linear light comes with the
+   64-bit-per-pixel buffers of step 3.
 3. Output colour spaces in Xvfb (a test option per screen/CRTC), and
    composition for wide-gamut SDR outputs.
 4. HDR: half-float composition with glamor, PQ/HLG encoding, tone

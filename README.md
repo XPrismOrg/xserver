@@ -130,7 +130,7 @@ applications in a sandbox, see the bubblewrap example in
 | I | Codebase audit, security hooks, launcher-assigned identity, capabilities in audit mode, platform abstraction layer, CI on Linux, FreeBSD and OpenBSD | Nearly complete |
 | II | Atomic modesetting, per-output scheduling, hotplug, variable refresh rate, multi-GPU | Planned; needs a display device to test on (vkms in CI or real hardware) |
 | III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | Nearly complete: needs testing on real hardware; direct scanout per monitor waits for Phase II |
-| IV | Per-output color management, wide gamut and HDR | Design ([doc/color.md](doc/color.md)) |
+| IV | Per-output color management, wide gamut and HDR | In progress: windows' colour spaces ([XPRISM-COLOR](doc/xprism-color-protocol.md)) shown on sRGB screens; per-output spaces and HDR outputs next ([doc/color.md](doc/color.md)) |
 | V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | Planned |
 | VI | Running Wayland applications as X11 windows (WX11) | Planned |
 | VII | Completing the BSD backends, hardware validation | Planned |
@@ -143,6 +143,7 @@ applications in a sandbox, see the bubblewrap example in
 - [doc/Xnamespace-protocol.md](doc/Xnamespace-protocol.md): the X-NAMESPACE extension
 - [doc/compositor.md](doc/compositor.md): the server-side compositor
 - [doc/color.md](doc/color.md): colour management, wide gamut and HDR (design)
+- [doc/xprism-color-protocol.md](doc/xprism-color-protocol.md): the XPRISM-COLOR extension
 - [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md): the XPRISM-SCENE extension
 - [doc/pal.md](doc/pal.md): the platform abstraction layer
 - [CODE_OVERVIEW.md](CODE_OVERVIEW.md): layout of the source tree

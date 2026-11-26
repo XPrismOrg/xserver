@@ -68,6 +68,7 @@ typedef struct {
     CARD16 shadowBlur;
     CARD32 shadowColor;
     CARD16 bgBlur;              /* background blur radius, 0 = none */
+    unsigned color;             /* compColorState */
 } SceneNodeRec;
 
 typedef struct {
@@ -479,6 +480,7 @@ static void
 sceneWindowDestroy(CallbackListPtr *pcbl, ScreenPtr pScreen, WindowPtr pWin)
 {
     sceneResetAttrs(sceneAttrs(pWin));
+    compColorWindowDestroy(pWin);
 }
 
 /* ---- scene snapshot ------------------------------------------------- */
@@ -704,17 +706,19 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             }
         }
 
+        node->color = compColorState(pWin);
+
         /* content drawn into the window since the last frame */
         DamagePtr pWinDamage = sceneWindowDamage(pWin);
         if (pWinDamage) {
             RegionPtr r = DamageRegion(pWinDamage);
             if (RegionNotEmpty(r)) {
-                if (node->transformed) {
+                RegionTranslate(r, pWin->drawable.x, pWin->drawable.y);
+                compColorDamage(pWin, r);
+                if (node->transformed)
                     sceneUnionBox(pDamage, &node->box);
-                } else {
-                    RegionTranslate(r, pWin->drawable.x, pWin->drawable.y);
+                else
                     RegionUnion(pDamage, pDamage, r);
-                }
                 DamageEmpty(pWinDamage);
             }
         }
@@ -741,7 +745,7 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             old->shadowBlur != nodes[i].shadowBlur ||
             /* a shadow has the window's size, so box covers its position */
             old->shadowColor != nodes[i].shadowColor ||
-            old->bgBlur != nodes[i].bgBlur) {
+            old->bgBlur != nodes[i].bgBlur || old->color != nodes[i].color) {
             sceneUnionBox(pDamage, &old->box);
             sceneUnionBox(pDamage, &nodes[i].box);
             continue;           /* fully damaged already */
@@ -974,7 +978,9 @@ scenePaintWindow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
     }
 
     PixmapPtr pPixmap = (*pScreen->GetWindowPixmap) (pWin);
-    PicturePtr pSrc = CreatePicture(0, &pPixmap->drawable,
+    /* converted for the output, if its colour space asks for it */
+    PixmapPtr pShown = compColorSource(pWin, pPixmap);
+    PicturePtr pSrc = CreatePicture(0, &pShown->drawable,
                                     PictureWindowFormat(pWin), 0, NULL,
                                     serverClient, &error);
     if (!pSrc) {
@@ -1544,6 +1550,8 @@ sceneCanScanOut(WindowPtr pWin)
 
     if (attrs->mask & (XpSceneNodeTransform | XpSceneNodeDecoration))
         return false;
+    if (compColorState(pWin))
+        return false;           /* its pixels need converting */
     CARD32 opacity = (attrs->mask & XpSceneNodeOpacity) ?
         attrs->opacity : sceneWindowOpacity(pWin);
     if (opacity != 0xffffffff)
@@ -2063,6 +2071,7 @@ compSceneExtensionInit(void)
                       ProcXpSceneDispatch, NULL, StandardMinorOpcode))
         LogMessageVerb(X_WARNING, 1, "compositor: cannot add %s\n",
                        XPRISM_SCENE_NAME);
+    compColorExtensionInit();
 }
 
 /* ---- setup ------------------------------------------------------------ */
@@ -2088,7 +2097,8 @@ compSceneScreenInit(ScreenPtr pScreen)
     if (!dixRegisterPrivateKey(&sceneScreenKeyRec, PRIVATE_SCREEN, 0) ||
         !dixRegisterPrivateKey(&sceneWindowKeyRec, PRIVATE_WINDOW, 0) ||
         !dixRegisterPrivateKey(&sceneAttrsKeyRec, PRIVATE_WINDOW,
-                               sizeof(SceneAttrsRec)))
+                               sizeof(SceneAttrsRec)) ||
+        !compColorScreenInit(pScreen))
         return false;
 
     SceneScreenPtr ss = calloc(1, sizeof(SceneScreenRec));

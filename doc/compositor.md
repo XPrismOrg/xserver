@@ -50,6 +50,11 @@ layers from the windows' own pixmaps rather than from the screen keeps
 windows above out of the blur. A change below a blurring window, within
 the blur radius, repaints the affected part of its blur.
 
+Windows whose applications described their colour space through
+[XPRISM-COLOR](xprism-color-protocol.md) are shown converted to sRGB: the
+compositor keeps a converted copy of each such window's contents,
+updated where the window is drawn on, and composes that instead.
+
 All drawing goes through Render, so it is GPU-accelerated wherever the
 driver accelerates Render (glamor) and done in software otherwise. Opaque
 windows look exactly the same with the compositor enabled as without it.
@@ -81,7 +86,8 @@ of the following hold:
 - it is the topmost viewable window;
 - it covers the whole screen and has no shape;
 - it is opaque: no alpha channel and full opacity;
-- it has no transform and no decorations.
+- it has no transform and no decorations;
+- its pixels need no colour conversion (XPRISM-COLOR).
 
 The compositor then removes the redirection from that window. Nothing is
 copied per frame, and on hardware Present can page-flip the window's
@@ -110,11 +116,16 @@ Taking over requires the `compositor.legacy` capability, see
 |---|---|
 | `Xext/composite/compscene.c` | The compositor and the XPRISM-SCENE extension |
 | `Xext/composite/xprismsceneproto.h` | XPRISM-SCENE wire format |
+| `Xext/composite/compcolor.c` | Colour spaces and conversions (no server state) |
+| `Xext/composite/compcolorext.c` | The XPRISM-COLOR extension and conversion of windows' contents |
+| `Xext/composite/xprismcolorproto.h` | XPRISM-COLOR wire format |
 | `Xext/composite/compalloc.c` | Hooks for external compositors taking over and releasing a screen |
 | `Xext/composite/compinit.c` | Initialization; composing pending changes before a root window is read |
 | `mi/mivaltree.c` | Clipping: windows the compositor redirects still clip the root |
 | `test/pyxtest/test_compositor.py` | Compositor tests |
 | `test/pyxtest/test_scene_protocol.py` | XPRISM-SCENE tests |
+| `test/pyxtest/test_color.py` | XPRISM-COLOR tests |
+| `test/compcolor.c` | Unit tests of the colour library |
 
 ## Limitations
 

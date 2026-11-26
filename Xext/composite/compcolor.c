@@ -368,3 +368,13 @@ xpColorToneMap(double nits, double srcMax, double dstMax)
     }
     return xpColorPQToNits(e2 * srcPQ);
 }
+
+double
+xpColorToneMapKnee(double srcMax, double dstMax)
+{
+    if (dstMax >= srcMax)
+        return srcMax;
+    double srcPQ = xpColorNitsToPQ(srcMax);
+    double ks = fmax(1.5 * xpColorNitsToPQ(dstMax) / srcPQ - 0.5, 0);
+    return xpColorPQToNits(ks * srcPQ);
+}
