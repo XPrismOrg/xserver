@@ -149,6 +149,10 @@ compSourceValidate(DrawablePtr pDrawable,
     CompScreenPtr cs = GetCompScreen(pScreen);
 
     pScreen->SourceValidate = cs->SourceValidate;
+    /* XPrism: reading a root window (screenshots, GetImage) must see the
+       current scene, not the last frame painted before the read */
+    if (pDrawable->type == DRAWABLE_WINDOW && !((WindowPtr) pDrawable)->parent)
+        compSceneValidate(pScreen);
     if (pDrawable->type == DRAWABLE_WINDOW && subWindowMode == IncludeInferiors)
         compPaintChildrenToWindow((WindowPtr) pDrawable);
     (*pScreen->SourceValidate) (pDrawable, x, y, width, height,

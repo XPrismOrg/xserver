@@ -583,6 +583,20 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
     ss->numNodes = n;
 }
 
+/* Bring the screen up to date before its contents are read. */
+void
+compSceneValidate(ScreenPtr pScreen)
+{
+    static bool inFrame;
+    SceneScreenPtr ss = sceneScreen(pScreen);
+
+    if (!ss || !ss->active || inFrame)
+        return;
+    inFrame = true;
+    sceneFrame(pScreen, ss);
+    inFrame = false;
+}
+
 static void
 sceneBlockHandler(void *data, void *timeout)
 {
