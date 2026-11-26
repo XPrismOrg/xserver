@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Enrico Weigelt, metux IT consult <info@metux.net>
 
-# based on artist's Xlibre PKGBUILD for Artix
+# based on artist's Xlibre PKGBUILD for Artix; adapted for XPrism.
+#
+# The packages are named xprism-xserver*. They provide and conflict with
+# both xorg-server* and xlibre-xserver*, so drivers built for either
+# (e.g. xlibre-input-libinput) keep working and pacman swaps them out.
 
-pkgbase="xlibre-xserver"
+pkgbase="xprism-xserver"
 pkgname=("${pkgbase}"{,-bootstrap,-common,-devel,-xephyr,-xvfb})
-pkgver=25.999.999 # FIXME
+pkgver=26.11.01 # set by pkgver() from meson.build
 pkgrel=1
 arch=('aarch64' 'x86_64')
-url="https://github.com/x11libre/xserver"
+url="https://github.com/XPrismOrg/xserver"
 license=('LicenseRef-Adobe-Display-PostScript' 'BSD-3-Clause' 'LicenseRef-DEC-3-Clause'
          'HPND' 'LicenseRef-HPND-sell-MIT-disclaimer-xserver' 'HPND-sell-variant'
          'ICU' 'ISC' 'MIT' 'MIT-open-group' 'NTP' 'SGI-B-2.0' 'SMLNJ' 'X11'
@@ -20,7 +24,7 @@ makedepends=('libepoxy' 'libpciaccess' 'libunwind' 'libx11' 'libxaw' 'libxcvt'
              'xcb-util-image' 'xcb-util-keysyms' 'xcb-util-renderutil'
              'xcb-util-wm' 'xorg-font-util' 'xorg-util-macros' 'xorg-xkbcomp'
              'xorgproto>=7.0.31' 'xtrans>=1.3.5')
-groups=('xlibre')
+groups=('xprism')
 options=('!emptydirs')
 
 #
@@ -31,7 +35,9 @@ export _builddir="${_sourcedir}/build"    # temporary build directory for meson
 export _pkgsrc="$(pwd)"                   # directory of PKGBUILD file
 
 pkgver() {
-    cat "${_sourcedir}/.github/arch/GIT_VERSION"
+  # the version in meson.build (YY.MM.NN or YY.MM.NN.PP); a "-rc1" style
+  # suffix becomes "rc1", since pkgver may not contain "-"
+  sed -n "s/^ *version: '\\([^']*\\)',/\\1/p" "${_sourcedir}/meson.build" | head -1 | tr -d '-'
 }
 
 build() {
@@ -64,18 +70,18 @@ build() {
   meson compile -C "${_builddir}"
 }
 
-package_xlibre-xserver() {
-  pkgdesc="XLibre X server"
+package_xprism-xserver() {
+  pkgdesc="XPrism X server: X11 with per-application permissions (based on XLibre)"
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libbsd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh' 'libbsd'
-           'systemd-libs>=209' 'xlibre-xserver-common' 'xlibre-input-libinput'
+           'systemd-libs>=209' 'xlibre-input-libinput'
            "${pkgbase}-common=${pkgver}-${pkgrel}") # FS#52949
-  # see xlibre-xserver*/hw/xfree86/common/xf86Module.h for ABI versions - we provide major numbers that drivers can depend on
-  # and /usr/lib/pkgconfig/xorg-server.pc in xlibre-xserver-devel pkg
-  provides=('X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0' 'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' xlibre-server)
-  conflicts=('xorg-server' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting' 'xlibre-server')
-  replaces=('xlibre-xserver-bootstrap' 'glamor-egl' 'xf86-video-modesetting')
+  # see include/xf86Module.h for ABI versions - we provide major numbers that drivers can depend on
+  # and /usr/lib/pkgconfig/{xprism,xlibre,xorg}-server.pc in xprism-xserver-devel pkg
+  provides=('X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0' 'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' 'xlibre-server' 'xlibre-xserver')
+  conflicts=('xorg-server' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting' 'xlibre-server' 'xlibre-xserver' 'xlibre-xserver-bootstrap')
+  replaces=('xprism-xserver-bootstrap' 'glamor-egl' 'xf86-video-modesetting')
   options=('emptydirs')
   install="${pkgname}.install"
 
@@ -94,17 +100,16 @@ package_xlibre-xserver() {
   find "${pkgdir}" -type f,l \( -name '*Xephyr*' -o -name '*Xvfb*' \) -delete
 }
 
-package_xlibre-xserver-bootstrap() {
-  pkgdesc="XLibre X server (bootstrap)"
+package_xprism-xserver-bootstrap() {
+  pkgdesc="XPrism X server (bootstrap)"
   depends=('dbus' 'glibc' 'libdrm' 'libepoxy' 'libgl' 'libpciaccess' 'libtirpc'
            'libunwind' 'libxau' 'libxcvt' 'libxdmcp' 'libxfont2' 'libmd'
            'libxshmfence>=1.1' 'nettle' 'pixman>=0.27.2' 'sh'
            'systemd-libs>=209'
            "${pkgbase}-common=${pkgver}-${pkgrel}") # FS#52949
-  # see xlibre-xserver*/hw/xfree86/common/xf86Module.h for ABI versions - we provide major numbers that drivers can depend on
-  # and /usr/lib/pkgconfig/xorg-server.pc in xlibre-xserver-devel pkg
-  provides=("${pkgbase}" 'X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0' 'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server') # xlibre'-server'
-  conflicts=({xlibre,xorg}'-server' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
+  # see include/xf86Module.h for ABI versions
+  provides=("${pkgbase}" 'X-ABI-VIDEODRV_VERSION=28.0' 'X-ABI-XINPUT_VERSION=26.0' 'X-ABI-EXTENSION_VERSION=11.0' 'x-server' 'xorg-server' 'xlibre-xserver')
+  conflicts=({xlibre,xorg}'-server' 'xlibre-xserver' 'xlibre-xserver-bootstrap' 'nvidia-utils<=331.20' 'glamor-egl' 'xf86-video-modesetting')
   # replaces=('glamor-egl' 'xf86-video-modesetting')
   options=('emptydirs')
   install="${pkgname}.install"
@@ -125,12 +130,12 @@ package_xlibre-xserver-bootstrap() {
   find ${pkgdir} -type f,l \( -name '*Xephyr*' -o -name '*Xvfb*' \) -delete
 }
 
-package_xlibre-xserver-common() {
-  pkgdesc="XLibre server common files"
+package_xprism-xserver-common() {
+  pkgdesc="XPrism X server common files"
   arch=('any')
   depends=('xkeyboard-config' 'xorg-setxkbmap' 'xorg-xkbcomp')
-  provides=('xorg-server-common' 'xlibre-server-common')
-  conflicts=('xorg-server-common' 'xlibre-server-common' "xorg-server<$pkgver")
+  provides=('xorg-server-common' 'xlibre-server-common' 'xlibre-xserver-common')
+  conflicts=('xorg-server-common' 'xlibre-server-common' 'xlibre-xserver-common')
 
   meson install -C "${_builddir}" --destdir "${pkgdir}"
 
@@ -140,42 +145,42 @@ package_xlibre-xserver-common() {
   install -vDm644 "${_sourcedir}/Xext/xkeyboard/README.compiled" "${pkgdir}/var/lib/xkb/README.compiled"
 }
 
-package_xlibre-xserver-devel() {
-  pkgdesc="Development files for the XLibre X server"
+package_xprism-xserver-devel() {
+  pkgdesc="Development files for the XPrism X server (driver SDK)"
   arch=('any')
   depends=('libpciaccess' 'mesa' 'pixman>=0.27.2' 'xorgproto>=7.0.31'
            'xorg-util-macros') # not technically required but almost every Xorg pkg needs it to build
-  provides=('xorg-server-devel' 'xlibre-server-devel')
-  conflicts=('xorg-server-devel' 'xlibre-server-devel')
+  provides=('xorg-server-devel' 'xlibre-server-devel' 'xlibre-xserver-devel')
+  conflicts=('xorg-server-devel' 'xlibre-server-devel' 'xlibre-xserver-devel')
 
   meson install -C "${_builddir}" --destdir "${pkgdir}"
 
   find "${pkgdir}" -type f,l ! \( -name '*.h' -o -name '*.pc' -o -name '*.m4' \) -delete
 }
 
-package_xlibre-xserver-xephyr() {
-  pkgdesc="A nested XLibre server that runs as an X application"
+package_xprism-xserver-xephyr() {
+  pkgdesc="A nested XPrism server that runs as an X application"
   depends=('glibc' 'libepoxy' 'libgl' 'libtirpc' 'libunwind' 'libx11' 'libxau'
            'libxdmcp' 'libxfont2' 'libxshmfence' 'nettle' 'pixman>=0.27.2'
            'systemd-libs>=209' 'xcb-util' 'xcb-util-image' 'xcb-util-keysyms'
            'xcb-util-renderutil' 'xcb-util-wm'
            "${pkgbase}-common=${pkgver}-${pkgrel}")
-  provides=('xorg-server-xephyr' 'xlibre-server-xephyr')
-  conflicts=('xorg-server-xephyr' 'xlibre-server-xephyr')
+  provides=('xorg-server-xephyr' 'xlibre-server-xephyr' 'xlibre-xserver-xephyr')
+  conflicts=('xorg-server-xephyr' 'xlibre-server-xephyr' 'xlibre-xserver-xephyr')
 
   meson install -C "${_builddir}" --destdir "${pkgdir}"
 
   find "${pkgdir}" -type f,l ! -name '*Xephyr*' -delete
 }
 
-package_xlibre-xserver-xvfb() {
-  pkgdesc="Virtual framebuffer XLibre server"
+package_xprism-xserver-xvfb() {
+  pkgdesc="Virtual framebuffer XPrism server"
   license=('MIT' 'GPL-2.0-only')
   depends=('glibc' 'libgl' 'libtirpc' 'libunwind' 'libxau' 'libxdmcp'
            'libxfont2' 'nettle' 'pixman' 'sh' 'systemd-libs>=209'
            "${pkgbase}-common=${pkgver}-${pkgrel}" 'xorg-xauth')
-  provides=('xorg-server-xvfb' 'xlibre-server-xvfb')
-  conflicts=('xorg-server-xvfb' 'xlibre-server-xvfb')
+  provides=('xorg-server-xvfb' 'xlibre-server-xvfb' 'xlibre-xserver-xvfb')
+  conflicts=('xorg-server-xvfb' 'xlibre-server-xvfb' 'xlibre-xserver-xvfb')
 
   meson install -C "${_builddir}" --destdir "${pkgdir}"
 

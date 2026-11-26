@@ -9,16 +9,16 @@ post_upgrade() {
 post_install() {
   cat <<MSG
 >>> Closed source drivers - like those from Nvidia - might not
-    have an updated ABI version to match xlibre-xserver.
+    have an updated ABI version to match xprism-xserver.
     To prevent problems with these drivers create this file:
 
-    /etc/X11/xorg.conf.d/xlibre.conf
+    /etc/X11/xorg.conf.d/xprism.conf
 
     Section "ServerFlags"
         Option "IgnoreABI" "true"
     EndSection
 
->>> xlibre-xserver has now the ability to run without root rights with
+>>> xprism-xserver has the ability to run without root rights with
     the help of systemd-logind. xserver will fail to run if not launched
     from the same virtual terminal as was used to log in.
     Without root rights, log files will be in ~/.local/share/xorg/ directory.
