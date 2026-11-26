@@ -555,3 +555,30 @@ def test_background_blur_reads_root_tile(xvfb):
     assert b > r + 60, (r, g, b)
     r, g, b = _rgb(x.pixel(352, 200))                 # on an edge: mixed
     assert abs(r - b) < 40, (r, g, b)
+
+
+class TestXinerama:
+    """Each window exists once per screen; the window manager describes the
+    one it knows (screen 0's), and every screen must show it that way."""
+
+    @pytest.fixture
+    def xserver_args(self):
+        return ["-br", "+xinerama", "-screen", "1", "1280x1024x24",
+                "-compositor", "on"]
+
+    def test_decoration_and_opacity_across_screens(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(1230, 100, 100, 100, RED)     # boundary at x=1280
+        x.map(w)
+        wm = Scene(xvfb)
+        wm.become_wm(x)
+        assert wm.decorate(w, RADIUS, radius=20) == []
+        assert x.pixel(1230, 100) == ROOT_BG       # corner on screen 0
+        assert x.pixel(1329, 100) == ROOT_BG       # corner on screen 1
+        assert x.pixel(1279, 100) == RED
+        assert x.pixel(1280, 100) == RED
+        assert wm.set(w, OPACITY, 0x80000000) == []
+        for px in (1250, 1279, 1280, 1310):
+            assert _near(x.pixel(px, 150), 0x7F0000), (px, hex(x.pixel(px, 150)))
+        assert wm.clear(w, OPACITY | RADIUS) == []
+        assert x.pixel(1329, 100) == RED

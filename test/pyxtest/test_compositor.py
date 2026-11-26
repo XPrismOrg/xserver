@@ -582,3 +582,79 @@ class TestDirectScanout:
         assert _becomes_direct(x, fs)
         x.fill(below, BLUE, 0, 0, 100, 100)   # damage under the direct window
         assert x.pixel(150, 150) == GREEN
+
+
+class TestXinerama:
+    """Two screens side by side; the compositor runs on each, and Xinerama
+    shows each window on both. Windows straddle the boundary at x=1280."""
+
+    @pytest.fixture
+    def xserver_args(self, compositor):
+        self.compositor = compositor
+        return ["-br", "+xinerama", "-screen", "1", "1280x1024x24",
+                "-compositor", compositor]
+
+    def test_window_across_screens(self, xvfb):
+        x = Client(xvfb)
+        under = x.window(1180, 100, 200, 200, BLUE)
+        over = x.window(1230, 150, 100, 100, RED)
+        x.map(under)
+        x.map(over)
+        for px in (1240, 1279, 1280, 1320):
+            assert x.pixel(px, 200) == RED, px
+        assert x.pixel(1200, 120) == BLUE
+        assert x.pixel(1360, 120) == BLUE
+        x.opacity(over, 0x80000000)
+        for px in (1279, 1280):
+            got = x.pixel(px, 200)
+            if self.compositor == "on":
+                assert _near(got, 0x80007F), (px, hex(got))
+            else:
+                assert got == RED, (px, hex(got))     # no compositor, no opacity
+
+    def test_reading_the_root_sees_the_current_scene(self, xvfb):
+        """A change and a read of the root in one batch: the read must
+        compose first on every screen, as it does without Xinerama."""
+        if self.compositor != "on":
+            pytest.skip("only the compositor composes")
+        x = Client(xvfb)
+        w = x.window(1230, 100, 100, 100, RED)
+        x.map(w)
+        assert x.pixel(1250, 150) == RED
+        atom = x.c.intern_atom("_NET_WM_WINDOW_OPACITY")
+        prop = struct.pack("<IIIBxxxI", w, atom, XA_CARDINAL, 32, 1) + struct.pack("<I", 0x80000000)
+        for px in (1250, 1310):
+            get = struct.pack("<IhhHHI", x.root, px, 150, 1, 1, 0xFFFFFFFF)
+            batch = (struct.pack("<BBH", X_CHANGE_PROPERTY, 0, 1 + len(prop) // 4) + prop +
+                     struct.pack("<BBH", X_GET_IMAGE, Z_PIXMAP, 1 + len(get) // 4) + get)
+            x.c.seq += 1
+            seq = x.c.send_request(batch)
+            while True:
+                r = x.c.recv_response(timeout=5.0)
+                assert r is not None and not isinstance(r, X11Error), r
+                if r.response_type == 1 and r.sequence == seq:
+                    break
+            got = struct.unpack_from("<I", r.data, 32)[0] & 0xFFFFFF
+            assert _near(got, 0x7F0000), (px, hex(got))
+
+    def test_move_between_screens(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)
+        assert x.pixel(150, 150) == RED
+        x.move(w, 2000)
+        assert x.pixel(150, 150) != RED
+        assert x.pixel(2050, 150) == RED
+        x.fill(w, GREEN, 10, 10, 20, 20)
+        assert x.pixel(2020, 120) == GREEN
+
+    def test_root_drawing_across_screens(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(1230, 100, 100, 100, RED)
+        x.map(w)
+        assert x.sync() == []
+        x.fill(x.root, GREEN, 1200, 50, 160, 300)        # ClipByChildren
+        assert x.pixel(1210, 60) == GREEN
+        assert x.pixel(1350, 60) == GREEN
+        assert x.pixel(1279, 150) == RED
+        assert x.pixel(1280, 150) == RED

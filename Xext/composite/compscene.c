@@ -45,6 +45,10 @@
 #include "dix/request_priv.h"
 #include "dix/resource_priv.h"
 #include "xprismsceneproto.h"
+#ifdef XINERAMA
+#include "Xext/panoramiX/panoramiXsrv.h"
+#include "Xext/panoramiX/panoramiX_priv.h"
+#endif
 
 #include <math.h>
 
@@ -482,6 +486,46 @@ sceneWindowOpacity(WindowPtr pWin)
     return *(CARD32 *) pProp->data;
 }
 
+/*
+ * With Xinerama each window exists once per screen, and clients address
+ * the copy on screen 0: that one holds the window's properties and what
+ * the window manager set through XPRISM-SCENE. Copies on other screens
+ * take their settings from it.
+ */
+static WindowPtr
+sceneSettingsWindow(WindowPtr pWin)
+{
+#ifdef XINERAMA
+    int scr = pWin->drawable.pScreen->myNum;
+    WindowPtr pMaster;
+
+    if (scr != 0 && PanoramiXIsEnabled()) {
+        PanoramiXRes *res = PanoramiXFindIDByScrnum(XRT_WINDOW,
+                                                    pWin->drawable.id, scr);
+        if (res && dixLookupWindow(&pMaster, res->info[0].id, serverClient,
+                                   DixReadAccess) == Success)
+            return pMaster;
+    }
+#endif
+    return pWin;
+}
+
+/* The settings, not the cached masks: those belong to one screen. */
+static void
+sceneCopySettings(SceneAttrsPtr to, const SceneAttrsRec *from)
+{
+    to->mask = from->mask;
+    to->opacity = from->opacity;
+    to->xform = from->xform;
+    to->inverse = from->inverse;
+    to->radius = from->radius;
+    to->shadowBlur = from->shadowBlur;
+    to->shadowDx = from->shadowDx;
+    to->shadowDy = from->shadowDy;
+    to->shadowColor = from->shadowColor;
+    to->bgBlur = from->bgBlur;
+}
+
 static bool
 sceneWindowIsNode(WindowPtr pWin)
 {
@@ -543,15 +587,18 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
                 return 0;
             }
         }
+        WindowPtr pSettings = sceneSettingsWindow(pWin);
         SceneAttrsPtr attrs = sceneAttrs(pWin);
         SceneNodeRec *node = &nodes[n];
 
+        if (pSettings != pWin)
+            sceneCopySettings(attrs, sceneAttrs(pSettings));
         wins[n] = pWin;
         memset(node, 0, sizeof(*node));
         node->id = pWin->drawable.id;
         node->box = *RegionExtents(&pWin->borderSize);
         node->opacity = (attrs->mask & XpSceneNodeOpacity) ?
-            attrs->opacity : sceneWindowOpacity(pWin);
+            attrs->opacity : sceneWindowOpacity(pSettings);
         if (attrs->mask & XpSceneNodeTransform) {
             int bw = wBorderWidth(pWin);
             BoxRec local;

@@ -143,4 +143,8 @@ Taking over requires the `compositor.legacy` capability, see
   1200x950 window this takes about 0.1 ms for the corners and under 1 ms
   for a shadow with a 32-pixel blur, rising to about 9 ms with the
   largest blur (128 pixels).
-- Xinerama has not been tested with the compositor enabled.
+- With Xinerama, each screen composes its own part of the scene. A
+  window's opacity and XPRISM-SCENE settings are those set on it as
+  clients see it (its screen-0 copy) and apply on every screen it
+  covers. Each screen's composition is tested on Xvfb, not on real
+  hardware.
