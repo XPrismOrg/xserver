@@ -294,13 +294,24 @@ sceneCornerMask(ScreenPtr pScreen, SceneCornerCache *cache, int radius,
     cache->mask = NULL;
 
     int stride = sceneStride(w);
-    uint8_t *buf = calloc((size_t) stride, h);
+    uint8_t *buf = malloc((size_t) stride * h);
     if (!buf)
         return NULL;
+    /* Coverage is 1 everywhere but in the four r x r corner squares */
     for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++)
+        memset(buf + y * stride, alpha, stride);
+    for (int y = 0; y < h; y++) {
+        if (y >= r && y < h - r)
+            continue;
+        for (int x = 0; x < w; x++) {
+            if (x == r && w - r > r) {
+                x = w - r - 1;      /* skip the straight part of the row */
+                continue;
+            }
             buf[y * stride + x] =
                 (uint8_t) lround(alpha * sceneRoundRectCoverage(x, y, 0, 0, w, h, r));
+        }
+    }
     cache->mask = sceneAlphaPicture(pScreen, w, h, buf);
     free(buf);
     cache->w = w;
@@ -350,6 +361,68 @@ sceneBoxBlur(uint8_t *buf, int w, int h, int stride, int radius)
     free(tmp);
 }
 
+/* Shadow of a w x h rectangle with corner radius r, blurred by b, in a
+   (w + 2b) x (h + 2b) buffer. */
+static uint8_t *
+sceneShadowBlurred(int w, int h, int r, int b)
+{
+    int sw = w + 2 * b, sh = h + 2 * b, stride = sceneStride(sw);
+    uint8_t *buf = calloc((size_t) stride, sh);
+    if (!buf)
+        return NULL;
+    for (int y = 0; y < sh; y++)
+        for (int x = 0; x < sw; x++)
+            buf[y * stride + x] =
+                (uint8_t) lround(255 * sceneRoundRectCoverage(x, y, b, b, w, h, r));
+    sceneBoxBlur(buf, sw, sh, stride, (b + 1) / 2);
+    return buf;
+}
+
+/*
+ * The same, without blurring the whole window. Away from the corners
+ * every column of the top and bottom edges is the same, and so is every
+ * row of the left and right edges: blur a rectangle just large enough
+ * that its middle column and row are out of the blur's reach from the
+ * corners, and repeat them. The result is identical to blurring the
+ * whole rectangle, at a cost that depends on r and b, not on the size.
+ */
+static uint8_t *
+sceneShadowPixels(int w, int h, int r, int b)
+{
+    int reach = 3 * ((b + 1) / 2);          /* three box-blur passes */
+    int core = 2 * (r + reach) + 1;
+    int smw = min(w, core), smh = min(h, core);
+
+    if (smw == w && smh == h)
+        return sceneShadowBlurred(w, h, r, b);
+    uint8_t *small = sceneShadowBlurred(smw, smh, r, b);
+    if (!small)
+        return NULL;
+    int SW = smw + 2 * b, SH = smh + 2 * b, ss = sceneStride(SW);
+    int TW = w + 2 * b, TH = h + 2 * b, ts = sceneStride(TW);
+    int mc = SW / 2, mr = SH / 2;           /* the repeated column and row */
+    int right = SW - mc - 1, bottom = SH - mr - 1;
+    uint8_t *buf = calloc((size_t) ts, TH);
+    if (!buf) {
+        free(small);
+        return NULL;
+    }
+    for (int y = 0; y < TH; y++) {
+        int my = y < mr ? y : (y >= TH - bottom ? y - (TH - SH) : mr);
+        uint8_t *dst = buf + (size_t) y * ts;
+        if (y > mr && my == mr) {
+            memcpy(dst, buf + (size_t) mr * ts, TW);
+            continue;
+        }
+        const uint8_t *src = small + (size_t) my * ss;
+        memcpy(dst, src, mc);
+        memset(dst + mc, src[mc], TW - right - mc);
+        memcpy(dst + TW - right, src + mc + 1, right);
+    }
+    free(small);
+    return buf;
+}
+
 static PicturePtr
 sceneShadowMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h)
 {
@@ -363,16 +436,10 @@ sceneShadowMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h)
         FreePicture(attrs->shadowMask, 0);
     attrs->shadowMask = NULL;
 
-    int sw = w + 2 * b, sh = h + 2 * b, stride = sceneStride(sw);
-    uint8_t *buf = calloc((size_t) stride, sh);
+    uint8_t *buf = sceneShadowPixels(w, h, r, b);
     if (!buf)
         return NULL;
-    for (int y = 0; y < sh; y++)
-        for (int x = 0; x < sw; x++)
-            buf[y * stride + x] =
-                (uint8_t) lround(255 * sceneRoundRectCoverage(x, y, b, b, w, h, r));
-    sceneBoxBlur(buf, sw, sh, stride, (b + 1) / 2);
-    attrs->shadowMask = sceneAlphaPicture(pScreen, sw, sh, buf);
+    attrs->shadowMask = sceneAlphaPicture(pScreen, w + 2 * b, h + 2 * b, buf);
     free(buf);
     attrs->smW = w;
     attrs->smH = h;

@@ -138,7 +138,9 @@ Taking over requires the `compositor.legacy` capability, see
   window in software, depending on the radius, and well under 1 ms for
   small updates. It has not been measured with glamor yet.
 - Shadow and corner masks are computed on the CPU whenever a decorated
-  window changes size. For a 1200x950 window with the largest blur this
-  takes about 40 ms, so interactively resizing large windows with
-  shadows is not yet smooth. Other redraws reuse the masks.
+  window changes size. Only the corners and a band as wide as the blur
+  are computed; the edges and the middle are repeated from them. For a
+  1200x950 window this takes about 0.1 ms for the corners and under 1 ms
+  for a shadow with a 32-pixel blur, rising to about 9 ms with the
+  largest blur (128 pixels).
 - Xinerama has not been tested with the compositor enabled.
