@@ -33,21 +33,38 @@
 
 #include "dix/dix_priv.h"
 #include "dix/screen_hooks_priv.h"
+#include "dix/window_priv.h"
 #include "dix/property_priv.h"
 #include "propertyst.h"
 #include "mi/mi_priv.h"
 #include "miext/extinit_priv.h"
 
 #include "compint.h"
+#include "dix/request_priv.h"
+#include "xprismsceneproto.h"
+
+#include <math.h>
 
 Bool sceneCompositorEnabled = FALSE;
 
 /* One node of the scene: a viewable top-level window. */
 typedef struct {
     XID id;
-    BoxRec box;                 /* bounds incl. border, screen coords */
+    BoxRec box;                 /* shown bounds, screen coords */
     CARD32 opacity;             /* 0xffffffff = opaque */
+    bool transformed;
+    PictTransform xform;        /* window -> shown (XPRISM-SCENE) */
 } SceneNodeRec;
+
+/* What the window manager set through XPRISM-SCENE (window private,
+   zero-initialized storage: nothing set). */
+typedef struct {
+    CARD32 mask;                /* XpSceneNode* */
+    CARD32 opacity;
+    PictTransform xform;        /* as sent: window -> shown */
+    PictTransform inverse;      /* shown -> window, for Render */
+    ClientPtr owner;            /* the WM that set it; cleared when it goes */
+} SceneAttrsRec, *SceneAttrsPtr;
 
 typedef struct {
     bool active;                /* we hold Manual redirection of root */
@@ -62,6 +79,7 @@ typedef struct {
 
 static DevPrivateKeyRec sceneScreenKeyRec;
 static DevPrivateKeyRec sceneWindowKeyRec;     /* DamagePtr per top-level */
+static DevPrivateKeyRec sceneAttrsKeyRec;      /* SceneAttrsRec per window */
 static Atom atomOpacity;
 static unsigned long handlersGeneration;
 
@@ -118,6 +136,61 @@ sceneDropWindowDamage(WindowPtr pWin)
     dixSetPrivate(&pWin->devPrivates, &sceneWindowKeyRec, NULL);
     DamageUnregister(pDamage);
     DamageDestroy(pDamage);
+}
+
+/* ---- node attributes (XPRISM-SCENE) --------------------------------- */
+
+static SceneAttrsPtr
+sceneAttrs(WindowPtr pWin)
+{
+    return dixLookupPrivate(&pWin->devPrivates, &sceneAttrsKeyRec);
+}
+
+static double
+fx(pixman_fixed_t v)
+{
+    return v / 65536.0;
+}
+
+/* Map window-local (x, y) through t. False if it lands at or behind the
+   projection plane. */
+static bool
+sceneTransformPoint(const PictTransform *t, double x, double y,
+                    double *ox, double *oy)
+{
+    double X = fx(t->matrix[0][0]) * x + fx(t->matrix[0][1]) * y + fx(t->matrix[0][2]);
+    double Y = fx(t->matrix[1][0]) * x + fx(t->matrix[1][1]) * y + fx(t->matrix[1][2]);
+    double W = fx(t->matrix[2][0]) * x + fx(t->matrix[2][1]) * y + fx(t->matrix[2][2]);
+
+    if (W <= 1e-6)
+        return false;
+    *ox = X / W;
+    *oy = Y / W;
+    return true;
+}
+
+/* Bounds (window-local) of a w x h window shown through t. */
+static bool
+sceneTransformBounds(const PictTransform *t, int w, int h, BoxPtr box)
+{
+    const double cx[4] = { 0, w, 0, w }, cy[4] = { 0, 0, h, h };
+    double x1 = HUGE_VAL, y1 = HUGE_VAL, x2 = -HUGE_VAL, y2 = -HUGE_VAL;
+
+    for (int i = 0; i < 4; i++) {
+        double x, y;
+        if (!sceneTransformPoint(t, cx[i], cy[i], &x, &y))
+            return false;
+        x1 = fmin(x1, x); y1 = fmin(y1, y);
+        x2 = fmax(x2, x); y2 = fmax(y2, y);
+    }
+    /* one pixel of margin for bilinear filtering; clamp to sane coords */
+    double bx1 = fmax(floor(x1) - 1, -32767), by1 = fmax(floor(y1) - 1, -32767);
+    double bx2 = fmin(ceil(x2) + 1, 32767), by2 = fmin(ceil(y2) + 1, 32767);
+    box->x1 = (short) bx1;
+    box->y1 = (short) by1;
+    box->x2 = (short) bx2;
+    box->y2 = (short) by2;
+    return true;
 }
 
 /* ---- scene snapshot ------------------------------------------------- */
@@ -181,9 +254,13 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             continue;
         if (n == cap) {
             cap = cap ? cap * 2 : 32;
-            wins = reallocarray(wins, cap, sizeof(*wins));
-            nodes = reallocarray(nodes, cap, sizeof(*nodes));
-            if (!wins || !nodes) {
+            WindowPtr *w2 = reallocarray(wins, cap, sizeof(*wins));
+            if (w2)
+                wins = w2;
+            SceneNodeRec *n2 = reallocarray(nodes, cap, sizeof(*nodes));
+            if (n2)
+                nodes = n2;
+            if (!w2 || !n2) {
                 free(wins);
                 free(nodes);
                 ss->fullDamage = true;
@@ -192,18 +269,42 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
                 return 0;
             }
         }
+        SceneAttrsPtr attrs = sceneAttrs(pWin);
+        SceneNodeRec *node = &nodes[n];
+
         wins[n] = pWin;
-        nodes[n].id = pWin->drawable.id;
-        nodes[n].box = *RegionExtents(&pWin->borderSize);
-        nodes[n].opacity = sceneWindowOpacity(pWin);
+        memset(node, 0, sizeof(*node));
+        node->id = pWin->drawable.id;
+        node->box = *RegionExtents(&pWin->borderSize);
+        node->opacity = (attrs->mask & XpSceneNodeOpacity) ?
+            attrs->opacity : sceneWindowOpacity(pWin);
+        if (attrs->mask & XpSceneNodeTransform) {
+            int bw = wBorderWidth(pWin);
+            BoxRec local;
+            if (sceneTransformBounds(&attrs->xform,
+                                     pWin->drawable.width + 2 * bw,
+                                     pWin->drawable.height + 2 * bw, &local)) {
+                int ox = pWin->drawable.x - bw, oy = pWin->drawable.y - bw;
+                node->transformed = true;
+                node->xform = attrs->xform;
+                node->box = (BoxRec) {
+                    .x1 = max(local.x1 + ox, -32767), .y1 = max(local.y1 + oy, -32767),
+                    .x2 = min(local.x2 + ox, 32767), .y2 = min(local.y2 + oy, 32767),
+                };
+            }
+        }
 
         /* content drawn into the window since the last frame */
         DamagePtr pWinDamage = sceneWindowDamage(pWin);
         if (pWinDamage) {
             RegionPtr r = DamageRegion(pWinDamage);
             if (RegionNotEmpty(r)) {
-                RegionTranslate(r, pWin->drawable.x, pWin->drawable.y);
-                RegionUnion(pDamage, pDamage, r);
+                if (node->transformed) {
+                    sceneUnionBox(pDamage, &node->box);
+                } else {
+                    RegionTranslate(r, pWin->drawable.x, pWin->drawable.y);
+                    RegionUnion(pDamage, pDamage, r);
+                }
                 DamageEmpty(pWinDamage);
             }
         }
@@ -223,7 +324,9 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             continue;
         }
         if (old->opacity != nodes[i].opacity ||
-            memcmp(&old->box, &nodes[i].box, sizeof(BoxRec))) {
+            memcmp(&old->box, &nodes[i].box, sizeof(BoxRec)) ||
+            old->transformed != nodes[i].transformed ||
+            memcmp(&old->xform, &nodes[i].xform, sizeof(PictTransform))) {
             sceneUnionBox(pDamage, &old->box);
             sceneUnionBox(pDamage, &nodes[i].box);
             continue;           /* fully damaged already */
@@ -308,7 +411,14 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
     for (int i = 0; i < n; i++) {
         WindowPtr pWin = wins[i];
 
-        RegionIntersect(&clip, pDamage, &pWin->borderSize);
+        if (nodes[i].transformed) {
+            RegionRec shown;
+            RegionInit(&shown, (BoxPtr) &nodes[i].box, 1);
+            RegionIntersect(&clip, pDamage, &shown);
+            RegionUninit(&shown);
+        } else {
+            RegionIntersect(&clip, pDamage, &pWin->borderSize);
+        }
         if (!RegionNotEmpty(&clip))
             continue;
 
@@ -327,11 +437,23 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
 
         RegionTranslate(&clip, -pRoot->drawable.x, -pRoot->drawable.y);
         SetPictureClipRegion(pDst, 0, 0, &clip);
-        CompositePicture(PictOpOver, pSrc, pMask, pDst,
-                         0, 0, 0, 0,
-                         pPixmap->screen_x - pRoot->drawable.x,
-                         pPixmap->screen_y - pRoot->drawable.y,
-                         pPixmap->drawable.width, pPixmap->drawable.height);
+        if (nodes[i].transformed) {
+            /* Render maps destination to source: give it the inverse */
+            SetPictureTransform(pSrc, &sceneAttrs(pWin)->inverse);
+            SetPictureFilter(pSrc, (char *) "bilinear", 8, NULL, 0);
+            const BoxRec *b = &nodes[i].box;
+            CompositePicture(PictOpOver, pSrc, pMask, pDst,
+                             b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
+                             0, 0,
+                             b->x1 - pRoot->drawable.x, b->y1 - pRoot->drawable.y,
+                             b->x2 - b->x1, b->y2 - b->y1);
+        } else {
+            CompositePicture(PictOpOver, pSrc, pMask, pDst,
+                             0, 0, 0, 0,
+                             pPixmap->screen_x - pRoot->drawable.x,
+                             pPixmap->screen_y - pRoot->drawable.y,
+                             pPixmap->drawable.width, pPixmap->drawable.height);
+        }
         if (pMask)
             FreePicture(pMask, 0);
         FreePicture(pSrc, 0);
@@ -451,6 +573,215 @@ compSceneResume(ClientPtr pClient, WindowPtr pWin)
     ss->yielded = false;
 }
 
+/* ---- XPRISM-SCENE protocol -------------------------------------------- */
+
+/* The window manager: the client holding SubstructureRedirect on the
+   window's root. Only it may describe the scene (AD-1). */
+static bool
+sceneClientIsWM(ClientPtr client, WindowPtr pWin)
+{
+    WindowPtr pRoot = pWin->drawable.pScreen->root;
+
+    for (OtherClientsPtr oc = wOtherClients(pRoot); oc; oc = oc->next)
+        if ((oc->mask & SubstructureRedirectMask) &&
+            dixClientForXID(oc->resource) == client)
+            return true;
+    return false;
+}
+
+/* Look up a top-level window the calling WM may describe. */
+static int
+sceneLookupNode(ClientPtr client, XID id, WindowPtr *ppWin)
+{
+    WindowPtr pWin;
+    int rc = dixLookupWindow(&pWin, id, client, DixSetAttrAccess);
+
+    if (rc != Success) {
+        client->errorValue = id;
+        return rc;
+    }
+    if (!pWin->parent || pWin->parent->parent) {
+        client->errorValue = id;
+        return BadMatch;        /* scene nodes are top-level windows */
+    }
+    if (!sceneClientIsWM(client, pWin))
+        return BadAccess;
+    *ppWin = pWin;
+    return Success;
+}
+
+static int
+ProcXpSceneQueryVersion(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneQueryVersionReq);
+    X_REQUEST_FIELD_CARD32(majorVersion);
+    X_REQUEST_FIELD_CARD32(minorVersion);
+
+    xXpSceneQueryVersionReply reply = {
+        .majorVersion = XPRISM_SCENE_MAJOR,
+        .minorVersion = XPRISM_SCENE_MINOR,
+    };
+    if (client->swapped) {
+        swapl(&reply.majorVersion);
+        swapl(&reply.minorVersion);
+    }
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
+static int
+ProcXpSceneSetNodeAttributes(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneSetNodeAttributesReq);
+    X_REQUEST_FIELD_CARD32(window);
+    X_REQUEST_FIELD_CARD32(mask);
+    X_REQUEST_FIELD_CARD32(opacity);
+    if (client->swapped)
+        for (int i = 0; i < 9; i++)
+            swapl(&stuff->transform[i]);
+
+    if (stuff->mask & ~XpSceneNodeAll) {
+        client->errorValue = stuff->mask;
+        return BadValue;
+    }
+
+    WindowPtr pWin;
+    int rc = sceneLookupNode(client, stuff->window, &pWin);
+    if (rc != Success)
+        return rc;
+
+    PictTransform xform, inverse;
+    if (stuff->mask & XpSceneNodeTransform) {
+        for (int i = 0; i < 9; i++)
+            xform.matrix[i / 3][i % 3] = stuff->transform[i];
+        BoxRec unused;
+        int bw = wBorderWidth(pWin);
+        /* must be invertible and keep the window in front of the viewer */
+        if (!pixman_transform_invert(&inverse, &xform) ||
+            !sceneTransformBounds(&xform, pWin->drawable.width + 2 * bw,
+                                  pWin->drawable.height + 2 * bw, &unused))
+            return BadMatch;
+    }
+
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    if (stuff->mask & XpSceneNodeOpacity)
+        attrs->opacity = stuff->opacity;
+    if (stuff->mask & XpSceneNodeTransform) {
+        attrs->xform = xform;
+        attrs->inverse = inverse;
+    }
+    attrs->mask |= stuff->mask;
+    if (attrs->mask)
+        attrs->owner = client;
+    return Success;         /* the next frame's diff sees the change */
+}
+
+static int
+ProcXpSceneGetNodeAttributes(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneGetNodeAttributesReq);
+    X_REQUEST_FIELD_CARD32(window);
+
+    WindowPtr pWin;
+    int rc = sceneLookupNode(client, stuff->window, &pWin);
+    if (rc != Success)
+        return rc;
+
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    xXpSceneGetNodeAttributesReply reply = {
+        .mask = attrs->mask,
+        .opacity = (attrs->mask & XpSceneNodeOpacity) ? attrs->opacity : 0xffffffff,
+    };
+    for (int i = 0; i < 9; i++)
+        reply.transform[i] = (attrs->mask & XpSceneNodeTransform) ?
+            attrs->xform.matrix[i / 3][i % 3] :
+            (i % 4 == 0 ? pixman_fixed_1 : 0);      /* identity */
+    if (client->swapped) {
+        swapl(&reply.mask);
+        swapl(&reply.opacity);
+        for (int i = 0; i < 9; i++)
+            swapl(&reply.transform[i]);
+    }
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
+static int
+ProcXpSceneClearNodeAttributes(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneClearNodeAttributesReq);
+    X_REQUEST_FIELD_CARD32(window);
+    X_REQUEST_FIELD_CARD32(mask);
+
+    if (stuff->mask & ~XpSceneNodeAll) {
+        client->errorValue = stuff->mask;
+        return BadValue;
+    }
+
+    WindowPtr pWin;
+    int rc = sceneLookupNode(client, stuff->window, &pWin);
+    if (rc != Success)
+        return rc;
+
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    attrs->mask &= ~stuff->mask;
+    if (!attrs->mask)
+        attrs->owner = NULL;
+    return Success;         /* the next frame's diff sees the change */
+}
+
+static int
+ProcXpSceneDispatch(ClientPtr client)
+{
+    REQUEST(xReq);
+
+    switch (stuff->data) {
+    case X_XpSceneQueryVersion:
+        return ProcXpSceneQueryVersion(client);
+    case X_XpSceneSetNodeAttributes:
+        return ProcXpSceneSetNodeAttributes(client);
+    case X_XpSceneGetNodeAttributes:
+        return ProcXpSceneGetNodeAttributes(client);
+    case X_XpSceneClearNodeAttributes:
+        return ProcXpSceneClearNodeAttributes(client);
+    default:
+        return BadRequest;
+    }
+}
+
+/* A window manager that goes away takes its scene description with it:
+   a crashed WM must not leave windows invisible or shrunk. */
+static void
+sceneClientStateCallback(CallbackListPtr *list, void *closure, void *data)
+{
+    NewClientInfoRec *ci = data;
+    ClientPtr gone = ci->client;
+
+    if (gone->clientState != ClientStateGone)
+        return;
+    for (unsigned s = 0; s < screenInfo.numScreens; s++) {
+        WindowPtr pRoot = screenInfo.screens[s]->root;
+        if (!pRoot)
+            continue;
+        for (WindowPtr pWin = pRoot->firstChild; pWin; pWin = pWin->nextSib) {
+            SceneAttrsPtr attrs = sceneAttrs(pWin);
+            if (attrs->owner == gone)
+                memset(attrs, 0, sizeof(*attrs));
+        }
+    }
+}
+
+void
+compSceneExtensionInit(void)
+{
+    if (!sceneCompositorEnabled)
+        return;
+    if (!AddCallback(&ClientStateCallback, sceneClientStateCallback, NULL))
+        return;
+    if (!AddExtension(XPRISM_SCENE_NAME, 0, 0, ProcXpSceneDispatch,
+                      ProcXpSceneDispatch, NULL, StandardMinorOpcode))
+        LogMessageVerb(X_WARNING, 1, "compositor: cannot add %s\n",
+                       XPRISM_SCENE_NAME);
+}
+
 /* ---- setup ------------------------------------------------------------ */
 
 static void
@@ -472,7 +803,9 @@ compSceneScreenInit(ScreenPtr pScreen)
         return true;
 
     if (!dixRegisterPrivateKey(&sceneScreenKeyRec, PRIVATE_SCREEN, 0) ||
-        !dixRegisterPrivateKey(&sceneWindowKeyRec, PRIVATE_WINDOW, 0))
+        !dixRegisterPrivateKey(&sceneWindowKeyRec, PRIVATE_WINDOW, 0) ||
+        !dixRegisterPrivateKey(&sceneAttrsKeyRec, PRIVATE_WINDOW,
+                               sizeof(SceneAttrsRec)))
         return false;
 
     SceneScreenPtr ss = calloc(1, sizeof(SceneScreenRec));

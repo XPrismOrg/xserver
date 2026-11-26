@@ -55,6 +55,7 @@ if pytest.found()
      'test_clipboard_grants.py',
      'test_randr_access.py',
      'test_compositor.py',
+     'test_scene_protocol.py',
         'test_fb.py',
         'test_font.py',
         'test_glamor.py',

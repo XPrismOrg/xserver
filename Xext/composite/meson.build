@@ -10,5 +10,5 @@ srcs_composite = [
 libxserver_composite = static_library('xserver_composite',
     srcs_composite,
     include_directories: inc,
-    dependencies: common_dep,
+    dependencies: [common_dep, m_dep],   # m: scene transforms
 )

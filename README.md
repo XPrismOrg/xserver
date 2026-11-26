@@ -74,7 +74,7 @@ the continuation of the X.Org Server.
 | **Capabilities** | Twelve fine-grained permissions (`capture.screen`, `input.inject`, `clipboard.read`, …), checked where the protocol actually does the thing. Granted per namespace, capped per launcher socket, changeable at runtime. | [`doc/capabilities.md`](doc/capabilities.md) |
 | **Audit mode** | By default nothing is denied: every request that *would* need a missing capability is logged, so policies can be tested against real applications first. | [`doc/capabilities.md`](doc/capabilities.md#modes) |
 | **Clipboard grants** | A confined app granted `clipboard.read` / `clipboard.write` can paste from and copy to the desktop's clipboard — and nothing more. | [`doc/capabilities.md`](doc/capabilities.md#clipboard-and-xnamespace) |
-| **Scene compositor** *(experimental)* | `-compositor on`: the server composites every window itself. Translucent windows and window opacity work without picom; external compositors still work and take over when they start. | [`doc/compositor.md`](doc/compositor.md) |
+| **Scene compositor** *(experimental)* | `-compositor on`: the server composites every window itself. Translucent windows and window opacity work without picom; the window manager sets per-window opacity and transforms through the XPRISM-SCENE protocol; external compositors still work and take over when they start. | [`doc/compositor.md`](doc/compositor.md) |
 | **Platform Abstraction Layer** | All OS-specific behaviour goes through one interface with per-OS backends; a test keeps new OS `#ifdef`s from spreading. | [`doc/pal.md`](doc/pal.md) |
 | **Everything from XLibre** | TearFree and atomic modesetting, NVIDIA driver support, seatd/logind, Xvfb, Xephyr, Xfbdev. | [XLibre](https://github.com/X11Libre/xserver) |
 
@@ -194,6 +194,7 @@ complete bubblewrap example.
 | [`doc/Xnamespace-protocol.md`](doc/Xnamespace-protocol.md) | The X-NAMESPACE protocol, including XPrism's listener and grant requests |
 | [`utils/xns-listen/README.md`](utils/xns-listen/README.md) | The launcher helper |
 | [`doc/compositor.md`](doc/compositor.md) | The server-side scene compositor and legacy compositor mode |
+| [`doc/xprism-scene-protocol.md`](doc/xprism-scene-protocol.md) | XPRISM-SCENE: how the window manager describes the scene |
 | [`doc/pal.md`](doc/pal.md) | The Platform Abstraction Layer and per-OS backends |
 | [`CODE_OVERVIEW.md`](CODE_OVERVIEW.md) | A map of the server's source tree |
 

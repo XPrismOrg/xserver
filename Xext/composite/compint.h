@@ -215,6 +215,7 @@ void compMarkAncestors(WindowPtr pWin);
 bool compSceneScreenInit(ScreenPtr pScreen);
 void compSceneYield(ClientPtr pClient, WindowPtr pWin);
 void compSceneResume(ClientPtr pClient, WindowPtr pWin);
+void compSceneExtensionInit(void);
 
 /*
  * compoverlay.c

@@ -446,6 +446,9 @@ CompositeExtensionInit(void)
 
     /* Initialization succeeded */
     noCompositeExtension = FALSE;
+
+    /* XPrism: the scene protocol, when the scene compositor is on */
+    compSceneExtensionInit();
 }
 
 static int

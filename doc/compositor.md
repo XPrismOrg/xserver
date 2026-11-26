@@ -31,8 +31,11 @@ handler) the compositor runs one frame per screen:
 3. **Paint.** Only inside the damaged region, it paints the root
    background, then every node in stacking order with Render's `Over`
    operator. Windows with an alpha channel (depth-32 ARGB visuals)
-   blend with what is under them. A window's `_NET_WM_WINDOW_OPACITY`
-   (the standard hint window managers set) becomes a constant alpha mask.
+   blend with what is under them. A window's opacity becomes a constant
+   alpha mask. The opacity comes from the window manager through
+   [XPRISM-SCENE](xprism-scene-protocol.md), or else from
+   `_NET_WM_WINDOW_OPACITY`. A transform set the same way is applied
+   with bilinear filtering.
 
 Rendering goes through Render, so it runs on the GPU wherever the DDX
 accelerates Render (glamor), and in software (fb) elsewhere.
@@ -86,7 +89,8 @@ no longer all-powerful by default (Phase V).
   (xsetroot, feh, nitrogen) work. Clients that draw *directly* onto the
   root window are painted over wherever windows change. External
   compositors have the same limitation.
-- **No effects protocol yet.** The XPrism-Scene protocol (window manager
-  sets transforms, opacity, shadows per node) is the next step. Until
-  then, `_NET_WM_WINDOW_OPACITY` is the only per-window attribute.
+- **Few effects yet.** The window manager can set opacity and a
+  transform per window through [XPRISM-SCENE](xprism-scene-protocol.md)
+  0.1. Shadows, blur and corner radius come in later versions, and
+  transforms don't affect input yet.
 - **Xinerama** is untested with the compositor on.
