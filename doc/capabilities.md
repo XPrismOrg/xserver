@@ -109,6 +109,31 @@ allowed by the ceiling, regardless of what the namespace is granted later.
 Capability checks are made in addition to Xnamespace's own isolation
 rules. A request has to pass both.
 
+### Legacy clients
+
+Applications that need traditional, unrestricted X11 get it explicitly,
+never silently (idea.txt section 7, AD-2):
+
+- A client authenticated with a cookie of the root namespace, or of
+  another `superpower` namespace, has unrestricted access. Each such
+  client is logged when it connects, with its namespace, pid and
+  command: `capability: client 5 (namespace "root", pid 1234, xterm) is
+  unconfined: unrestricted X11 access`. A remote one is logged as a
+  warning.
+- A client whose cookie no namespace lists goes into `anon` and is
+  restricted. This makes the session's default policy for unlabeled
+  clients a choice of which cookie they're given: the root namespace's
+  for full legacy access (the default during the transition), any other
+  for restricted.
+- Without a namespace configuration there is no policy at all, and the
+  server warns once: `capability: no namespace configuration
+  (-namespace), so every client has unrestricted X11 access (legacy
+  mode)`.
+
+An application that must keep unrestricted X11 while the rest of the
+session is confined can run in a namespace of its own marked
+`superpower`; it is logged like the root namespace's clients.
+
 ## Capabilities
 
 | Capability | Checked at | Notes |

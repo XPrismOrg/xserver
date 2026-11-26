@@ -93,9 +93,12 @@ def _take_clipboard(conn):
                                         wid, clipboard, 0))
 
 
-def _cap_log(xserver):
+def _cap_log(xserver, unconfined=False):
+    """the capability log lines; with unconfined, those recording
+    unrestricted access, else the others"""
     return [line for line in xserver._read_stderr().splitlines()
-            if "capability:" in line]
+            if "capability:" in line and
+            ("unrestricted X11 access" in line) == unconfined]
 
 
 class TestCapabilityAudit:
@@ -299,6 +302,51 @@ class TestDefaultMode:
     def test_enforced(self, xserver):
         assert _inspect_other_window(xserver, SANDBOX_COOKIE) == [BAD_ACCESS]
         assert _inspect_other_window(xserver, GRANTED_COOKIE) == []
+
+
+def _unconfined_log(xserver):
+    return _cap_log(xserver, unconfined=True)
+
+
+class TestLegacyAccess:
+    """Unrestricted (legacy X11) access is explicit, never silent: each
+    unconfined client is logged, and so is a server without a policy."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_unconfined_clients_are_logged(self, xserver):
+        before = len(_unconfined_log(xserver))     # the harness's own client
+        root = _connect(xserver, ROOT_COOKIE)
+        sandboxed = _connect(xserver, SANDBOX_COOKIE)
+        _focus(root)
+        _focus(sandboxed)
+        log = _unconfined_log(xserver)[before:]
+        assert len(log) == 1, log
+        assert re.search(r'client \d+ \(namespace "root", pid \d+, .+\) is unconfined', log[0]), \
+            log[0]
+
+    def test_unrecognised_cookies_are_confined(self, xserver):
+        """the anon namespace: what a client whose cookie no namespace
+        lists gets, restricted"""
+        conn = RawX11Connection(xserver.display_num, auth=(COOKIE_PROTO, b"\x99" * 16))
+        _focus(conn)
+        assert not any('"anon"' in line for line in _unconfined_log(xserver))
+        assert _inspect_other_window(xserver, b"\x99" * 16) == [BAD_ACCESS]
+
+
+class TestNoPolicy:
+    @pytest.fixture
+    def xserver_args(self):
+        return []
+
+    def test_legacy_mode_is_logged(self, xserver):
+        for _ in range(2):
+            _focus(RawX11Connection(xserver.display_num))
+        log = _unconfined_log(xserver)
+        assert len(log) == 1, log
+        assert "no namespace configuration" in log[0]
 
 
 XKB_USE_EXTENSION, XKB_SELECT_EVENTS, XKB_GET_STATE = 0, 1, 4

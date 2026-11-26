@@ -592,6 +592,41 @@ remove_seat(ClientPtr unused, void *closure)
     return TRUE;
 }
 
+/* legacy compatibility (idea.txt section 7) is explicit, never silent:
+   every client with unrestricted access is on record, and so is a server
+   with no policy at all */
+static void
+note_unconfined(ClientPtr client)
+{
+    static unsigned long warned_generation;
+
+    if (xpCapMode == XP_CAP_MODE_OFF || client == serverClient)
+        return;
+    if (!provider_grants) {
+        if (warned_generation != serverGeneration) {
+            warned_generation = serverGeneration;
+            LogMessageVerb(X_WARNING, 0,
+                           "capability: no namespace configuration (-namespace), so every "
+                           "client has unrestricted X11 access (legacy mode)\n");
+        }
+        return;
+    }
+    if (provider_grants(client) != XP_CAP_ALL)
+        return;
+
+    char label[160] = "";
+    if (provider_label)
+        provider_label(client, label, sizeof(label));
+    pid_t pid = GetClientPid(client);
+    const char *cmd = GetClientCmdName(client);
+    Bool local = ClientIsLocal(client);
+    LogMessageVerb(local ? X_INFO : X_WARNING, 0,
+                   "capability: client %d (%s, pid %ld, %s) is unconfined: unrestricted "
+                   "X11 access%s\n", client->index, label[0] ? label : "unlabeled",
+                   (long) pid, cmd ? cmd : "unknown command",
+                   local ? "" : ", from another host");
+}
+
 static void
 cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
 {
@@ -599,6 +634,11 @@ cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
     ClientPtr client = info->client;
     CapClientRec *c = cap_client(client);
 
+    /* after Xnamespace placed it (callbacks run newest first) */
+    if (client->clientState == ClientStateRunning) {
+        note_unconfined(client);
+        return;
+    }
     if (!c || client->clientState != ClientStateGone)
         return;
     if (c->prompt) {
