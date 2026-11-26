@@ -67,7 +67,10 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: linux-compositor-${{ matrix.compositor }}-build-logs
-                  path: __BUILD/meson-logs/*
+                  path: |
+                      __BUILD/meson-logs/*
+                      __BUILD/test/piglit-results/*/summary
+                      __BUILD/test/piglit-results/*/long-summary
 
     freebsd:
         runs-on: ubuntu-latest

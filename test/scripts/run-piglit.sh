@@ -72,8 +72,9 @@ $PIGLIT_DIR/piglit summary html \
 	$PIGLIT_RESULTS_DIR
 
 if test $status != 0; then
-    echo "Some piglit tests failed."
-    echo "The list of failing tests can be found in $LONG_SUMMARY."
+    echo "Some piglit tests failed:"
+    grep -E ': (fail|crash)$' $LONG_SUMMARY || true
+    echo "The full list can be found in $LONG_SUMMARY."
 fi
 echo "An html page of the test status can be found at $PIGLIT_RESULTS_DIR/html/index.html"
 
