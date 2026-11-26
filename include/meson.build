@@ -329,6 +329,7 @@ endif
 conf_data.set('SVR4', cc.compiles(defines_svr4) ? '1' : false)
 conf_data.set_quoted('XKB_DFLT_RULES', get_option('xkb_default_rules'))
 conf_data.set('XORGSERVER', build_xorg ? '1' : false)
+conf_data.set('XPRISM_COMPOSITOR_DEFAULT', get_option('compositor_default') ? '1' : '0')
 conf_data.set_quoted('XCONFIGFILE', 'xorg.conf')
 conf_data.set_quoted('__XSERVERNAME__', 'Xorg')
 

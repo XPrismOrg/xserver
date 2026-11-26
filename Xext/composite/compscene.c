@@ -46,7 +46,7 @@
 
 #include <math.h>
 
-Bool sceneCompositorEnabled = FALSE;
+Bool sceneCompositorEnabled = XPRISM_COMPOSITOR_DEFAULT;  /* -Dcompositor_default */
 
 /* One node of the scene: a viewable top-level window. */
 typedef struct {

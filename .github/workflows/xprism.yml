@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-# XPrism CI: Linux (full build + test suite), FreeBSD and OpenBSD (build +
-# unit tests). The upstream XLibre workflows are disabled in this repo;
+# XPrism CI: Linux (full build and test suite, with the built-in compositor
+# off and on), FreeBSD and OpenBSD (build and unit tests). The upstream XLibre workflows are disabled in this repo;
 # this one reuses their package and build scripts.
 name: XPrism CI
 
@@ -24,10 +24,17 @@ env:
 
 jobs:
     linux:
+        # compositor: the whole suite, including XTS, once with the
+        # built-in compositor off and once with it on by default
+        name: linux (compositor ${{ matrix.compositor }})
+        strategy:
+            fail-fast: false
+            matrix:
+                compositor: [off, on]
         runs-on: ubuntu-latest
         timeout-minutes: 120
         env:
-            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false
+            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false -Dcompositor_default=${{ matrix.compositor == 'on' }}
             LIBGL_ALWAYS_SOFTWARE: 1
             GALLIUM_DRIVER: llvmpipe
             PIGLIT_PLATFORM: x11_egl
@@ -59,7 +66,7 @@ jobs:
               if: always()
               uses: actions/upload-artifact@v4
               with:
-                  name: linux-build-logs
+                  name: linux-compositor-${{ matrix.compositor }}-build-logs
                   path: __BUILD/meson-logs/*
 
     freebsd:

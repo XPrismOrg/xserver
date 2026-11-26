@@ -145,3 +145,5 @@ option('test_rendercheck_triangles', type: 'boolean', value: false,
        description: 'testsuite: run rendercheck triangles tests (might fail on Xephyr)')
 option('test_xephyr_gles', type: 'boolean', value: true,
        description: 'testsuite: run gles2/gles3 tests on Xephyr (might fail w/o DRI)')
+option('compositor_default', type: 'boolean', value: false,
+       description: 'XPrism: run the built-in compositor unless -compositor off is given')
