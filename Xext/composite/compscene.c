@@ -609,6 +609,32 @@ scenePaintShadow(ScreenPtr pScreen, PicturePtr pDst, WindowPtr pWin,
     RegionInit(&box, (BoxPtr) &node->shadowBox, 1);
     RegionNull(&clip);
     RegionIntersect(&clip, pDamage, &box);
+
+    /* Nothing of the shadow shows through the window itself, even when
+       it is translucent. Only the corner squares keep it, where rounding
+       cuts the window away. */
+    int x1 = pWin->drawable.x - bw, y1 = pWin->drawable.y - bw;
+    int x2 = x1 + pWin->drawable.width + 2 * bw;
+    int y2 = y1 + pWin->drawable.height + 2 * bw;
+    int r = min(node->radius, min(x2 - x1, y2 - y1) / 2);
+    BoxRec cross[2] = {
+        { .x1 = x1 + r, .y1 = y1, .x2 = x2 - r, .y2 = y2 },
+        { .x1 = x1, .y1 = y1 + r, .x2 = x2, .y2 = y2 - r },
+    };
+    RegionPtr pBody = RegionCreate(NullBox, 0);
+    if (pBody) {
+        RegionRec part;
+        for (int k = 0; k < 2; k++) {
+            if (cross[k].x1 >= cross[k].x2 || cross[k].y1 >= cross[k].y2)
+                continue;
+            RegionInit(&part, &cross[k], 1);
+            RegionUnion(pBody, pBody, &part);
+            RegionUninit(&part);
+        }
+        RegionIntersect(pBody, pBody, &pWin->borderSize);
+        RegionSubtract(&clip, &clip, pBody);
+        RegionDestroy(pBody);
+    }
     if (RegionNotEmpty(&clip)) {
         CARD32 c = node->shadowColor;
         CARD16 a = (c >> 24) * 0x101;

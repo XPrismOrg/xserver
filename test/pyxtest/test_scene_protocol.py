@@ -324,6 +324,15 @@ def test_blurred_shadow_fades(xvfb):
     assert x.pixel(150, 150) == RED
 
 
+def test_shadow_hidden_behind_translucent_window(xvfb):
+    x, w, wm = _wm_and_window(xvfb)
+    wm.set(w, OPACITY, 0x80000000)
+    wm.decorate(w, RADIUS | SHADOW, radius=20, dx=10, dy=10, color=0xFFFFFFFF)
+    assert _near(x.pixel(150, 150), 0x7F0000)   # no white through the window
+    assert x.pixel(205, 150) == WHITE           # shadow beside it
+    assert x.pixel(198, 198) == WHITE           # and in the rounded-off corner
+
+
 def test_shadow_falls_on_windows_below(xvfb):
     x = Client(xvfb)
     below = x.window(50, 50, 300, 300, BLUE)
