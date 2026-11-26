@@ -16,7 +16,7 @@
 
 #define XNS_EXTENSION_NAME      "X-NAMESPACE"
 #define XNS_MAJOR_VERSION       1
-#define XNS_MINOR_VERSION       1
+#define XNS_MINOR_VERSION       2
 
 /* maximum namespace name length (keeps names config-file expressible) */
 #define XNS_NAME_MAX            255
@@ -36,7 +36,13 @@
 #define X_XnsRemoveListener     11  /* since 1.1 */
 #define X_XnsGetClientInfo      12  /* since 1.1 */
 #define X_XnsSetNamespaceGrants 13  /* since 1.1 */
-#define XnsNumberRequests       14
+#define X_XnsSetPermissionAgent 14  /* since 1.2 */
+#define X_XnsAnswerPermission   15  /* since 1.2 */
+#define XnsNumberRequests       16
+
+/* events (since 1.2) */
+#define XnsPermissionRequest    0
+#define XnsNumberEvents         1
 
 /* XPrism capabilities (grants), see doc/capabilities.md. Bit n is the
    n-th entry of enum xp_cap in dix/capability_priv.h. Since 1.1. */
@@ -418,5 +424,58 @@ typedef struct {
     /* CARD8 name[nameLen], padded */
 } xXnsSetNamespaceGrantsReq;
 #define sz_xXnsSetNamespaceGrantsReq 12
+
+/* SetPermissionAgent (since 1.2): the caller becomes (enable = 1) or
+   stops being (0) the permission agent, which is asked when a confined
+   client lacks a capability (capability mode enforce). One agent at a
+   time: BadAccess if another client is it. No reply. */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsSetPermissionAgent */
+    CARD16  length;
+    CARD8   enable;
+    CARD8   pad0;
+    CARD16  pad1;
+} xXnsSetPermissionAgentReq;
+#define sz_xXnsSetPermissionAgentReq 8
+
+/* answers */
+#define XNS_PERMISSION_DENY_ONCE        0
+#define XNS_PERMISSION_ALLOW_ONCE       1
+#define XNS_PERMISSION_ALLOW_ALWAYS     2   /* while the client runs */
+#define XNS_PERMISSION_DENY_ALWAYS      3   /* and do not ask again */
+
+/* AnswerPermission (since 1.2): answer a PermissionRequest. Only the
+   agent may; BadAccess for others. A prompt that is no longer open (it
+   timed out, its client went) is ignored. No reply. */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsAnswerPermission */
+    CARD16  length;
+    CARD32  id;
+    CARD8   answer;             /* XNS_PERMISSION_* */
+    CARD8   pad0;
+    CARD16  pad1;
+} xXnsAnswerPermissionReq;
+#define sz_xXnsAnswerPermissionReq 12
+
+/* PermissionRequest event (since 1.2), to the agent: a client's request
+   needs a capability it lacks; the client waits for the answer (at most
+   60 seconds, then refused). clientResource is the client's resource
+   base, which GetClientInfo takes. */
+typedef struct {
+    BYTE    type;               /* event base + XnsPermissionRequest */
+    CARD8   capability;         /* bit number, as XNS_GRANT_* */
+    CARD16  sequenceNumber;
+    CARD32  id;
+    CARD32  clientResource;
+    CARD32  target;             /* the resource the request is about, or 0 */
+    CARD8   majorOpcode;        /* the request */
+    CARD8   pad0;
+    CARD16  minorOpcode;
+    CARD32  timestamp;
+    CARD32  pad1;
+    CARD32  pad2;
+} xXnsPermissionRequestEvent;
 
 #endif /* _XSERVER_NAMESPACEPROTO_H */

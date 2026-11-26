@@ -31,6 +31,18 @@ A missing capability is logged once per client and capability:
 If the build has no request-name registry, the request is shown as
 `request <major>.<minor>`.
 
+## Permission prompts
+
+In `enforce` mode, a desktop's permission agent can ask the user instead
+of refusing: it registers with X-NAMESPACE `SetPermissionAgent`, and
+gets a `PermissionRequest` event when a confined client's request lacks a
+capability. The client waits; the agent answers allow or deny, once or
+for as long as the client runs, and the request runs again with the
+answer (see [Xnamespace-protocol.md](Xnamespace-protocol.md), 6.14 to
+6.16). Without an agent, or without an answer within 60 seconds, the
+request is refused as before. The server log shows each prompt and its
+answer.
+
 ## Which clients hold which capabilities
 
 Without a policy provider (no `-namespace` option), every client holds

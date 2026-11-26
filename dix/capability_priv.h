@@ -84,6 +84,40 @@ Bool XpCapHasFocus(ClientPtr client, DeviceIntPtr dev);
 int XpCapCheckKeyboardGrab(ClientPtr client, DeviceIntPtr dev, WindowPtr pWin,
                            Bool active);
 
+/*
+ * Permission prompts. In enforce mode, when a client's request is refused
+ * for a capability it lacks, a prompter (the permission agent of
+ * X-NAMESPACE) may ask the user instead. The client is suspended; when
+ * the answer comes (XpCapAnswer), the request runs again, and the answer
+ * decides the check. Without an answer in XP_CAP_PROMPT_TIMEOUT ms, it is
+ * refused.
+ *
+ * Only capabilities whose checks come before a request changes anything
+ * are asked for (see prompt_cap_ok in dix/capability.c).
+ */
+#define XP_CAP_PROMPT_TIMEOUT   60000
+
+enum xp_cap_answer {
+    XP_CAP_DENY_ONCE    = 0,    /* refuse this request */
+    XP_CAP_ALLOW_ONCE   = 1,    /* allow this request */
+    XP_CAP_ALLOW_ALWAYS = 2,    /* allow for as long as the client runs */
+    XP_CAP_DENY_ALWAYS  = 3,    /* refuse, and do not ask again */
+};
+
+/** ask about prompt @p id; FALSE when nobody can be asked */
+typedef Bool (*XpCapPromptProc)(ClientPtr client, enum xp_cap cap, XID target,
+                                uint32_t id);
+void XpCapSetPrompter(XpCapPromptProc prompt);
+/** answer prompt @p id; FALSE if there is no such prompt (any more) */
+Bool XpCapAnswer(uint32_t id, enum xp_cap_answer answer);
+/** refuse every open prompt (the agent went away) */
+void XpCapRefuseAll(void);
+
+/** the dispatcher, around each request (dix/dispatch.c). End may suspend
+    the client for a prompt; it then sets *result to Success. */
+void XpCapBeginRequest(ClientPtr client);
+void XpCapEndRequest(ClientPtr client, int *result);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

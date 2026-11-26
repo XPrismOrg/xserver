@@ -427,7 +427,8 @@ connected.
 
 ```
   GetClientInfo
-    client-resource: CARD32     (a resource of the client; 0 = caller)
+    client-resource: CARD32     (a resource of the client, or since 1.2
+                                 its resource base; 0 = caller)
   =>
     flags:       CARD8          (1 = came through a listener,
                                  2 = pid valid, 4 = uid valid)
@@ -466,6 +467,70 @@ unauthenticated clients and is never granted anything), `BadName`.
 
 `QueryNamespace` reports a namespace's grants in the former `pad1` field
 (all bits for a superpower namespace).
+
+### 6.14 SetPermissionAgent (since 1.2)
+
+The caller becomes (`enable` 1) or stops being (0) the permission agent.
+When a confined client's request is refused for a capability it lacks
+(capability mode `enforce`), the agent is asked instead: it gets a
+`PermissionRequest` event, and the client waits for the answer.
+
+```
+  SetPermissionAgent
+    enable: CARD8
+  =>
+    (no reply)
+```
+
+One agent at a time: `BadAccess` if another client is the agent.
+`BadValue` for `enable` other than 0 or 1. When the agent stops being one
+or disconnects, every open prompt is refused.
+
+### 6.15 AnswerPermission (since 1.2)
+
+```
+  AnswerPermission
+    id:     CARD32
+    answer: CARD8   0 deny once, 1 allow once,
+                    2 allow while the client runs, 3 deny and do not ask again
+  =>
+    (no reply)
+```
+
+Only the agent may answer (`BadAccess`). `BadValue` for other answers. An
+id that is no longer open (answered, timed out, its client gone) is
+ignored.
+
+### 6.16 PermissionRequest event (since 1.2)
+
+Sent to the agent; event base + 0.
+
+```
+  PermissionRequest
+    capability:     CARD8    bit number, as in SetNamespaceGrants
+    id:             CARD32   for AnswerPermission
+    clientResource: CARD32   the client's resource base; GetClientInfo takes it
+    target:         CARD32   the resource the request is about, or 0
+    majorOpcode:    CARD8    the request
+    minorOpcode:    CARD16
+    timestamp:      TIMESTAMP
+```
+
+The client's request, and the ones it sends after it, wait until the
+answer comes. The request then runs again, and the answer decides the
+capability check: allowed, it proceeds; refused, it fails with
+`BadAccess`. Without an answer in 60 seconds, the request is refused.
+"Allow while the client runs" and "deny and do not ask again" hold for
+that one client, not its namespace, until it disconnects.
+
+Only capabilities whose checks come before a request changes anything are
+asked for: `capture.screen`, `capture.window`, `input.inject`,
+`input.monitor`, `window.enumerate`, `window.inspect`,
+`display.configure`. The others are refused as before. Unconfined
+clients, audit mode, and the agent itself are never asked about.
+
+A request that Xnamespace's own isolation also refuses (a window of
+another namespace) fails after an "allow" too.
 
 7. Errors
 ---------

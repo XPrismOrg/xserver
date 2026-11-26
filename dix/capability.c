@@ -72,6 +72,7 @@
 #include "include/privates.h"
 #include "include/propertyst.h"
 #include "include/windowstr.h"
+#include "os/client_priv.h"
 #include "os/log_priv.h"
 #include "os/pal/identity.h"
 #include "Xext/xace.h"
@@ -121,15 +122,38 @@ XpCapSetProvider(XpCapGrantsProc grants, XpCapLabelProc label)
     provider_label = label;
 }
 
-/* per client: which missing capabilities were already logged */
+static Bool prompt_cap_ok(enum xp_cap cap);
+
+/* per client */
+typedef struct {
+    uint32_t logged;        /* missing capabilities already logged */
+    uint32_t allowed;       /* answered "allow always" */
+    uint32_t denied;        /* answered "deny always" */
+    uint32_t allow_once;    /* answered for the request that runs again */
+    uint32_t deny_once;
+    Bool in_request;        /* a request of this client is being run */
+    int ask;                /* capability to ask for after it, or -1 */
+    XID ask_target;
+    uint32_t prompt;        /* open prompt's id, or 0 */
+    OsTimerPtr timer;
+} CapClientRec;
+
 static DevPrivateKeyRec capClientPrivKeyRec;
+static XpCapPromptProc prompter;
+
+static CapClientRec *
+cap_client(ClientPtr client)
+{
+    if (!client || !dixPrivateKeyRegistered(&capClientPrivKeyRec))
+        return NULL;
+    return dixLookupPrivate(&client->devPrivates, &capClientPrivKeyRec);
+}
 
 static uint32_t *
 logged_mask(ClientPtr client)
 {
-    if (!dixPrivateKeyRegistered(&capClientPrivKeyRec))
-        return NULL;
-    return dixLookupPrivate(&client->devPrivates, &capClientPrivKeyRec);
+    CapClientRec *c = cap_client(client);
+    return c ? &c->logged : NULL;
 }
 
 static void
@@ -180,9 +204,183 @@ XpCapCheck(ClientPtr client, enum xp_cap cap, XID target)
     if (grants & XP_CAP_BIT(cap))
         return Success;
 
+    CapClientRec *c = cap_client(client);
+    if (c && ((c->allowed | c->allow_once) & XP_CAP_BIT(cap)))
+        return Success;
+
     Bool deny = (xpCapMode == XP_CAP_MODE_ENFORCE);
+    if (deny && c && c->in_request && c->ask < 0 && prompter &&
+        prompt_cap_ok(cap) && !((c->denied | c->deny_once) & XP_CAP_BIT(cap))) {
+        /* refused for now; XpCapEndRequest asks, if the request fails */
+        c->ask = cap;
+        c->ask_target = target;
+        return BadAccess;
+    }
     log_missing(client, cap, target, deny);
     return deny ? BadAccess : Success;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Permission prompts
+ * ------------------------------------------------------------------ */
+
+static uint32_t last_prompt_id;
+
+void
+XpCapSetPrompter(XpCapPromptProc prompt)
+{
+    prompter = prompt;
+}
+
+/* checks made before the request changes anything, so that it can run
+   again: lookups, and the extension dispatch hook */
+static Bool
+prompt_cap_ok(enum xp_cap cap)
+{
+    switch (cap) {
+    case XP_CAP_CAPTURE_SCREEN:
+    case XP_CAP_CAPTURE_WINDOW:
+    case XP_CAP_INPUT_INJECT:
+    case XP_CAP_INPUT_MONITOR:
+    case XP_CAP_WINDOW_ENUMERATE:
+    case XP_CAP_WINDOW_INSPECT:
+    case XP_CAP_DISPLAY_CONFIGURE:
+        return TRUE;
+    default:
+        /* window.manage and input.virtual_seat are checked part way
+           through requests that change things; clipboard checks choose
+           a selection rather than refuse */
+        return FALSE;
+    }
+}
+
+void
+XpCapBeginRequest(ClientPtr client)
+{
+    CapClientRec *c = cap_client(client);
+    if (!c)
+        return;
+    c->in_request = TRUE;
+    c->ask = -1;
+}
+
+static ClientPtr
+prompt_client(uint32_t id, CapClientRec **pc)
+{
+    for (int i = 1; i < currentMaxClients; i++) {
+        CapClientRec *c = clients[i] ? cap_client(clients[i]) : NULL;
+        if (c && id && c->prompt == id) {
+            *pc = c;
+            return clients[i];
+        }
+    }
+    return NULL;
+}
+
+static void
+end_prompt(ClientPtr client, CapClientRec *c)
+{
+    c->prompt = 0;
+    TimerFree(c->timer);
+    c->timer = NULL;
+    if (!client->clientGone)
+        AttendClient(client);
+}
+
+static CARD32
+prompt_timeout(OsTimerPtr timer, CARD32 time, void *arg)
+{
+    XpCapAnswer((uint32_t) (uintptr_t) arg, XP_CAP_DENY_ONCE);
+    return 0;
+}
+
+void
+XpCapEndRequest(ClientPtr client, int *result)
+{
+    CapClientRec *c = cap_client(client);
+    if (!c)
+        return;
+    int cap = c->ask;
+    c->in_request = FALSE;
+    c->ask = -1;
+    c->allow_once = c->deny_once = 0;
+    if (cap < 0)
+        return;
+    if (*result != BadAccess || client->clientGone || !prompter) {
+        /* refused without an error (QueryKeymap's empty map), or the
+           client went: nothing to ask */
+        log_missing(client, cap, c->ask_target, TRUE);
+        return;
+    }
+
+    uint32_t id = ++last_prompt_id;
+    if (!id)
+        id = ++last_prompt_id;
+    if (!prompter(client, cap, c->ask_target, id)) {
+        log_missing(client, cap, c->ask_target, TRUE);
+        return;
+    }
+    LogMessageVerb(X_INFO, 1, "capability: asking about %s for client %d (prompt %u)\n",
+                   cap_names[cap], client->index, id);
+
+    /* run the request again once answered (as ProcGrabServer waits) */
+    c->prompt = id;
+    c->ask = cap;           /* remembered for the answer */
+    ResetCurrentRequest(client);
+    client->sequence--;
+    IgnoreClient(client);
+    c->timer = TimerSet(NULL, 0, XP_CAP_PROMPT_TIMEOUT, prompt_timeout,
+                        (void *) (uintptr_t) id);
+    *result = Success;
+}
+
+Bool
+XpCapAnswer(uint32_t id, enum xp_cap_answer answer)
+{
+    CapClientRec *c;
+    ClientPtr client = prompt_client(id, &c);
+    if (!client)
+        return FALSE;
+    uint32_t bit = XP_CAP_BIT(c->ask);
+
+    switch (answer) {
+    case XP_CAP_ALLOW_ALWAYS:   c->allowed |= bit; break;
+    case XP_CAP_ALLOW_ONCE:     c->allow_once |= bit; break;
+    case XP_CAP_DENY_ALWAYS:    c->denied |= bit; c->deny_once |= bit; break;
+    default:                    c->deny_once |= bit; break;
+    }
+    LogMessageVerb(X_INFO, 1, "capability: prompt %u for %s of client %d: %s\n",
+                   id, cap_names[c->ask], client->index,
+                   answer == XP_CAP_ALLOW_ALWAYS ? "allowed" :
+                   answer == XP_CAP_ALLOW_ONCE ? "allowed once" :
+                   answer == XP_CAP_DENY_ALWAYS ? "denied" : "denied once");
+    c->ask = -1;
+    end_prompt(client, c);
+    return TRUE;
+}
+
+void
+XpCapRefuseAll(void)
+{
+    for (int i = 1; i < currentMaxClients; i++) {
+        CapClientRec *c = clients[i] ? cap_client(clients[i]) : NULL;
+        if (c && c->prompt)
+            XpCapAnswer(c->prompt, XP_CAP_DENY_ONCE);
+    }
+}
+
+static void
+cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
+{
+    NewClientInfoRec *info = calldata;
+    ClientPtr client = info->client;
+    CapClientRec *c = cap_client(client);
+
+    if (c && client->clientState == ClientStateGone && c->prompt) {
+        c->prompt = 0;
+        TimerFree(c->timer);
+        c->timer = NULL;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -427,7 +625,7 @@ XpCapInit(void)
     if (xpCapMode == XP_CAP_MODE_OFF)
         return;
 
-    if (!dixRegisterPrivateKey(&capClientPrivKeyRec, PRIVATE_CLIENT, sizeof(uint32_t)))
+    if (!dixRegisterPrivateKey(&capClientPrivKeyRec, PRIVATE_CLIENT, sizeof(CapClientRec)))
         FatalError("capability: cannot register client private\n");
 
     if (!(XaceRegisterCallback(XACE_RESOURCE_ACCESS, cap_resource, NULL) &&
@@ -435,6 +633,7 @@ XpCapInit(void)
           XaceRegisterCallback(XACE_SELECTION_ACCESS, cap_selection, NULL) &&
           XaceRegisterCallback(XACE_RECEIVE_ACCESS, cap_receive, NULL) &&
           AddCallback(&ExtensionDispatchCallback, cap_ext_dispatch, NULL) &&
-          AddCallback(&DeviceAccessCallback, cap_device, NULL)))
+          AddCallback(&DeviceAccessCallback, cap_device, NULL) &&
+          AddCallback(&ClientStateCallback, cap_client_state, NULL)))
         FatalError("capability: cannot register checks\n");
 }

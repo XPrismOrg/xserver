@@ -106,6 +106,7 @@ Equipment Corporation.
 #include <X11/fonts/fontstruct.h>
 #include <X11/fonts/libxfont2.h>
 
+#include "dix/capability_priv.h"
 #include "dix/client_priv.h"
 #include "dix/colormap_priv.h"
 #include "dix/cursor_priv.h"
@@ -550,6 +551,7 @@ Dispatch(void)
                     result = BadLength;
                 else {
                     result = Success;
+                    XpCapBeginRequest(client);
                     /* On extension requests, call the extension dispatch hook */
                     if ((client->majorOp >= EXTENSION_BASE) && ExtensionDispatchCallback) {
                         ExtensionEntry *ext = GetExtensionEntry(client->majorOp);
@@ -565,6 +567,9 @@ Dispatch(void)
                             (*client->requestVector[client->majorOp]) (client);
                         currentClient = NULL;
                     }
+                    /* may suspend the client to ask the user, and run
+                       the request again */
+                    XpCapEndRequest(client, &result);
                 }
                 if (!SmartScheduleSignalEnable)
                     SmartScheduleTime = GetTimeInMillis();

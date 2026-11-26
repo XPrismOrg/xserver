@@ -52,6 +52,7 @@ if pytest.found()
     # This needs to be kept in sync with the test_foo.py files in the tree
     tests_pyxtest = [
         'test_capability.py',
+        'test_permission_prompt.py',
      'test_clipboard_grants.py',
      'test_randr_access.py',
      'test_compositor.py',

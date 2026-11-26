@@ -500,6 +500,14 @@ ProcXnsGetClientInfo(ClientPtr client)
     if (stuff->clientResource != 0) {
         int rc = dixLookupResourceOwner(&target, stuff->clientResource, client,
                                         DixGetAttrAccess);
+        /* a client's resource base (PermissionRequest), which need not
+           name a resource */
+        int index = dixClientIdForXID(stuff->clientResource);
+        if (rc != Success && index > 0 && index < currentMaxClients &&
+            clients[index] && stuff->clientResource == clients[index]->clientAsMask) {
+            target = clients[index];
+            rc = Success;
+        }
         if (rc != Success)
             return rc;
     }
@@ -555,6 +563,99 @@ ProcXnsGetClientInfo(ClientPtr client)
 }
 
 /* ------------------------------------------------------------------ *
+ *  Permission agent (since 1.2)
+ * ------------------------------------------------------------------ */
+
+static ClientPtr permissionAgent;
+static int xnsEventBase;
+
+static Bool
+XnsPrompt(ClientPtr client, enum xp_cap cap, XID target, uint32_t id)
+{
+    ClientPtr agent = permissionAgent;
+    if (!agent || agent->clientGone || agent == client)
+        return FALSE;
+
+    xXnsPermissionRequestEvent ev = {
+        .type = xnsEventBase + XnsPermissionRequest,
+        .sequenceNumber = agent->sequence,
+        .capability = cap,
+        .id = id,
+        .clientResource = client->clientAsMask,
+        .target = target,
+        .majorOpcode = client->majorOp,
+        .minorOpcode = client->minorOp,
+        .timestamp = currentTime.milliseconds,
+    };
+    WriteEventsToClient(agent, 1, (xEvent *) &ev);
+    return TRUE;
+}
+
+static void _X_COLD
+SXnsPermissionRequestEvent(xEvent *from, xEvent *to)
+{
+    xXnsPermissionRequestEvent *f = (xXnsPermissionRequestEvent *) from;
+    xXnsPermissionRequestEvent *t = (xXnsPermissionRequestEvent *) to;
+
+    *t = *f;
+    swaps(&t->sequenceNumber);
+    swapl(&t->id);
+    swapl(&t->clientResource);
+    swapl(&t->target);
+    swaps(&t->minorOpcode);
+    swapl(&t->timestamp);
+}
+
+static void
+XnsAgentGone(CallbackListPtr *pcbl, void *unused, void *calldata)
+{
+    NewClientInfoRec *info = calldata;
+
+    if (info->client == permissionAgent && info->client->clientState == ClientStateGone) {
+        permissionAgent = NULL;
+        XpCapRefuseAll();
+    }
+}
+
+static int
+ProcXnsSetPermissionAgent(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXnsSetPermissionAgentReq);
+
+    if (stuff->enable > 1) {
+        client->errorValue = stuff->enable;
+        return BadValue;
+    }
+    if (!stuff->enable) {
+        if (permissionAgent == client) {
+            permissionAgent = NULL;
+            XpCapRefuseAll();
+        }
+        return Success;
+    }
+    if (permissionAgent && permissionAgent != client)
+        return BadAccess;
+    permissionAgent = client;
+    return Success;
+}
+
+static int
+ProcXnsAnswerPermission(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXnsAnswerPermissionReq);
+    X_REQUEST_FIELD_CARD32(id);
+
+    if (stuff->answer > XNS_PERMISSION_DENY_ALWAYS) {
+        client->errorValue = stuff->answer;
+        return BadValue;
+    }
+    if (client != permissionAgent)
+        return BadAccess;
+    XpCapAnswer(stuff->id, (enum xp_cap_answer) stuff->answer);
+    return Success;
+}
+
+/* ------------------------------------------------------------------ *
  *  Dispatch (registered for both proc and sproc - all field swapping
  *  happens inside the handlers via the X_REQUEST_* macros, like DPMS)
  * ------------------------------------------------------------------ */
@@ -586,6 +687,8 @@ ProcXnsDispatch(ClientPtr client)
     case X_XnsRemoveListener:      return ProcXnsRemoveListener(client);
     case X_XnsGetClientInfo:       return ProcXnsGetClientInfo(client);
     case X_XnsSetNamespaceGrants:  return ProcXnsSetNamespaceGrants(client);
+    case X_XnsSetPermissionAgent:  return ProcXnsSetPermissionAgent(client);
+    case X_XnsAnswerPermission:    return ProcXnsAnswerPermission(client);
     default:                       return BadRequest;
     }
 }
@@ -600,7 +703,14 @@ ProcXnsDispatch(ClientPtr client)
 void
 XnsProtoExtensionInit(void)
 {
-    AddExtension(XNS_EXTENSION_NAME, 0, 0,
-                 ProcXnsDispatch, ProcXnsDispatch,
-                 NULL, StandardMinorOpcode);
+    ExtensionEntry *ext = AddExtension(XNS_EXTENSION_NAME, XnsNumberEvents, 0,
+                                       ProcXnsDispatch, ProcXnsDispatch,
+                                       NULL, StandardMinorOpcode);
+    if (!ext)
+        return;
+    xnsEventBase = ext->eventBase;
+    EventSwapVector[xnsEventBase + XnsPermissionRequest] = SXnsPermissionRequestEvent;
+    permissionAgent = NULL;
+    if (AddCallback(&ClientStateCallback, XnsAgentGone, NULL))
+        XpCapSetPrompter(XnsPrompt);
 }
