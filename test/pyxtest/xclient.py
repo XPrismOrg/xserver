@@ -180,6 +180,7 @@ class RawX11Connection:
         self.root_window = 0
         self.root_visual = 0
         self.root_depth = 0
+        self.num_screens = 0
         self._resource_id_base = 0
         self._resource_id_mask = 0
         self._next_resource_id = 0
@@ -249,6 +250,7 @@ class RawX11Connection:
             struct.unpack_from(f"{bo}IIIIHH BB", data, 0)
         )
 
+        self.num_screens = num_screens
         self._resource_id_base = res_base
         self._resource_id_mask = res_mask
         self._next_resource_id = 1

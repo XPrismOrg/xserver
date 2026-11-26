@@ -113,7 +113,8 @@ typedef struct {
     int sizeInBytes;
     int ncolors;
     int numCrtcs;
-    vfbCrtcInfoPtr crtcs;
+    vfbCrtcInfoPtr crtcs;       /* owned by this screen */
+    Bool crtcSizeSet;           /* -crtcs N@WxH, else CRTCs match the screen */
     char *pfbMemory;
     XWDColor *pXWDCmap;
     XWDFileHeader *pXWDHeader;
@@ -205,12 +206,22 @@ vfbSetCrtcInfo(vfbScreenInfoPtr screen, int numCrtcs, int crtcWidth,
     screen->numCrtcs = numCrtcs;
 }
 
+/* A new screen with the defaults, including any -crtcs given before the
+   first -screen. Each screen owns its CRTC array: sharing the default's
+   made every screen free (and -crtcs reallocate) the same memory. */
 static vfbScreenInfoPtr
 vfbInitializeScreenInfo(vfbScreenInfoPtr screen)
 {
     *screen = defaultScreenInfo;
+    screen->crtcs = NULL;
+    screen->numCrtcs = 0;
 
-    if (screen->numCrtcs == 0) {
+    if (defaultScreenInfo.numCrtcs > 0) {
+        vfbSetCrtcInfo(screen, defaultScreenInfo.numCrtcs, 0, 0);
+        memcpy(screen->crtcs, defaultScreenInfo.crtcs,
+               defaultScreenInfo.numCrtcs * sizeof(*screen->crtcs));
+    }
+    else {
         vfbSetCrtcInfo(screen, VFB_DEFAULT_NUM_CRTCS, screen->width,
                        screen->height);
     }
@@ -276,6 +287,8 @@ freeScreenInfo(vfbScreenInfoPtr pvfb)
     }
 
     free(pvfb->crtcs);
+    pvfb->crtcs = NULL;
+    pvfb->numCrtcs = 0;
 }
 
 void
@@ -349,7 +362,7 @@ ddxProcessArgument(int argc, char *argv[], int i)
     }
 
     if (lastScreen == -1)
-        currentScreen = vfbInitializeScreenInfo(&defaultScreenInfo);
+        currentScreen = &defaultScreenInfo;
     else
         currentScreen = &vfbScreens[lastScreen];
 
@@ -503,16 +516,10 @@ ddxProcessArgument(int argc, char *argv[], int i)
 
         }
 
-        if (crtcWidth > currentScreen->width ||
-            crtcHeight > currentScreen->height) {
-            ErrorF("CRTC size cannot exceed screen size\n");
-            UseMsg();
-            FatalError("CRTC size %dx%d exceeds screen size %dx%d\n",
-                       crtcWidth, crtcHeight,
-                       currentScreen->width, currentScreen->height);
-        }
-
+        /* The size is checked against the screen's in InitOutput, once
+           every -screen has been seen. */
         vfbSetCrtcInfo(currentScreen, numCrtcs, crtcWidth, crtcHeight);
+        currentScreen->crtcSizeSet = strchr(argv[i + 1], '@') != NULL;
         return 2;
     }
 
@@ -1242,16 +1249,23 @@ InitOutput(int argc, char **argv)
     if (vfbNumScreens < 1) {
         vfbScreens = &defaultScreenInfo;
         vfbNumScreens = 1;
+        if (defaultScreenInfo.numCrtcs == 0)
+            vfbSetCrtcInfo(&defaultScreenInfo, VFB_DEFAULT_NUM_CRTCS, 0, 0);
     }
 
-    /* CRTC size must not exceed the screen size.  Enforced here, after all
-       arguments have been processed, so it holds regardless of the order in
-       which -screen and -crtcs appear on the command line. */
+    /* CRTCs without an explicit size (-crtcs N@WxH) match their screen;
+       explicit sizes must not exceed it. Done here, after all arguments
+       have been processed, so it holds regardless of the order in which
+       -screen and -crtcs appear on the command line. */
     for (i = 0; i < vfbNumScreens; i++) {
         for (int c = 0; c < vfbScreens[i].numCrtcs; c++) {
             vfbCrtcInfoPtr crtc = &vfbScreens[i].crtcs[c];
-            if (crtc->width > vfbScreens[i].width ||
-                crtc->height > vfbScreens[i].height) {
+            if (!vfbScreens[i].crtcSizeSet) {
+                crtc->width = vfbScreens[i].width;
+                crtc->height = vfbScreens[i].height;
+            }
+            else if (crtc->width > vfbScreens[i].width ||
+                     crtc->height > vfbScreens[i].height) {
                 FatalError("CRTC %d size %dx%d exceeds screen %d's size %dx%d\n",
                            c, crtc->width, crtc->height, i,
                            vfbScreens[i].width, vfbScreens[i].height);
