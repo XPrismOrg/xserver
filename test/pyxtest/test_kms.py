@@ -64,6 +64,11 @@ def _seat_of(node):
 
 @pytest.fixture(scope="module")
 def vkms():
+    # Opt-in: these start real Xorg servers on a DRM device. On a
+    # developer's machine, next to the desktop's GPU, that has taken the
+    # desktop down; CI sets it.
+    if os.environ.get("XPRISM_KMS_TESTS") != "1":
+        pytest.skip("KMS tests run only with XPRISM_KMS_TESTS=1 (CI)")
     node = kms.find_vkms()
     if not node:
         pytest.skip("no vkms device")

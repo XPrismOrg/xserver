@@ -73,6 +73,7 @@ jobs:
                 sudo chmod 0666 /dev/dri/card*
                 ls -l /dev/dri
                 for c in /sys/class/drm/card[0-9]; do udevadm info "$c" | grep -E "DEVPATH|ID_SEAT"; done
+                echo "XPRISM_KMS_TESTS=1" >> "$GITHUB_ENV"
 
             - name: build and test
               run: .github/scripts/ubuntu/run-xserver-build-and-test.sh
