@@ -52,6 +52,7 @@ SOFTWARE.
 #include <X11/Xproto.h>
 #include <X11/extensions/XI2.h>
 
+#include "dix/capability_priv.h"
 #include "dix/cursor_priv.h"
 #include "dix/devices_priv.h"
 #include "dix/dix_priv.h"
@@ -544,8 +545,12 @@ AddPassiveGrabToList(ClientPtr client, GrabPtr pGrab)
         pGrab->pointerMode == GrabModeSync)
         access_mode |= DixFreezeAccess;
     rc = dixCallDeviceAccessCallback(client, pGrab->device, access_mode);
-    if (rc != Success)
+    if (rc == Success)
+        rc = XpCapCheckKeyboardGrab(client, pGrab->device, pGrab->window, FALSE);
+    if (rc != Success) {
+        FreeGrab(pGrab);
         return rc;
+    }
 
     /* Remove all grabs that match the new one exactly */
     for (GrabPtr grab = wPassiveGrabs(pGrab->window); grab; grab = grab->next) {

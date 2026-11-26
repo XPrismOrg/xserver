@@ -13,6 +13,8 @@
 #include "dix/extension_priv.h"
 #include "dix/registry_priv.h"
 
+#include "dix/capability_priv.h"
+
 #include "namespace.h"
 #include "hooks.h"
 
@@ -31,6 +33,21 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
         case X_GetModifierMapping:
         case X_GrabButton: // needed by xterm -- should be safe
             goto pass;
+        // keyboard grabs and the keys held down: the capability checks
+        // scope them to the client with the focus (dix/capability.c)
+        case X_GrabKeyboard:
+        case X_GrabKey:
+        case X_QueryKeymap:
+        case X_UngrabKeyboard:
+        case X_UngrabKey:
+        case X_AllowEvents:
+            goto pass;
+        // moving the focus among its windows, while it has it; taking
+        // it is the window manager's
+        case X_SetInputFocus:
+            if (XpCapHasFocus(client, param->dev))
+                goto pass;
+            goto block;
         case EXTENSION_MAJOR_XKEYBOARD:
             switch(client->minorOp) {
                 case X_kbSelectEvents:      // needed by xterm
@@ -49,7 +66,16 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
             switch (client->minorOp) {
                 case X_ListInputDevices:
                 case X_XIQueryDevice:
+                case X_XIGrabDevice:            // menus (GTK, Qt)
+                case X_XIUngrabDevice:
+                case X_XIPassiveGrabDevice:
+                case X_XIPassiveUngrabDevice:
+                case X_XIAllowEvents:
                     goto pass;
+                case X_XISetFocus:
+                    if (XpCapHasFocus(client, param->dev))
+                        goto pass;
+                    goto block;
                 default:
                     XNS_HOOK_LOG("BLOCKED unhandled Xinput request\n");
                     goto block;
@@ -61,6 +87,6 @@ block:
     return;
 
 pass:
-    param->status = Success;
+    /* leaves another hook's denial (the capability checks run first) */
     return;
 }

@@ -41,8 +41,12 @@
  *                        compositor sees every window, so holding it also
  *                        grants capture.screen and capture.window.
  *
- * Known gaps, see docs/audit-phase1.md: CopyArea with IncludeInferiors from
- * one's own window (G1), core/XI grabs and QueryKeymap (input.monitor).
+ *   input.monitor (keys) keyboard grabs and QueryKeymap by a client
+ *                        without the focus, passive key grabs on others'
+ *                        windows (XpCapCheckKeyboardGrab, cap_device)
+ *
+ * Known gap, see docs/audit-phase1.md: CopyArea with IncludeInferiors from
+ * one's own window (G1).
  */
 #include <dix-config.h>
 
@@ -58,6 +62,7 @@
 
 #include "dix/capability_priv.h"
 #include "dix/devices_priv.h"
+#include "dix/input_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/extension_priv.h"
 #include "dix/registry_priv.h"
@@ -358,10 +363,56 @@ cap_receive(CallbackListPtr *pcbl, void *unused, void *calldata)
     }
 }
 
+/* is @p pWin, or one of its ancestors, a window of @p client? */
+static Bool
+in_own_window(ClientPtr client, WindowPtr pWin)
+{
+    for (; pWin && pWin->parent; pWin = pWin->parent)
+        if (dixClientIdForXID(pWin->drawable.id) == client->index)
+            return TRUE;
+    return FALSE;
+}
+
+/* does @p client have the focus of keyboard @p dev: is the focus window,
+   or with PointerRoot the window under the pointer, in one of its
+   windows? */
+Bool
+XpCapHasFocus(ClientPtr client, DeviceIntPtr dev)
+{
+    DeviceIntPtr kbd = InputDevIsMaster(dev) ? dev : GetMaster(dev, MASTER_KEYBOARD);
+
+    if (!kbd || !kbd->focus)
+        return FALSE;
+    WindowPtr focus = kbd->focus->win;
+    if (focus == NoneWin || focus == FollowKeyboardWin)
+        return FALSE;
+    if (focus == PointerRootWin) {
+        DeviceIntPtr ptr = GetMaster(kbd, MASTER_POINTER);
+        focus = ptr ? InputDevSpriteWindow(ptr) : NULL;
+    }
+    return in_own_window(client, focus);
+}
+
+int
+XpCapCheckKeyboardGrab(ClientPtr client, DeviceIntPtr dev, WindowPtr pWin, Bool active)
+{
+    if (!client || client == serverClient || !dev || !dev->key)
+        return Success;
+    if (active ? XpCapHasFocus(client, dev) : in_own_window(client, pWin))
+        return Success;
+    return XpCapCheck(client, XP_CAP_INPUT_MONITOR, pWin ? pWin->drawable.id : 0);
+}
+
 static void
 cap_device(CallbackListPtr *pcbl, void *unused, void *calldata)
 {
     DeviceAccessCallbackParam *rec = calldata;
+
+    /* the keys held down, polled, are a key logger; the focused client
+       may ask (menus, games) */
+    if (rec->client && rec->client != serverClient &&
+        rec->client->majorOp == X_QueryKeymap && !XpCapHasFocus(rec->client, rec->dev))
+        apply(&rec->status, XpCapCheck(rec->client, XP_CAP_INPUT_MONITOR, 0));
 
     /* the server creates the real and XTest devices itself; a client
        creating one means a new (master) device */

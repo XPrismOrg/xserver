@@ -20,6 +20,7 @@
 #include <X11/Xdefs.h>
 
 #include "include/dix.h"
+#include "include/input.h"
 
 enum xp_cap {
     XP_CAP_CAPTURE_SCREEN,      /* read the root window's contents */
@@ -71,6 +72,17 @@ void XpCapSetProvider(XpCapGrantsProc grants, XpCapLabelProc label);
  * once per client and capability.
  */
 int XpCapCheck(ClientPtr client, enum xp_cap cap, XID target);
+
+/**
+ * Keyboard grabs (dix/events.c GrabDevice, dix/grabs.c
+ * AddPassiveGrabToList): a client may grab the keyboard while it has the
+ * focus (menus), and grab keys passively on its own windows, which only
+ * fire while the focus is in them. Anything else sees keys meant for
+ * other clients and needs input.monitor. Devices without keys pass.
+ */
+Bool XpCapHasFocus(ClientPtr client, DeviceIntPtr dev);
+int XpCapCheckKeyboardGrab(ClientPtr client, DeviceIntPtr dev, WindowPtr pWin,
+                           Bool active);
 
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);

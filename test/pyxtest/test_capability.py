@@ -166,6 +166,121 @@ class TestCapabilityEnforce:
         assert _take_clipboard(_connect(xserver, ROOT_COOKIE)) == []
 
 
+X_MAP_WINDOW = 8
+X_GRAB_KEYBOARD = 31
+X_GRAB_KEY = 33
+X_SET_INPUT_FOCUS = 42
+X_QUERY_KEYMAP = 44
+ANY_MODIFIER = 0x8000
+
+
+def _focused_window(xserver, conn):
+    """A mapped window of conn that the window manager (unconfined) gave
+    the focus; Xnamespace does not let confined clients take it."""
+    wid = conn.create_window()
+    conn.send_request(struct.pack("<BxHI", X_MAP_WINDOW, 2, wid))
+    assert _errors_of(conn, struct.pack("<BxHI", X_MAP_WINDOW, 2, wid)) == []
+    wm = _connect(xserver, ROOT_COOKIE)
+    assert _errors_of(wm, struct.pack("<BBHII", X_SET_INPUT_FOCUS, 1, 3, wid, 0)) == []
+    return wid
+
+
+def _focus(conn):
+    seq = conn.send_request(struct.pack("<BxH", X_GET_INPUT_FOCUS, 1))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return struct.unpack_from("<I", r.data, 8)[0]
+
+
+def _keymap(conn):
+    """QueryKeymap's 32 bytes; refused, they are all zero"""
+    seq = conn.send_request(struct.pack("<BxH", X_QUERY_KEYMAP, 1))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return r.data[8:40]
+
+
+def _keymap_with_a_key_down(xserver, conn):
+    """conn's QueryKeymap while A is held down (pressed through XTEST)"""
+    injector = _connect(xserver, ROOT_COOKIE)
+    opcode = _opcode(xserver, Extension.XTEST)
+    _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=xtest.KeyPress,
+                                                detail=KEYCODE_A))
+    try:
+        return _keymap(conn)
+    finally:
+        _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=xtest.KeyRelease,
+                                                    detail=KEYCODE_A))
+
+
+def _grab_keyboard(conn, wid):
+    return _errors_of(conn, struct.pack("<BBHIIBBxx", X_GRAB_KEYBOARD, 0, 4, wid, 0, 1, 1))
+
+
+def _grab_key(conn, wid):
+    return _errors_of(conn, struct.pack("<BBHIHBBBxxx", X_GRAB_KEY, 0, 4, wid,
+                                        ANY_MODIFIER, KEYCODE_A, 1, 1))
+
+
+class TestKeyboardScope:
+    """Keys belong to the client with the focus: it may grab the keyboard
+    (menus) and see which keys are down; others need input.monitor.
+    Passive key grabs on its own windows fire only while it has the
+    focus; on the root they are global hot keys and see every key."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_focused_client(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        wid = _focused_window(xserver, conn)
+        assert _grab_keyboard(conn, wid) == []
+        assert _grab_key(conn, wid) == []
+        assert _keymap_with_a_key_down(xserver, conn)[KEYCODE_A // 8] & (1 << KEYCODE_A % 8)
+
+    def test_unfocused_client(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        wid = conn.create_window()
+        assert _errors_of(conn, struct.pack("<BxHI", X_MAP_WINDOW, 2, wid)) == []
+        _focused_window(xserver, _connect(xserver, ROOT_COOKIE))
+        assert _grab_keyboard(conn, wid) == [BAD_ACCESS]
+        assert _keymap_with_a_key_down(xserver, conn) == bytes(32)
+        # its own window: fires only once it has the focus
+        assert _grab_key(conn, wid) == []
+        assert any("denied input.monitor" in line for line in _cap_log(xserver))
+
+    def test_focus_moves_only_from_its_own_window(self, xserver):
+        """A confined client moves the focus among its windows while it
+        has it (dialogs); it does not take it from another client."""
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        first = _focused_window(xserver, conn)
+        second = conn.create_window()
+        assert _errors_of(conn, struct.pack("<BxHI", X_MAP_WINDOW, 2, second)) == []
+        assert _errors_of(conn, struct.pack("<BBHII", X_SET_INPUT_FOCUS, 1, 3, second, 0)) == []
+        wm = _connect(xserver, ROOT_COOKIE)
+        assert _focus(wm) == second
+        other = _focused_window(xserver, wm)
+        # refused without an error, as Xnamespace refuses it
+        assert _errors_of(conn, struct.pack("<BBHII", X_SET_INPUT_FOCUS, 1, 3, first, 0)) == []
+        assert _focus(wm) == other
+
+    def test_hot_key_on_the_root(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        _focused_window(xserver, conn)
+        assert _grab_key(conn, conn.root_window) == [BAD_ACCESS]
+
+    def test_unconfined(self, xserver):
+        root = _connect(xserver, ROOT_COOKIE)
+        _focused_window(xserver, _connect(xserver, SANDBOX_COOKIE))
+        assert _keymap_with_a_key_down(xserver, root) != bytes(32)
+        assert _grab_key(root, root.root_window) == []
+
+
 class TestCapabilityOff:
     @pytest.fixture
     def capmode(self):

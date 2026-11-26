@@ -68,7 +68,7 @@ rules. A request has to pass both.
 | `capture.screen` | Read access to the root window (`GetImage`, `ShmGetImage`, the source of `CopyArea` and `CopyPlane`) | |
 | `capture.window` | Read access to another client's window or pixmap | |
 | `input.inject` | XTEST requests other than `GetVersion` | |
-| `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion` | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
+| `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion`; keyboard grabs and `QueryKeymap` without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
 | `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
 | `window.enumerate` | Listing the children of another client's window or of the root window (`QueryTree`) | |
 | `window.inspect` | Reading the attributes or geometry of another client's window; reading or listing its properties | The attributes and properties of the root window are readable by everyone, since all toolkits depend on them. |
@@ -118,8 +118,26 @@ Limitations:
 - Transfers between two confined namespaces use the same mechanism but
   are not covered by tests yet.
 
+## The keyboard belongs to the focused client
+
+A client has the focus when the keyboard's focus window, or with
+`PointerRoot` the window under the pointer, is one of its windows or
+inside one. That client may grab the keyboard (core `GrabKeyboard`, XI
+`GrabDevice`: menus) and read which keys are down (`QueryKeymap`). Any
+other client needs `input.monitor` for these, since it would see keys
+typed into other applications; refused, `QueryKeymap` answers with no
+keys down. Passive key grabs (`GrabKey`, XI passive grabs) on a client's
+own windows fire only while the focus is in them and need nothing; on
+any other window, such as the root (global hot keys), they need
+`input.monitor`. Pointer grabs are not limited.
+
+Xnamespace lets confined clients make these requests and leaves the
+decision to these checks. A confined client may also move the focus
+among its windows (`SetInputFocus`, XI `SetFocus`) while it has it, but
+not take it from another client: that is the window manager's. The
+request is then ignored without an error.
+
 ## Known gaps
 
 - `CopyArea` with `IncludeInferiors` from a client's own window can copy
   the contents of other clients' child windows.
-- `input.monitor` does not yet cover core and XI grabs or `QueryKeymap`.

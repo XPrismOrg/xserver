@@ -122,6 +122,7 @@ Equipment Corporation.
 #include <X11/extensions/XIproto.h>
 #include <X11/extensions/XI2proto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/cursor_priv.h"
 #include "dix/devices_priv.h"
 #include "dix/dix_priv.h"
@@ -5217,6 +5218,9 @@ GrabDevice(ClientPtr client, DeviceIntPtr dev,
     if (keyboard_mode == GrabModeSync || pointer_mode == GrabModeSync)
         access_mode |= DixFreezeAccess;
     rc = dixCallDeviceAccessCallback(client, dev, access_mode);
+    if (rc != Success)
+        return rc;
+    rc = XpCapCheckKeyboardGrab(client, dev, pWin, TRUE);
     if (rc != Success)
         return rc;
 
