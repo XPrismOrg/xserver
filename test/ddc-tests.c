@@ -353,12 +353,79 @@ hdr_color_space(void)
     assert(!hdr_space(edid, &cs));
 }
 
+/* Write chromaticities (r, g, b, white as x, y) into an EDID's bytes
+   25-34, 10 bits each */
+static void
+set_chroma(unsigned char *edid, const float xy[8])
+{
+    unsigned v[8];
+
+    for (int i = 0; i < 8; i++)
+        v[i] = (unsigned) lroundf(xy[i] * 1024);
+    edid[25] = (unsigned char) (((v[0] & 3) << 6) | ((v[1] & 3) << 4) |
+                                ((v[2] & 3) << 2) | (v[3] & 3));
+    edid[26] = (unsigned char) (((v[4] & 3) << 6) | ((v[5] & 3) << 4) |
+                                ((v[6] & 3) << 2) | (v[7] & 3));
+    for (int i = 0; i < 8; i++)
+        edid[27 + i] = (unsigned char) (v[i] >> 2);
+}
+
+static bool
+sdr_space(const unsigned char *edid, CompositeColorSpaceRec *cs)
+{
+    xf86MonPtr mon = xf86InterpretEDID(0, (unsigned char *) edid);
+    bool ok;
+
+    assert(mon);
+    ok = xf86MonitorSDRColorSpace(mon, cs);
+    free(mon);
+    return ok;
+}
+
+static void
+sdr_color_space(void)
+{
+    static const float p3[8] = { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290 };
+    static const float srgb[8] = { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290 };
+    CompositeColorSpaceRec cs;
+    unsigned char edid[256];
+
+    /* as it is: sRGB by default, about sRGB's gamut */
+    assert(!sdr_space(msi_mag321curv_dp_edid, &cs));
+
+    memcpy(edid, msi_mag321curv_dp_edid, sizeof(edid));
+    edid[24] &= ~0x4;           /* not sRGB by default */
+    assert(!sdr_space(edid, &cs));
+
+    /* a P3 panel: its primaries with gamma 2.2 */
+    set_chroma(edid, p3);
+    assert(sdr_space(edid, &cs));
+    for (int i = 0; i < 8; i++)
+        assert(fabsf(cs.xy[i] - p3[i]) < 0.001);
+    assert(cs.transfer == 1);
+    assert(cs.refWhite == 80 && cs.maxLum == 80);
+
+    /* ... unless it shows sRGB by default */
+    edid[24] |= 0x4;
+    assert(!sdr_space(edid, &cs));
+    edid[24] &= ~0x4;
+
+    /* sRGB's primaries */
+    set_chroma(edid, srgb);
+    assert(!sdr_space(edid, &cs));
+
+    /* no chromaticities */
+    memset(edid + 25, 0, 10);
+    assert(!sdr_space(edid, &cs));
+}
+
 const testfunc_t*
 ddc_tests(void)
 {
     static const testfunc_t testfuncs[] = {
         parse_simple,
         hdr_color_space,
+        sdr_color_space,
         NULL,
     };
 

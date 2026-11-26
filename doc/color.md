@@ -162,7 +162,13 @@ Phase II, for vkms in CI or real hardware.
    set sends BT.2020 RGB with the monitor's metadata and `max bpc` 10,
    and the compositor shows that CRTC in the monitor's HDR space (one
    space per CRTC). Checked on vkms only so far (which has neither
-   property, nor an EDID): it needs an HDR monitor. Remaining: wide-gamut
-   SDR monitors from their EDID primaries, fp16 scanout. Hardware cursor
-   images are converted for their CRTC's space
-   (`CompositeCrtcConvertARGB`).
+   property, nor an EDID): it needs an HDR monitor. Wide-gamut SDR
+   monitors (`Option "WideGamut"`, and a `WIDE_GAMUT` output property):
+   where the EDID's primaries cover at least 1.1 times sRGB's area and
+   it does not say the monitor shows sRGB by default
+   (`xf86MonitorSDRColorSpace`), the compositor shows that CRTC in those
+   primaries with gamma 2.2, so sRGB content is no longer
+   oversaturated. Nothing changes for the monitor; off by default, as
+   EDID primaries are not always right. HDR takes precedence. Hardware
+   cursor images are converted for their CRTC's space
+   (`CompositeCrtcConvertARGB`). Remaining: fp16 scanout.

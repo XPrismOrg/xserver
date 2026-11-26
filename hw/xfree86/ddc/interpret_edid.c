@@ -888,6 +888,43 @@ bool xf86DoInterpretHDRMetadata(xf86MonPtr monPtr)
     return monPtr->hdr.colorimetry_valid && monPtr->hdr.hdr_valid;
 }
 
+static double
+edid_gamut_area(const float *xy)
+{
+    return fabs((xy[2] - xy[0]) * (xy[5] - xy[1]) -
+                (xy[4] - xy[0]) * (xy[3] - xy[1])) / 2;
+}
+
+bool
+xf86MonitorSDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs)
+{
+    static const float srgb[6] = { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06 };
+
+    if (!mon)
+        return false;
+    const float xy[8] = { mon->features.redx, mon->features.redy,
+                          mon->features.greenx, mon->features.greeny,
+                          mon->features.bluex, mon->features.bluey,
+                          mon->features.whitex, mon->features.whitey };
+    /* its default colour space is sRGB: shown as sRGB already */
+    if (mon->features.msc & 0x4)
+        return false;
+    for (int i = 0; i < 8; i++)
+        if (!(xy[i] > 0 && xy[i] < 1))
+            return false;
+    /* clearly wider than sRGB; a little either way is the EDID's
+       precision and the panel's spread */
+    if (edid_gamut_area(xy) < 1.1 * edid_gamut_area(srgb))
+        return false;
+
+    memset(cs, 0, sizeof(*cs));
+    memcpy(cs->xy, xy, sizeof(xy));
+    cs->transfer = 1;                           /* gamma 2.2 */
+    cs->refWhite = cs->maxLum = 80;
+    cs->minLum = 0.2;
+    return true;
+}
+
 bool
 xf86MonitorHDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs)
 {

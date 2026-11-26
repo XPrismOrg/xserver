@@ -36,6 +36,8 @@ RR_QUERY_VERSION = 0
 RR_SET_SCREEN_SIZE = 7
 RR_GET_OUTPUT_INFO = 9
 RR_LIST_OUTPUT_PROPERTIES = 10
+RR_CHANGE_OUTPUT_PROPERTY = 13
+RR_GET_OUTPUT_PROPERTY = 15
 RR_GET_CRTC_INFO = 20
 RR_SET_CRTC_CONFIG = 21
 RR_GET_CRTC_GAMMA_SIZE = 22
@@ -297,6 +299,30 @@ def test_no_hdr_without_connector_support(server):
         names.append(r[32:32 + struct.unpack_from("<H", r, 8)[0]].decode())
     assert "CONNECTOR_ID" in names, names
     assert "HDR" not in names, names
+
+
+def test_wide_gamut_needs_a_wide_gamut_edid(server):
+    """WIDE_GAMUT is on every output, off; vkms gives no EDID, so turning
+    it on fails and it stays off."""
+    srv, _, _ = server
+    rr = RandR(srv.display_num)
+    atom = struct.unpack_from("<I", rr.wait(rr.c.send_request(
+        struct.pack("<BBHH2x10s2x", 16, 0, 5, 10, b"WIDE_GAMUT"))), 8)[0]   # InternAtom
+    out = rr.outputs[0]
+
+    def value():
+        d = rr.call(RR_GET_OUTPUT_PROPERTY, "IIIIIBBxx", out, atom, 0, 0, 1, 0, 0)
+        assert struct.unpack_from("<I", d, 8)[0] == 19, "not INTEGER"     # XA_INTEGER
+        return struct.unpack_from("<i", d, 32)[0]
+
+    assert value() == 0
+    rr.send(rr.op, RR_CHANGE_OUTPUT_PROPERTY, "IIIBBxxIi", out, atom, 19, 32, 0, 1, 1)
+    with pytest.raises(AssertionError, match="X error"):
+        rr.sync()
+    assert value() == 0
+    # off stays allowed
+    rr.send(rr.op, RR_CHANGE_OUTPUT_PROPERTY, "IIIBBxxIi", out, atom, 19, 32, 0, 1, 0)
+    rr.sync()
 
 
 def test_rotation(server):

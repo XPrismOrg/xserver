@@ -663,6 +663,8 @@ drmmode_output_hdr_probe(xf86OutputPtr output, xf86MonPtr mon)
     modesettingPtr ms = modesettingPTR(output->scrn);
     Bool capable;
 
+    drmmode_output->wide_capable = xf86MonitorSDRColorSpace(mon, &drmmode_output->wide_space);
+
     capable = drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE].prop_id &&
         drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE]
             .enum_values[DRMMODE_COLORSPACE_BT2020_RGB].valid &&
@@ -704,7 +706,7 @@ drmmode_output_hdr_probe(xf86OutputPtr output, xf86MonPtr mon)
 }
 
 /* Tell the compositor the space CRTC crtc shows: HDR if an output on it
-   is, else the screen's */
+   is, else its wide gamut if asked for, else the screen's */
 static void
 drmmode_crtc_update_color_space(xf86CrtcPtr crtc)
 {
@@ -717,10 +719,14 @@ drmmode_crtc_update_color_space(xf86CrtcPtr crtc)
         xf86OutputPtr output = xf86_config->output[i];
         drmmode_output_private_ptr drmmode_output = output->driver_private;
 
-        if (output->crtc == crtc && drmmode_output_hdr_on(drmmode_output)) {
+        if (output->crtc != crtc)
+            continue;
+        if (drmmode_output_hdr_on(drmmode_output)) {
             space = &drmmode_output->hdr_space;
             break;
         }
+        if (drmmode_output->wide && drmmode_output->wide_capable)
+            space = &drmmode_output->wide_space;
     }
     CompositeSetCrtcColorSpace(crtc->scrn->pScreen, crtc->randr_crtc, space);
 }
@@ -3585,6 +3591,19 @@ drmmode_output_create_resources(xf86OutputPtr output)
             drmmode_output->hdr_atom = name;
     }
 
+    /* XPrism: wide-gamut SDR on or off; on needs a wide-gamut EDID */
+    {
+        Atom name = dixAddAtom("WIDE_GAMUT");
+        INT32 wide_range[2] = { 0, 1 }, value = drmmode_output->wide;
+
+        if (name != BAD_RESOURCE &&
+            !RRConfigureOutputProperty(output->randr_output, name, FALSE, TRUE,
+                                       FALSE, 2, wide_range) &&
+            !RRChangeOutputProperty(output->randr_output, name, XA_INTEGER, 32,
+                                    PropModeReplace, 1, &value, FALSE, FALSE))
+            drmmode_output->wide_atom = name;
+    }
+
     if (drmmode->use_ctm) {
         Atom name = dixAddAtom("CTM");
 
@@ -3727,6 +3746,28 @@ drmmode_output_set_property(xf86OutputPtr output, Atom property,
                 }
             }
         }
+    }
+
+    if (property && property == drmmode_output->wide_atom) {
+        if (value->type != XA_INTEGER || value->format != 32 || value->size != 1)
+            return FALSE;
+        Bool on = *(INT32 *) value->data != 0;
+        if (on && !drmmode_output->wide_capable) {
+            xf86DrvMsg(output->scrn->scrnIndex, X_WARNING,
+                       "%s: the monitor's EDID gives no wide gamut\n", output->name);
+            return FALSE;
+        }
+        if (on != drmmode_output->wide) {
+            drmmode_output->wide = on;
+            xf86DrvMsg(output->scrn->scrnIndex, X_INFO, "%s: wide gamut %s\n",
+                       output->name, on ? "on" : "off");
+            if (output->crtc) {
+                drmmode_crtc_update_color_space(output->crtc);
+                if (output->scrn->pScreen)
+                    xf86CursorResetCursor(output->scrn->pScreen);
+            }
+        }
+        return TRUE;
     }
 
     if (property && property == drmmode_output->hdr_atom) {
@@ -4042,6 +4083,7 @@ drmmode_output_init(ScrnInfoPtr pScrn, drmmode_ptr drmmode, drmModeResPtr mode_r
     /* HDR where the monitor can: off unless Option "HDR" */
     drmmode_output->hdr = drmmode_output->hdr_managed =
         xf86ReturnOptValBool(drmmode->Options, OPTION_HDR, FALSE);
+    drmmode_output->wide = xf86ReturnOptValBool(drmmode->Options, OPTION_WIDE_GAMUT, FALSE);
     output->mm_width = koutput->mmWidth;
     output->mm_height = koutput->mmHeight;
 

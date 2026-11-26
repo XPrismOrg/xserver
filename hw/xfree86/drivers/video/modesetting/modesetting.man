@@ -108,6 +108,19 @@ atomic modesetting; use depth 30.
 The default is
 .B off.
 .TP
+.BI "Option \*qWideGamut\*q \*q" boolean \*q
+Shows outputs whose monitor has a wider gamut than sRGB (from its EDID's
+primaries, unless the EDID says the monitor shows sRGB by default) in
+that gamut: the built-in compositor converts sRGB content for the
+monitor's primaries with gamma 2.2, so that it is not oversaturated, and
+wide-gamut content shows its colours. Each output has a
+\fBWIDE_GAMUT\fP property (0 or 1) to change it at run time; turning it
+on fails where the EDID gives no wide gamut. HDR, where on, takes
+precedence.
+.br
+The default is
+.B off.
+.TP
 .BI "Option \*qAsyncFlipSecondaries\*q \*q" boolean \*q
 Use async flips for secondary video outputs on multi-display setups. If a screen
 has multiple displays attached and DRI3 page flipping is used, then only one of

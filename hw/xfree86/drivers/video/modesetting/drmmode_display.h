@@ -304,6 +304,12 @@ typedef struct {
     CompositeColorSpaceRec hdr_space;
     struct hdr_output_metadata hdr_meta;
     uint32_t hdr_blob_id;
+    /* XPrism: wide-gamut SDR (the "WIDE_GAMUT" output property): the
+       compositor converts for the monitor's primaries from its EDID */
+    Atom wide_atom;
+    Bool wide;
+    Bool wide_capable;
+    CompositeColorSpaceRec wide_space;
 } drmmode_output_private_rec, *drmmode_output_private_ptr;
 
 typedef struct {

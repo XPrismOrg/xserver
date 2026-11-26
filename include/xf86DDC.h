@@ -60,6 +60,14 @@ _X_EXPORT bool xf86DoInterpretHDRMetadata(xf86MonPtr monPtr);
  */
 _X_EXPORT bool xf86MonitorHDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs);
 
+/**
+ * XPrism: the colour space a wide-gamut monitor shows in SDR, from its
+ * EDID: its primaries and white point with gamma 2.2.
+ * @return false if its gamut is about sRGB's, its EDID says it shows
+ * sRGB by default, or the EDID's chromaticities are not usable
+ */
+_X_EXPORT bool xf86MonitorSDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs);
+
 /*
  * parse EDID block and return a newly allocated xf86Monitor
  *
