@@ -1,24 +1,26 @@
-# XPrism capabilities
+# Capabilities
 
-The permission model from `idea.txt` section 7. Each capability is checked
-where the protocol actually does the thing. A *policy provider* says which
-capabilities a client holds; today that is Xnamespace.
+Capabilities control which privileged X11 operations a client may perform.
+Each one is checked at the point where the protocol performs the
+operation. Which capabilities a client holds is decided by a policy
+provider; at present the only provider is Xnamespace.
 
-Code: `dix/capability.c`, `dix/capability_priv.h`. Tests:
-`test/pyxtest/test_capability.py`.
+The implementation is in `dix/capability.c` and `dix/capability_priv.h`,
+the tests in `test/pyxtest/test_capability.py`.
 
 ## Modes
 
-`-capmode off|audit|enforce`
+The `-capmode` option selects what happens when a client lacks a
+capability:
 
-| Mode | Missing capability |
+| Mode | Effect |
 |---|---|
-| `off` | no checks |
-| `audit` (default) | logged, nothing denied |
-| `enforce` (experimental) | request fails with `BadAccess`; events are dropped |
+| `off` | No checks are made. |
+| `audit` | The missing capability is logged and the request proceeds. This is the default. |
+| `enforce` | The request fails with `BadAccess`, or the event is dropped. Experimental. |
 
-Enforcement is a Phase V item (`DECISIONS.md`, AD-4). It exists now so the
-checks can be tested.
+Enforcement is planned to become the default in Phase V. It is available
+now so that the checks can be tested.
 
 A missing capability is logged once per client and capability:
 
@@ -26,93 +28,98 @@ A missing capability is logged once per client and capability:
 (WW) capability: would deny window.inspect to client 5 (namespace "sandbox", app "org.example.Editor", pid 4242) for GetWindowAttributes on 0x200001 [audit]
 ```
 
-When the build has no request-name registry, the request shows as
+If the build has no request-name registry, the request is shown as
 `request <major>.<minor>`.
 
-## Who holds what
+## Which clients hold which capabilities
 
-- **No policy provider** (no `-namespace`): every client holds every
-  capability. Plain X11 sessions behave as before, even with `enforce`.
-- **Xnamespace**: the server's own client and the root namespace (any
-  `superpower` namespace) hold all capabilities. Every other namespace,
-  including `anon`, holds only what its config grants:
+Without a policy provider (no `-namespace` option), every client holds
+every capability, and a plain X11 session behaves as it always has, even
+with `-capmode enforce`.
 
-  ```
-  namespace editor
-    auth MIT-MAGIC-COOKIE-1 ...
-    grant window.inspect window.enumerate
-  ```
+With Xnamespace, the server's own client and clients of any namespace
+marked `superpower` (including the root namespace) hold all
+capabilities. Clients of other namespaces, including `anon`, hold only
+what their namespace is granted in the configuration file:
 
-  At runtime, X-NAMESPACE `SetNamespaceGrants` replaces a namespace's
-  grants (`xns-listen --create --grant ...`). Changes apply from the next
-  request, so revoking is immediate.
-- **Listener ceiling**: a client that came in through a listener holds
-  its namespace's grants AND the listener's ceiling (`AddListener`,
-  `xns-listen --ceiling ...`), whatever the namespace is granted later.
+```
+namespace editor
+  auth MIT-MAGIC-COOKIE-1 ...
+  grant window.inspect window.enumerate
+```
 
-Capabilities are checked on top of Xnamespace's own rules, not instead of
-them: a client needs both to pass.
+A namespace's grants can be replaced at runtime with the X-NAMESPACE
+`SetNamespaceGrants` request (`xns-listen --create --grant ...` uses it).
+Changes take effect with the client's next request, so a revoked grant
+stops working immediately.
 
-## Capabilities and where they are checked
+A client that connected through a launcher socket is further limited by
+that socket's ceiling (X-NAMESPACE `AddListener`, `xns-listen --ceiling`).
+It holds only the capabilities that are both granted to its namespace and
+allowed by the ceiling, regardless of what the namespace is granted later.
+
+Capability checks are made in addition to Xnamespace's own isolation
+rules. A request has to pass both.
+
+## Capabilities
 
 | Capability | Checked at | Notes |
 |---|---|---|
-| `capture.screen` | resource hook: read access to the root window (`GetImage`, `ShmGetImage`, `CopyArea`/`CopyPlane` source) | |
-| `capture.window` | resource hook: read access to another client's window or pixmap | |
-| `input.inject` | extension dispatch: XTEST, except `GetVersion` | |
-| `input.monitor` | receive hook: XI2 raw key, button and touch events; extension dispatch: RECORD, except `QueryVersion` | Raw *motion* is not covered: the pointer position is public anyway (`QueryPointer`), and apps like xeyes use it. |
-| `input.virtual_seat` | device hook: a client creating a device (`XIChangeHierarchy` AddMaster) | |
-| `window.enumerate` | resource hook: list access to another client's or the root window (`QueryTree`) | |
-| `window.inspect` | resource hook: attribute access to another client's window (`GetWindowAttributes`, `GetGeometry`); property hook: reading or listing another client's window properties | The root window's attributes and properties are public: every toolkit reads them. |
-| `window.manage` | resource hook: manage access to another client's or the root window (`ReparentWindow`, `ChangeSaveSet`, Composite redirect, selecting `SubstructureRedirect`/`ResizeRedirect`) | |
-| `clipboard.read` | selection hook: `ConvertSelection` | Only the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD`. |
-| `clipboard.write` | selection hook: `SetSelectionOwner` | As above. |
-| `display.configure` | extension dispatch: the RandR requests that change the configuration (`SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output/provider properties, monitors, leases) | Checked at dispatch, so every configuring request is covered in one place. Since commit `4e749a551` RandR also looks up the CRTCs, outputs, providers and root window it changes with write access, so Xnamespace (and SELinux) see the write too. |
+| `capture.screen` | Read access to the root window (`GetImage`, `ShmGetImage`, the source of `CopyArea` and `CopyPlane`) | |
+| `capture.window` | Read access to another client's window or pixmap | |
+| `input.inject` | XTEST requests other than `GetVersion` | |
+| `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion` | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
+| `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
+| `window.enumerate` | Listing the children of another client's window or of the root window (`QueryTree`) | |
+| `window.inspect` | Reading the attributes or geometry of another client's window; reading or listing its properties | The attributes and properties of the root window are readable by everyone, since all toolkits depend on them. |
+| `window.manage` | Manage access to another client's window or the root window: `ReparentWindow`, `ChangeSaveSet`, Composite redirection, selecting `SubstructureRedirect` or `ResizeRedirect` | |
+| `clipboard.read` | `ConvertSelection` on the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD` | See below. |
+| `clipboard.write` | `SetSelectionOwner` on the same selections | See below. |
+| `display.configure` | RandR requests that change the configuration: `SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output and provider properties, monitors, leases | Checked when the request is dispatched. RandR also looks up the objects it modifies with write access, so other XACE policies such as SELinux see the change as a write. |
+| `compositor.legacy` | Manual Composite redirection of a root window's children, which is how an external compositor (picom, KWin, Mutter) takes over from the [built-in compositor](compositor.md) | Also grants `capture.screen` and `capture.window`, because a compositor sees every window. At present only unconfined clients are able to redirect a root window, so this check has no effect until session clients are confined (Phase V). |
 
-| `compositor.legacy` | Composite: manual redirection of a root window's subwindows, which is how an external compositor (picom, KWin-X11, Mutter-X11) takes the screen over from the [scene compositor](compositor.md) | A compositor sees every window, so this capability also grants `capture.screen` and `capture.window`. Grant it only to the compositor you chose. Today only unconfined clients can redirect the root at all (Xnamespace keeps confined ones off it first), so the check first matters when Phase V confines session clients. |
+"Another client's" resource is one whose XID belongs to a different
+client or to the server. A client never needs a capability to access its
+own windows.
 
-"Another client's" means the resource's XID belongs to a different client
-(or to the server). A client never needs a capability for its own windows.
+## Clipboard access across namespaces
 
-### Clipboard and Xnamespace
+Xnamespace gives every namespace private copies of the selections. A
+confined client that asks for `CLIPBOARD` actually uses
+`<namespace>CLIPBOARD`, and no capability is needed for that.
 
-Xnamespace gives each namespace private copies of the selections: a
-confined client asking for `CLIPBOARD` gets `<editor>CLIPBOARD`. Those
-are not checked, so a confined client's own clipboard needs no
-capability.
+The clipboard capabilities give access to the session's `PRIMARY`,
+`SECONDARY` and `CLIPBOARD` instead (`Xext/namespace/hook-selection.c`):
 
-The grants open the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD`
-(`Xext/namespace/hook-selection.c`):
-
-| Request | Session selection if the client holds |
+| Request | Uses the session selection if the client holds |
 |---|---|
 | `SetSelectionOwner` | `clipboard.write` |
 | `ConvertSelection`, XFixes `SelectSelectionInput` | `clipboard.read` |
 | `GetSelectionOwner` | either |
 
-Without the grant the request goes to the namespace's private copy, as
-before. Revoking a grant applies from the client's next request.
+Without the capability, the request applies to the namespace's private
+copy.
 
-A transfer also needs the owner to write the data onto the requestor's
-window and send it `SelectionNotify`, which Xnamespace blocks across
-namespaces. So when the server hands a `SelectionRequest` from another
-namespace to a confined owner, it records a one-time token: that owner
-may set *the requested property* on *that window* and send it *one*
-`SelectionNotify` for that selection. Any other property, any other
-event, or a second reply is refused (events are dropped silently, as
-`SendEvent` denials always are).
+To complete a transfer, the selection owner has to write the data to a
+property on the requestor's window and send it a `SelectionNotify`
+event, both of which Xnamespace normally blocks between namespaces. When
+the server delivers a `SelectionRequest` from another namespace to a
+confined owner, it therefore records a single-use permission: the owner
+may set the requested property on that window and send it one
+`SelectionNotify` for that selection. Any other property or event, and
+any second reply, is refused. Refused events are dropped without an
+error, as is usual for `SendEvent`.
 
-Limits:
+Limitations:
 
-- INCR transfers (data too large for one request) from a confined owner
-  to another namespace don't work yet: the owner would also need
+- Incremental (INCR) transfers from a confined owner to another
+  namespace do not work yet, because the owner would also need
   `PropertyNotify` events from the requestor's window.
-- Tested between the session (root namespace) and confined namespaces.
-  Between two confined namespaces the same token applies, but there is
-  no test for it yet.
+- Transfers between two confined namespaces use the same mechanism but
+  are not covered by tests yet.
 
 ## Known gaps
 
-- `CopyArea` with `IncludeInferiors` from the client's *own* window can
-  copy other clients' child windows (G1 in `docs/audit-phase1.md`).
-- `input.monitor`: core and XI grabs, `QueryKeymap`.
+- `CopyArea` with `IncludeInferiors` from a client's own window can copy
+  the contents of other clients' child windows.
+- `input.monitor` does not yet cover core and XI grabs or `QueryKeymap`.

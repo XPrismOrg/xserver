@@ -1,116 +1,104 @@
-# The scene compositor
+# Built-in compositor
 
-XPrism moves final composition into the server (design decision AD-1,
-"the server composites, the window manager decides"): the server draws every
-output itself, and the window manager will describe effects through the
-XPrism-Scene protocol instead of reading other windows' pixels. This
-document describes the first piece, the scene compositor, which is
-**experimental and off by default**.
+XPrism can composite windows inside the server instead of relying on an
+external compositing manager. The server produces the final image for
+each screen, and the window manager describes effects through the
+[XPRISM-SCENE](xprism-scene-protocol.md) extension without needing access
+to other windows' contents.
+
+The compositor is experimental and disabled by default. Enable it with:
 
 ```sh
 Xvfb :1 -compositor on
 ```
 
-## What it does
+## Operation
 
-With `-compositor on`, the server takes Composite's *manual*
-redirection of every top-level window on each screen. Every window then
-renders into its own pixmap, as with an external compositor, and Composite
-paints nothing to the screen. Once per main-loop iteration (in a block
-handler) the compositor runs one frame per screen:
+When enabled, the server holds Composite's manual redirection of every
+top-level window. Each window renders into its own pixmap, as it would
+under an external compositor, and Composite itself draws nothing to the
+screen. Once per main-loop iteration, and before any client reads from a
+root window, the compositor updates each screen in three steps:
 
-1. **Snapshot.** It walks the root's children bottom to top and records
-   each viewable `InputOutput` window as a node: id, bounds (border
-   included, shape-aware), and opacity.
-2. **Damage.** It compares the snapshot with the previous frame. New,
-   removed, moved, resized or re-opacified nodes add their old and new
-   bounds. A restack adds only the overlap of each pair of windows whose
-   relative order flipped, which is the only place it can show. Every window's content damage (a Damage object
-   per top-level) is added on top, and a change of the root background
-   damages the whole screen.
-3. **Paint.** Only inside the damaged region, it paints the root
-   background, then every node in stacking order with Render's `Over`
-   operator. Windows with an alpha channel (depth-32 ARGB visuals)
-   blend with what is under them. A window's opacity becomes a constant
-   alpha mask. The opacity comes from the window manager through
-   [XPRISM-SCENE](xprism-scene-protocol.md), or else from
-   `_NET_WM_WINDOW_OPACITY`. A transform set the same way is applied
-   with bilinear filtering.
+1. It records the viewable `InputOutput` top-level windows from bottom to
+   top, with their bounds (including the border, respecting shapes),
+   opacity and transform.
+2. It compares this list with the previous one to find the area that
+   changed. A window that appeared, disappeared, moved, was resized, or
+   changed opacity or transform contributes its old and new bounds. A
+   change in stacking order contributes only the overlap of each pair of
+   windows whose relative order changed. Drawing inside a window
+   contributes the drawn area, and a change of the root background
+   contributes the whole screen.
+3. It repaints only that area: first the root background, then each
+   window in stacking order using Render's `Over` operator. Windows with
+   an alpha channel (depth-32 visuals) are blended with what is below
+   them. Window opacity is applied as a constant alpha mask; it is taken
+   from XPRISM-SCENE if the window manager set it there, otherwise from
+   the `_NET_WM_WINDOW_OPACITY` property. Transforms set through
+   XPRISM-SCENE are applied with bilinear filtering.
 
-Rendering goes through Render, so it runs on the GPU wherever the DDX
-accelerates Render (glamor), and in software (fb) elsewhere.
+All drawing goes through Render, so it is GPU-accelerated wherever the
+driver accelerates Render (glamor) and done in software otherwise. Opaque
+windows look exactly the same with the compositor enabled as without it.
 
-What changes for users with the compositor on:
+## Fullscreen windows
 
-- Translucent (ARGB) windows and window opacity work without picom or
-  any other external compositor.
-- Opaque windows look exactly as they do with it off. The tests check
-  this.
-
-## Direct scanout of fullscreen windows
-
-A fullscreen window doesn't need composition when it meets all of these:
+A window is drawn directly to the screen, without composition, when all
+of the following hold:
 
 - it is the topmost viewable window;
-- it covers the whole screen and isn't shaped;
-- it is opaque: no alpha channel, full opacity;
+- it covers the whole screen and has no shape;
+- it is opaque: no alpha channel and full opacity;
 - it has no transform.
 
-The compositor then unredirects it. It renders straight to the screen,
-nothing is copied per frame, and on hardware Present can page-flip its
-buffers (games, video players). The window is composited again as soon
-as any condition stops holding: a popup maps above it, it gets opacity
-or a transform, or it moves or shrinks. Composite copies the contents
-both ways, so the switch is invisible. While a window is shown
-directly, the compositor never paints over it, even when windows below
-it change.
+The compositor then removes the redirection from that window. Nothing is
+copied per frame, and on hardware Present can page-flip the window's
+buffers. As soon as one of the conditions stops holding, for example
+because a popup appears above the window or the window is resized, the
+window is redirected again. Composite copies the window contents in both
+directions, so the switch is not visible. While a window is drawn
+directly, the compositor never paints over it.
 
-## Legacy compositor mode
+## External compositors
 
-External compositors (picom, KWin-X11, Mutter-X11, xcompmgr) work as
-before. When a client asks for manual redirection of a root window's
-subwindows, the only redirection a compositor can't share, the scene
-compositor steps aside for that screen instead of the request failing
-with `BadAccess`. When that client's redirection goes away (it exits or
-unredirects), the scene compositor takes the screen back on the next
-frame. The server log records both events.
+External compositing managers such as picom, KWin and Mutter continue to
+work. When a client requests manual redirection of a root window's
+children, which is the step that only one compositor can take, the
+built-in compositor releases that screen instead of the request failing
+with `BadAccess`. When the client's redirection ends, because it exits or
+undoes the redirection, the built-in compositor takes the screen back.
+Both events are recorded in the server log.
 
-Taking over requires the `compositor.legacy` capability (see
-[capabilities](capabilities.md)), checked in `compRedirectSubwindows`.
-Today only unconfined clients can redirect a root window at all: the
-plain session and privileged namespaces hold every capability, and
-Xnamespace keeps confined clients off the real root before this check
-is reached. The check starts denying things once session clients are
-no longer all-powerful by default (Phase V).
+Taking over requires the `compositor.legacy` capability, see
+[capabilities.md](capabilities.md).
 
-## Code
+## Source files
 
-| Where | What |
+| File | Contents |
 |---|---|
-| `Xext/composite/compscene.c` | The compositor: snapshot, damage, paint, activation, legacy hand-over |
-| `Xext/composite/compalloc.c` | Two hooks: `compSceneYield` before a manual subwindow redirection, `compSceneResume` when one is freed |
-| `Xext/composite/compinit.c` | `compSceneScreenInit` at the end of Composite's screen init |
-| `os/utils.c` | The `-compositor on\|off` option |
-| `test/pyxtest/test_compositor.py` | Scene tests: identical results off and on for opaque scenes, ARGB blending, opacity, legacy hand-over |
+| `Xext/composite/compscene.c` | The compositor and the XPRISM-SCENE extension |
+| `Xext/composite/xprismsceneproto.h` | XPRISM-SCENE wire format |
+| `Xext/composite/compalloc.c` | Hooks for external compositors taking over and releasing a screen |
+| `Xext/composite/compinit.c` | Initialization; composing pending changes before a root window is read |
+| `test/pyxtest/test_compositor.py` | Compositor tests |
+| `test/pyxtest/test_scene_protocol.py` | XPRISM-SCENE tests |
 
-## Limits (current state)
+## Limitations
 
-- **Off by default.** It becomes the default once it has run on real
-  hardware with glamor, together with the Phase II display work.
-- **One clock.** It paints in the main loop, not per output at each
-  output's vblank. Per-output scheduling comes with Phase II's atomic KMS
-  work; the frame function is already per screen and will become per
-  output.
-- **Direct scanout is whole-screen only.** A window that fills one
-  monitor of several is still composited. Scanning out per output, and
-  putting windows on hardware overlay planes, needs atomic KMS
-  (Phase II).
-- **Drawing on the root window.** Wallpapers set as the root background
-  (xsetroot, feh, nitrogen) work. Clients that draw *directly* onto the
-  root window are painted over wherever windows change. External
-  compositors have the same limitation.
-- **Few effects yet.** The window manager can set opacity and a
-  transform per window through [XPRISM-SCENE](xprism-scene-protocol.md)
-  0.1. Shadows, blur and corner radius come in later versions, and
-  transforms don't affect input yet.
-- **Xinerama** is untested with the compositor on.
+- The compositor is disabled by default. It will be enabled by default
+  after it has been tested on real hardware with glamor.
+- All screens are updated from the main loop rather than at each
+  output's vertical blank. Per-output scheduling depends on the atomic
+  modesetting work planned for Phase II.
+- Direct drawing of fullscreen windows applies only to windows that cover
+  the whole screen. A window covering one of several monitors is still
+  composited, and hardware overlay planes are not used.
+- Wallpapers set as the root window background (xsetroot, feh,
+  nitrogen) work. Programs that draw directly onto the root window are
+  overwritten wherever the compositor repaints, which is also the case
+  with external compositors.
+- The window manager can currently set only opacity and transforms.
+  Transforms affect only the display; input is still delivered according
+  to the window's actual geometry.
+- Xinerama has not been tested with the compositor enabled.

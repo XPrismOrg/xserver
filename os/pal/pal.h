@@ -3,7 +3,8 @@
  * XPrism Platform Abstraction Layer (PAL).
  *
  * Everything the server needs from the operating system that differs
- * between Linux, the BSDs and SchOS goes through this interface. Backends
+ * between Linux and the BSDs goes through this interface (SchOS uses the
+ * Linux ABI and therefore the Linux backends). Backends
  * live in os/pal/<os>/ and are chosen at build time (os/pal/meson.build);
  * there is no runtime switching and no OS #ifdef outside os/pal (checked
  * by test/check-os-ifdefs.sh). See doc/pal.md for the design and the
@@ -38,7 +39,7 @@
  * ------------------------------------------------------------------ */
 
 /** "linux", "freebsd", "openbsd", "netbsd", "dragonfly", "sunos",
- *  "gnu", "schos" or "unknown": the backend this server was built with */
+ *  "gnu" or "unknown": the backend this server was built with */
 const char *pal_platform_name(void);
 
 /** input backend this platform uses: "libinput" (Linux, FreeBSD,

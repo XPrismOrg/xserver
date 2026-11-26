@@ -1,13 +1,14 @@
 # xns-listen
 
-Give an application its own socket into an X namespace.
+`xns-listen` gives an application its own socket into an X namespace. It
+is meant to be run by sandbox launchers.
 
-A sandbox launcher runs `xns-listen`, which creates a Unix socket and hands
-it to the X server (X-NAMESPACE 1.1 `AddListener`). Every X client that
-connects through that socket is placed in the namespace, whatever
-authorization data it sends. The launcher makes the socket the app's X
-display inside the sandbox; the app never sees the real display socket
-or any cookie.
+It creates a Unix socket and passes it to the X server with the
+X-NAMESPACE `AddListener` request. Every client that connects through
+that socket is placed in the given namespace, whatever authorization data
+it sends. The launcher makes the socket the application's X display
+inside the sandbox, so the application never sees the real display
+socket or an authorization cookie.
 
 ```
 xns-listen [options] SOCKET [-- COMMAND [ARG...]]
@@ -17,26 +18,28 @@ xns-listen [options] SOCKET [-- COMMAND [ARG...]]
   -c, --create              create the namespace, delete it on exit
   -a, --allow CAP[,CAP...]  with --create: mouse-motion, shape,
                             transparency, xinput, xkeyboard
-  -g, --grant CAP[,CAP...]  with --create: XPrism capabilities for the
-                            namespace (doc/capabilities.md)
-      --ceiling CAP[,CAP...]  most capabilities clients on SOCKET may
-                            ever hold; "none" for none; default no limit
-      --app-id ID           e.g. org.example.Editor
-      --instance-id ID      e.g. a Flatpak instance id
-      --engine NAME         e.g. flatpak, bubblewrap
+  -g, --grant CAP[,CAP...]  with --create: capabilities for the
+                            namespace (see doc/capabilities.md)
+      --ceiling CAP[,CAP...]  the most capabilities clients on SOCKET
+                            may hold; "none" for none; no limit by default
+      --app-id ID           application ID, e.g. org.example.Editor
+      --instance-id ID      instance ID, e.g. a Flatpak instance
+      --engine NAME         sandbox engine, e.g. flatpak, bubblewrap
 ```
 
-`xns-listen` runs COMMAND with `XNS_SOCKET` set to SOCKET. When COMMAND
-exits (or, without COMMAND, on SIGINT/SIGTERM/SIGHUP), the server stops
+If COMMAND is given, `xns-listen` runs it with `XNS_SOCKET` set to
+SOCKET and exits with its status. Without COMMAND it runs until it
+receives SIGINT, SIGTERM or SIGHUP. In both cases the server then stops
 accepting clients on the socket and the socket file is removed. With
-`--create` the namespace is deleted too, which disconnects anything still
-in it. The exit status is COMMAND's. "ready" is printed on stdout once the
-socket accepts clients.
+`--create`, the namespace is deleted as well, which disconnects any
+clients still in it. `xns-listen` prints `ready` on standard output once
+the socket accepts connections.
 
-`xns-listen` itself needs the root namespace's authorization (the
-session's normal `$XAUTHORITY`), since it uses X-NAMESPACE.
+`xns-listen` uses the X-NAMESPACE extension, so it needs the root
+namespace's authorization, which is normally the session's
+`$XAUTHORITY`.
 
-## Example: bubblewrap
+## Example with bubblewrap
 
 ```sh
 sock=$XDG_RUNTIME_DIR/editor-x11.sock
@@ -51,16 +54,18 @@ xns-listen -n editor --create --app-id org.example.Editor --engine bubblewrap \
         /usr/bin/editor
 ```
 
-Inside the sandbox `/tmp/.X11-unix` holds only the app's own socket, as
-display `:0`. The app connects without a cookie and lands in `editor`.
-`--unshare-all` also takes away the network, so the app can't reach the
-server over TCP or an abstract socket either. (Tested with bubblewrap
-against Xvfb.)
+Inside the sandbox, `/tmp/.X11-unix` contains only the application's own
+socket, as display `:0`. The application connects without a cookie and
+is placed in the `editor` namespace. Because `--unshare-all` also removes
+network access, the application cannot reach the server over TCP or an
+abstract socket either. This example has been tested with bubblewrap and
+Xvfb.
 
-Notes:
+## Notes
 
-- Unix socket paths are limited to about 100 bytes; keep SOCKET short
-  (`$XDG_RUNTIME_DIR` is a good place).
-- The socket is created mode 0600 (owner only).
-- The app info (`--app-id`, ...) is the launcher's claim, shown to
-  managers via `GetClientInfo`. The server cannot verify it.
+- Unix socket paths are limited to about 100 bytes, so keep SOCKET short.
+  `$XDG_RUNTIME_DIR` is a suitable location.
+- The socket is created with mode 0600.
+- The application information (`--app-id` and the related options) is
+  supplied by the launcher and reported to managers through
+  `GetClientInfo`. The server cannot verify it.
