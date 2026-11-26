@@ -1605,10 +1605,17 @@ __glXQueryServerString(CARD32 name)
     char *str;
     char *buf;
 
+    /* The host server may not support GLX at all (e.g. Xvfb built
+     * without a GLX provider). Don't send the request then: xcb answers
+     * a request for a missing extension by closing the connection, and
+     * Xephyr could no longer show anything. */
+    const xcb_query_extension_reply_t *glx =
+        xcb_get_extension_data(HostX.conn, &xcb_glx_id);
+    if (!glx || !glx->present)
+        return NULL;
+
     cookie = xcb_glx_query_server_string(HostX.conn, HostX.screen, name);
     reply = xcb_glx_query_server_string_reply(HostX.conn, cookie, NULL);
-    /* The host server may not support GLX at all (e.g. Xvfb built
-     * without it): the request then fails and there is no reply. */
     if (!reply)
         return NULL;
 
