@@ -401,6 +401,120 @@ class TestXI2:
                                             VCP)) == []
 
 
+X_WARP_POINTER = 41
+XI_SELECT_EVENTS = 46
+XI_RAW_BUTTON_PRESS = 15
+GENERIC_EVENT = 35
+
+
+def _move(xserver, x, y):
+    injector = _connect(xserver, ROOT_COOKIE)
+    opcode = _opcode(xserver, Extension.XTEST)
+    _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=xtest.MotionNotify,
+                                                root_x=x, root_y=y))
+
+
+def _click(xserver):
+    injector = _connect(xserver, ROOT_COOKIE)
+    opcode = _opcode(xserver, Extension.XTEST)
+    for t in (xtest.ButtonPress, xtest.ButtonRelease):
+        _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=t, detail=1))
+
+
+def _warp(conn, wid, x, y):
+    return _errors_of(conn, struct.pack("<BxHIIhhHHhh", X_WARP_POINTER, 6, 0, wid,
+                                        0, 0, 0, 0, x, y))
+
+
+def _select_raw_buttons(conn):
+    op = _xi(conn)
+    assert _errors_of(conn, struct.pack("<BBHIHxxHHI", op, XI_SELECT_EVENTS, 5,
+                                        conn.root_window, 1, 1, 1,
+                                        1 << XI_RAW_BUTTON_PRESS)) == []
+
+
+def _raw_button_presses(conn):
+    n = 0
+    while (r := conn.recv_response(timeout=0.5)) is not None:
+        if not isinstance(r, X11Error) and (r.response_type & 0x7f) == GENERIC_EVENT and \
+                struct.unpack_from("<H", r.data, 8)[0] == XI_RAW_BUTTON_PRESS:
+            n += 1
+    return n
+
+
+def _pointer_position(xserver):
+    root = _connect(xserver, ROOT_COOKIE)
+    seq = root.send_request(struct.pack("<BxHI", X_QUERY_POINTER, 2, root.root_window))
+    while True:
+        r = root.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return struct.unpack_from("<hh", r.data, 16)
+
+
+def _game(xserver):
+    """a client with the focus and the pointer over its window"""
+    game = _connect(xserver, SANDBOX_COOKIE)
+    wid = _focused_window(xserver, game)
+    _move(xserver, 50, 50)
+    return game, wid
+
+
+class TestActiveClient:
+    """The client the user works in (focus, and the pointer over it) may
+    warp the pointer and receive raw input events, as games need; it gets
+    that input anyway. Others may not."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_warp(self, xserver):
+        game, wid = _game(xserver)
+        assert _warp(game, wid, 20, 30) == []
+        assert _pointer_position(xserver) == (20, 30)
+
+    def test_no_warp_without_the_pointer(self, xserver):
+        game, wid = _game(xserver)
+        _move(xserver, 500, 500)
+        assert _warp(game, wid, 20, 30) == [BAD_ACCESS]
+        assert _pointer_position(xserver) == (500, 500)
+
+    def test_no_warp_without_the_focus(self, xserver):
+        game, wid = _game(xserver)
+        other = _connect(xserver, SANDBOX_COOKIE)
+        own = other.create_window(x=0, y=0)
+        assert _errors_of(other, struct.pack("<BxHI", X_MAP_WINDOW, 2, own)) == []
+        # the pointer is over its window now, but the focus is the game's
+        assert _warp(other, own, 20, 30) == [BAD_ACCESS]
+
+    def test_raw_events(self, xserver):
+        game, wid = _game(xserver)
+        _select_raw_buttons(game)
+        bystander = _connect(xserver, SANDBOX_COOKIE)
+        _select_raw_buttons(bystander)
+        _click(xserver)
+        assert _raw_button_presses(game) == 1
+        assert _raw_button_presses(bystander) == 0
+        _move(xserver, 500, 500)
+        _click(xserver)
+        assert _raw_button_presses(game) == 0
+
+
+class TestActiveClientAudit:
+    """Xnamespace's isolation holds in audit mode: no warping, no raw
+    events for a client that is not active."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "audit"
+
+    def test_no_warp(self, xserver):
+        game, wid = _game(xserver)
+        _move(xserver, 500, 500)
+        assert _warp(game, wid, 20, 30) == [BAD_ACCESS]
+
+
 X_SET_SCREEN_SAVER, X_FORCE_SCREEN_SAVER = 107, 115
 
 

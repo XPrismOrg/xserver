@@ -48,6 +48,11 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
             if (XpCapHasFocus(client, param->dev))
                 goto pass;
             goto block;
+        // the active client may warp its pointer (mouse look in games)
+        case X_WarpPointer:
+            if (XpCapIsActive(client))
+                goto pass;
+            goto block;
         case EXTENSION_MAJOR_XKEYBOARD:
             switch(client->minorOp) {
                 case X_kbSelectEvents:      // needed by xterm
@@ -79,6 +84,10 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
                     goto pass;
                 case X_XISetFocus:
                     if (XpCapHasFocus(client, param->dev))
+                        goto pass;
+                    goto block;
+                case X_XIWarpPointer:
+                    if (XpCapIsActive(client))
                         goto pass;
                     goto block;
                 default:

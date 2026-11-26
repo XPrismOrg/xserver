@@ -172,6 +172,15 @@ Bool XpCapSeesKeyState(ClientPtr client, DeviceIntPtr kbd);
  */
 Bool XpCapSeesWindow(ClientPtr client, WindowPtr pWin);
 
+/**
+ * Is @p client the one the user is working in: the keyboard focus is in
+ * its window and the pointer over one, both of its ClientPointer's seat?
+ * Then, as with Wayland's pointer constraints, it may warp that pointer
+ * and receive raw input events (games), which reach it anyway as normal
+ * events. The same in every capability mode.
+ */
+Bool XpCapIsActive(ClientPtr client);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

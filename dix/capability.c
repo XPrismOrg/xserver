@@ -422,6 +422,21 @@ XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw)
 }
 
 Bool
+XpCapIsActive(ClientPtr client)
+{
+    /* a fact, not a check: the same in every mode, since Xnamespace's
+       rules go by it too */
+    if (!client || client == serverClient)
+        return TRUE;
+    DeviceIntPtr ptr = PickPointer(client);
+    if (!ptr)
+        return FALSE;
+    DeviceIntPtr kbd = GetMaster(ptr, MASTER_KEYBOARD);
+    return kbd && XpCapHasFocus(client, kbd) &&
+           in_own_window(client, InputDevSpriteWindow(ptr));
+}
+
+Bool
 XpCapSeesWindow(ClientPtr client, WindowPtr pWin)
 {
     if (xpCapMode != XP_CAP_MODE_ENFORCE || !provider_grants)
@@ -877,7 +892,8 @@ cap_receive(CallbackListPtr *pcbl, void *unused, void *calldata)
             continue;
         switch (gev->evtype) {
         /* raw motion is left out: the pointer position is public anyway
-           (QueryPointer), and apps like xeyes rely on it */
+           (QueryPointer), and apps like xeyes rely on it. The active
+           client gets the input anyway (games use raw events). */
         case XI_RawKeyPress:
         case XI_RawKeyRelease:
         case XI_RawButtonPress:
@@ -885,6 +901,8 @@ cap_receive(CallbackListPtr *pcbl, void *unused, void *calldata)
         case XI_RawTouchBegin:
         case XI_RawTouchUpdate:
         case XI_RawTouchEnd:
+            if (XpCapIsActive(rec->client))
+                return;
             apply(&rec->status, XpCapCheck(rec->client, XP_CAP_INPUT_MONITOR,
                                            rec->pWin ? rec->pWin->drawable.id : 0));
             return;

@@ -141,7 +141,7 @@ session is confined can run in a namespace of its own marked
 | `capture.screen` | Read access to the root window (`GetImage`, `ShmGetImage`, the source of `CopyArea` and `CopyPlane`) | |
 | `capture.window` | Read access to another client's window or pixmap; reading one's own window with its inferiors (`GetImage`, `ShmGetImage`, `CopyArea`/`CopyPlane` with `IncludeInferiors`) while another client's viewable window is inside it | An embedded window (a tray icon in a panel) belongs to its own client. |
 | `input.inject` | XTEST requests other than `GetVersion` | Without it, a namespace with an inject scope may still automate one application (see Scoped automation). |
-| `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion`; keyboard grabs, `QueryKeymap` and the modifiers held down, without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
+| `input.monitor` | Delivery of XI2 raw key, button and touch events, except to the active client (below); RECORD requests other than `QueryVersion`; keyboard grabs, `QueryKeymap` and the modifiers held down, without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
 | `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
 | `window.enumerate` | Listing the children of another client's window or of the root window (`QueryTree`) | |
 | `window.inspect` | Reading the attributes or geometry of another client's window; reading or listing its properties; learning that it has the keyboard focus (`GetInputFocus` and `XIGetFocus` answer `None` without it) | The attributes and properties of the root window are readable by everyone, since all toolkits depend on them. |
@@ -225,6 +225,23 @@ These are not refused or logged: toolkits read the state all the time.
 In audit mode clients see the full state. `XIQueryPointer`, `XIGetFocus`
 and `XIChangeCursor` (GTK 3 sets cursors with it) are allowed to confined
 clients now, as their core counterparts were already.
+
+## The active client
+
+The client the user is working in is the one whose window has the
+keyboard focus while the pointer is over one of its windows, both on the
+seat of its ClientPointer. Like a Wayland surface with a pointer
+constraint, it may also:
+
+- warp the pointer (`WarpPointer`, `XIWarpPointer`), for mouse look in
+  games;
+- receive XI2 raw events (`RawKeyPress`, `RawButtonPress`, and so on),
+  which games use.
+
+It receives that input as normal events anyway. Other confined clients
+are refused warps, and raw keys, buttons and touch need `input.monitor`.
+Raw motion follows the namespace's `allow mouse-motion`. This holds in
+every capability mode, since it is part of the namespace isolation.
 
 ## Extensions
 

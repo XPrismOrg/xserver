@@ -6,6 +6,7 @@
 
 #include <X11/Xmd.h>
 
+#include "dix/capability_priv.h"
 #include "dix/extension_priv.h"
 #include "dix/registry_priv.h"
 #include "dix/resource_priv.h"
@@ -36,11 +37,19 @@ hookReceive(CallbackListPtr *pcbl, void *unused, void *calldata)
                 if (gev->extension == EXTENSION_MAJOR_XINPUT) {
                     switch (gev->evtype) {
                         case XI_RawMotion:
-                            if ((!subj->ns->allowMouseMotion) || !isRootWin(param->pWin))
+                            if (!isRootWin(param->pWin))
                                 goto reject;
-                            continue;
+                            if (subj->ns->allowMouseMotion || XpCapIsActive(client))
+                                continue;
+                            goto reject;
+                        /* the client the user works in gets these anyway
+                           (games use raw events, dix/capability.c) */
                         case XI_RawKeyPress:
                         case XI_RawKeyRelease:
+                        case XI_RawButtonPress:
+                        case XI_RawButtonRelease:
+                            if (isRootWin(param->pWin) && XpCapIsActive(client))
+                                continue;
                             goto reject;
                         default:
                             XNS_HOOK_LOG("XI unknown %d\n", gev->evtype);
