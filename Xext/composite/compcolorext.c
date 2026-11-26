@@ -31,6 +31,8 @@
 #include "dix/request_priv.h"
 #include "miext/extinit_priv.h"
 
+#include "randrstr.h"
+
 #include "compint.h"
 #include "compcolor.h"
 #include "xprismcolorproto.h"
@@ -89,11 +91,80 @@ colorIsSRGB(const XpColorSpace *cs)
         !memcmp(&cs->primaries, &xpColorPrimariesSRGB, sizeof(XpColorPrimaries));
 }
 
+/* ---- outputs ------------------------------------------------------------ */
+
+static XpColorSpace outputSpace[MAXSCREENS];
+static bool outputSet[MAXSCREENS];         /* else sRGB */
+
+static const XpColorSpace *
+colorOutput(ScreenPtr pScreen)
+{
+    return outputSet[pScreen->myNum] ? &outputSpace[pScreen->myNum] : &xpColorSpaceSRGB;
+}
+
+void
+CompositeSetOutputColorSpace(ScreenPtr pScreen, const CompositeColorSpaceRec *space)
+{
+    int s = pScreen->myNum;
+    XpColorSpace cs = { 0 };
+    XpColorMatrix unused;
+
+    if (space) {
+        XpColorXY *xy[4] = { &cs.primaries.r, &cs.primaries.g, &cs.primaries.b,
+                             &cs.primaries.white };
+        /* in millionths, as the protocol has them: named primaries then
+           compare equal */
+        for (int i = 0; i < 4; i++)
+            *xy[i] = (XpColorXY) { lrint(space->xy[2 * i] * 1e6) / 1e6,
+                                   lrint(space->xy[2 * i + 1] * 1e6) / 1e6 };
+        cs.transfer = (XpColorTransfer) space->transfer;
+        cs.refWhite = space->refWhite;
+        cs.minLum = space->minLum;
+        cs.maxLum = space->maxLum;
+    }
+    if (!space || colorIsSRGB(&cs)) {
+        outputSet[s] = false;
+    } else if (space->transfer < XpColorTransferSRGB ||
+               space->transfer > XpColorTransferPQ ||
+               !(cs.refWhite > 0) || cs.maxLum < cs.refWhite ||
+               !xpColorRGBToXYZ(&cs.primaries, unused)) {
+        LogMessageVerb(X_WARNING, 1, "compositor: screen %d: unsupported output "
+                       "colour space, using sRGB\n", s);
+        outputSet[s] = false;
+    } else {
+        outputSpace[s] = cs;
+        outputSet[s] = true;
+    }
+    colorSerial++;
+    if (!colorSerial)
+        colorSerial = 1;
+}
+
+bool
+compColorOutputIsSRGB(ScreenPtr pScreen)
+{
+    return !outputSet[pScreen->myNum];
+}
+
+/* Whether content in space cs is shown as it is on output out. */
 static bool
-colorDescribed(WindowPtr pWin)
+colorShownAsIs(const XpColorSpace *cs, const XpColorSpace *out)
+{
+    if (cs->transfer != out->transfer ||
+        memcmp(&cs->primaries, &out->primaries, sizeof(XpColorPrimaries)))
+        return false;
+    /* PQ is absolute: the same reference white, no tone mapping */
+    if (cs->transfer == XpColorTransferPQ)
+        return cs->refWhite == out->refWhite && cs->maxLum <= out->maxLum;
+    return true;
+}
+
+/* The space of pWin's own pixels, if it has a description, else NULL */
+static const XpColorSpace *
+colorOwn(WindowPtr pWin)
 {
     ColorWinPtr cw = colorSettings(pWin);
-    return cw->set && !colorIsSRGB(&cw->cs);
+    return cw->set ? &cw->cs : NULL;
 }
 
 /* Next window of the subtree of top in preorder, or NULL. */
@@ -113,11 +184,18 @@ colorNext(WindowPtr top, WindowPtr pWin)
 static bool
 colorNeedsConversion(WindowPtr top)
 {
-    if (!colorTagged)
+    const XpColorSpace *out = colorOutput(top->drawable.pScreen);
+
+    if (!colorTagged && out == &xpColorSpaceSRGB)
         return false;
-    for (WindowPtr pWin = top; pWin; pWin = colorNext(top, pWin))
-        if (colorDescribed(pWin))
+    const XpColorSpace *own = colorOwn(top);
+    if (!colorShownAsIs(own ? own : &xpColorSpaceSRGB, out))
+        return true;
+    for (WindowPtr pWin = colorNext(top, top); pWin; pWin = colorNext(top, pWin)) {
+        own = colorOwn(pWin);
+        if (own && !colorShownAsIs(own, out))
             return true;
+    }
     return false;
 }
 
@@ -140,15 +218,24 @@ colorRelease(ColorWinPtr cw)
 #define TONE_LUT 1024
 #define COLOR_CACHE 4096         /* a power of two */
 
+/*
+ * From a space cs to an output out. Linear light is relative to the
+ * reference white of each; reference white is shown as the output's
+ * reference white. Content brighter than the output can show is tone
+ * mapped (BT.2390) to its peak; colours outside its gamut are moved
+ * towards their luminance until they fit, within [0, peak].
+ */
 typedef struct {
-    const XpColorSpace *cs;
-    XpColorMatrix m;            /* linear, the space's primaries to sRGB */
+    const XpColorSpace *cs, *out;
+    XpColorMatrix m;            /* linear, cs's primaries to out's */
+    double outLuma[3];
+    double outPeak;             /* the output's peak, relative */
     bool hlg;
     float decode[DECODE_LUT + 1];
-    /* HDR: luminance above SDR white is tone mapped */
     bool tone;
-    double knee, peak;          /* relative to reference white */
+    double knee, peak;          /* relative to the output's reference white */
     float toneLut[TONE_LUT + 1];
+    bool encodeSRGB;            /* else xpColorEncode */
     /* converted pixels: UI contents repeat the same few colours */
     CARD32 cacheKey[COLOR_CACHE], cacheVal[COLOR_CACHE];
     bool cacheSet[COLOR_CACHE];
@@ -168,29 +255,50 @@ lutGet(const float *lut, int size, double v)
     return lut[i] + (lut[i + 1] - lut[i]) * (f - i);
 }
 
+/* Tone mapping from cs to out: content peak and output peak, in the
+   content's cd/m^2 (the output's reference white is the content's).
+   FALSE if none is needed. */
 static bool
-colorConvInit(ColorConv *cv, const XpColorSpace *cs)
+colorTonePeaks(const XpColorSpace *cs, const XpColorSpace *out,
+               double *srcMax, double *dstMax)
 {
+    if (cs->transfer != XpColorTransferPQ && cs->transfer != XpColorTransferHLG)
+        return false;
+    *srcMax = cs->maxLum;
+    *dstMax = out->maxLum / out->refWhite * cs->refWhite;
+    return *srcMax > *dstMax;
+}
+
+static bool
+colorConvInit(ColorConv *cv, const XpColorSpace *cs, const XpColorSpace *out)
+{
+    XpColorMatrix toXYZ;
+    double srcMax, dstMax;
+
     memset(cv, 0, sizeof(*cv));
     cv->cs = cs;
-    if (!xpColorConversion(&cs->primaries, &xpColorPrimariesSRGB, cv->m))
+    cv->out = out;
+    if (!xpColorConversion(&cs->primaries, &out->primaries, cv->m) ||
+        !xpColorRGBToXYZ(&out->primaries, toXYZ))
         return false;
+    for (int i = 0; i < 3; i++)
+        cv->outLuma[i] = toXYZ[1][i];
+    cv->outPeak = out->transfer == XpColorTransferPQ ? out->maxLum / out->refWhite : 1;
     cv->hlg = cs->transfer == XpColorTransferHLG;
     for (int i = 0; i <= DECODE_LUT; i++)
         cv->decode[i] = (float) xpColorDecode(cs, (double) i / DECODE_LUT);
 
-    if ((cs->transfer == XpColorTransferPQ || cv->hlg) &&
-        cs->maxLum > cs->refWhite) {
-        /* the output's peak is SDR white */
+    if (colorTonePeaks(cs, out, &srcMax, &dstMax)) {
         cv->tone = true;
-        cv->knee = xpColorToneMapKnee(cs->maxLum, cs->refWhite) / cs->refWhite;
-        cv->peak = cs->maxLum / cs->refWhite;
+        cv->knee = xpColorToneMapKnee(srcMax, dstMax) / cs->refWhite;
+        cv->peak = srcMax / cs->refWhite;
         for (int i = 0; i <= TONE_LUT; i++) {
             double y = cv->knee + (cv->peak - cv->knee) * i / TONE_LUT;
-            cv->toneLut[i] = (float) (xpColorToneMap(y * cs->refWhite, cs->maxLum,
-                                                     cs->refWhite) / cs->refWhite);
+            cv->toneLut[i] = (float) (xpColorToneMap(y * cs->refWhite, srcMax, dstMax) /
+                                      cs->refWhite);
         }
     }
+    cv->encodeSRGB = out->transfer == XpColorTransferSRGB;
     if (encodeLut[ENCODE_LUT] == 0)
         for (int i = 0; i <= ENCODE_LUT; i++)
             encodeLut[i] = (float) xpColorEncode(&xpColorSpaceSRGB,
@@ -211,8 +319,7 @@ colorConvertPixel(const ColorConv *cv, const double in[3], double out[3])
     }
     xpColorMatrixApply(cv->m, lin, out);
 
-    /* luminance, from the sRGB primaries */
-    double y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+    double y = cv->outLuma[0] * out[0] + cv->outLuma[1] * out[1] + cv->outLuma[2] * out[2];
     if (cv->tone && y > cv->knee) {
         double t = (y - cv->knee) / (cv->peak - cv->knee);
         double mapped = lutGet(cv->toneLut, TONE_LUT, t);
@@ -222,17 +329,19 @@ colorConvertPixel(const ColorConv *cv, const double in[3], double out[3])
     }
 
     /* gamut: move towards the luminance until every channel fits */
-    y = y < 0 ? 0 : y > 1 ? 1 : y;
+    double p = cv->outPeak;
+    y = y < 0 ? 0 : y > p ? p : y;
     double s = 1;
     for (int c = 0; c < 3; c++) {
-        if (out[c] > 1 && out[c] - y > 0)
-            s = fmin(s, (1 - y) / (out[c] - y));
+        if (out[c] > p && out[c] - y > 0)
+            s = fmin(s, (p - y) / (out[c] - y));
         else if (out[c] < 0)
             s = fmin(s, y / (y - out[c]));
     }
     for (int c = 0; c < 3; c++) {
         double v = y + s * (out[c] - y);
-        out[c] = lutGet(encodeLut, ENCODE_LUT, v);
+        out[c] = cv->encodeSRGB ? lutGet(encodeLut, ENCODE_LUT, v) :
+            xpColorEncode(cv->out, v);
     }
 }
 
@@ -241,8 +350,23 @@ typedef struct {
     CARD32 mask[4];
 } ColorLayout;
 
+static bool
+colorLayout(PictFormatPtr format, ColorLayout *l)
+{
+    if (!format || format->type != PictTypeDirect)
+        return false;
+    const DirectFormatRec *d = &format->direct;
+    *l = (ColorLayout) {
+        .shift = { d->red, d->green, d->blue, d->alpha },
+        .mask = { d->redMask, d->greenMask, d->blueMask, d->alphaMask },
+    };
+    return l->mask[0] && l->mask[1] && l->mask[2];
+}
+
+/* Pixels in layout in, converted, to layout out (alpha: in's) */
 static void
-colorConvertSpan(ColorConv *cv, const ColorLayout *l, CARD32 *px, int n)
+colorConvertSpan(ColorConv *cv, const ColorLayout *in_l, const ColorLayout *out_l,
+                 CARD32 *px, int n)
 {
     for (int i = 0; i < n; i++) {
         CARD32 p = px[i];
@@ -254,20 +378,24 @@ colorConvertSpan(ColorConv *cv, const ColorLayout *l, CARD32 *px, int n)
             continue;
         }
 
-        if (l->mask[3]) {
-            CARD32 av = (p >> l->shift[3]) & l->mask[3];
-            if (!av)
-                continue;       /* premultiplied: all zero */
-            a = (double) av / l->mask[3];
+        if (in_l->mask[3]) {
+            CARD32 av = (p >> in_l->shift[3]) & in_l->mask[3];
+            if (!av) {
+                px[i] = 0;      /* premultiplied: all zero */
+                continue;
+            }
+            a = (double) av / in_l->mask[3];
         }
         for (int c = 0; c < 3; c++) {
-            double v = (double) ((p >> l->shift[c]) & l->mask[c]) / l->mask[c];
+            double v = (double) ((p >> in_l->shift[c]) & in_l->mask[c]) / in_l->mask[c];
             in[c] = fmin(v / a, 1);
         }
         colorConvertPixel(cv, in, out);
-        CARD32 q = l->mask[3] ? p & (l->mask[3] << l->shift[3]) : 0;
+        CARD32 q = 0;
+        if (out_l->mask[3])
+            q = (CARD32) lrint(a * out_l->mask[3]) << out_l->shift[3];
         for (int c = 0; c < 3; c++)
-            q |= (CARD32) lrint(out[c] * a * l->mask[c]) << l->shift[c];
+            q |= (CARD32) lrint(out[c] * a * out_l->mask[c]) << out_l->shift[c];
         px[i] = q;
         cv->cacheSet[h] = true;
         cv->cacheKey[h] = p;
@@ -281,35 +409,38 @@ CompositeSetColorConvert(ScreenPtr pScreen, CompositeColorConvertProcPtr proc)
     colorAccel[pScreen->myNum] = proc;
 }
 
-/* What the acceleration architecture needs to convert from cs to sRGB. */
+/* What the acceleration architecture needs to convert from cs to out. */
 static bool
-colorAccelParams(const XpColorSpace *cs, CompositeColorConvertRec *p)
+colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
+                 CompositeColorConvertRec *p)
 {
-    XpColorMatrix m, toXYZ;
+    XpColorMatrix m, toXYZ, outXYZ;
+    double srcMax, dstMax;
 
     memset(p, 0, sizeof(*p));
-    if (!xpColorConversion(&cs->primaries, &xpColorPrimariesSRGB, m) ||
-        !xpColorRGBToXYZ(&cs->primaries, toXYZ))
+    if (!xpColorConversion(&cs->primaries, &out->primaries, m) ||
+        !xpColorRGBToXYZ(&cs->primaries, toXYZ) ||
+        !xpColorRGBToXYZ(&out->primaries, outXYZ))
         return false;
     p->transfer = cs->transfer;
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++)
             p->matrix[i][j] = (float) m[i][j];
         p->luma[i] = (float) toXYZ[1][i];
+        p->outLuma[i] = (float) outXYZ[1][i];
     }
-    p->outLuma[0] = 0.2126f;
-    p->outLuma[1] = 0.7152f;
-    p->outLuma[2] = 0.0722f;
     p->refWhite = (float) cs->refWhite;
     p->maxLum = (float) cs->maxLum;
     p->hlgGamma = (float) (1.2 + 0.42 * log10(cs->maxLum / 1000));
-    if ((cs->transfer == XpColorTransferPQ || cs->transfer == XpColorTransferHLG) &&
-        cs->maxLum > cs->refWhite) {
-        double srcPQ = xpColorNitsToPQ(cs->maxLum);
-        double maxL = xpColorNitsToPQ(cs->refWhite) / srcPQ;
+    p->outTransfer = out->transfer;
+    p->outRefWhite = (float) out->refWhite;
+    p->outPeak = (float) (out->transfer == XpColorTransferPQ ?
+                          out->maxLum / out->refWhite : 1);
+    if (colorTonePeaks(cs, out, &srcMax, &dstMax)) {
+        double srcPQ = xpColorNitsToPQ(srcMax);
+        double maxL = xpColorNitsToPQ(dstMax) / srcPQ;
         p->tone = TRUE;
-        p->toneKnee = (float) (xpColorToneMapKnee(cs->maxLum, cs->refWhite) /
-                               cs->refWhite);
+        p->toneKnee = (float) (xpColorToneMapKnee(srcMax, dstMax) / cs->refWhite);
         p->toneSrcPQ = (float) srcPQ;
         p->toneMaxL = (float) maxL;
         p->toneKS = (float) fmax(1.5 * maxL - 0.5, 0);
@@ -317,53 +448,56 @@ colorAccelParams(const XpColorSpace *cs, CompositeColorConvertRec *p)
     return true;
 }
 
-/* Convert pRegion (pixmap coordinates) of src into dst. cs NULL: copy. */
+/* Convert pRegion (pixmap coordinates) of src, in layout srcFormat, into
+   dst, in dstFormat. cs NULL: shown as it is, copied. */
 static void
-colorConvertRegion(WindowPtr top, PixmapPtr src, PixmapPtr dst,
-                   const XpColorSpace *cs, RegionPtr pRegion)
+colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
+                   PictFormatPtr dstFormat, const XpColorSpace *cs,
+                   const XpColorSpace *out, RegionPtr pRegion)
 {
     ScreenPtr pScreen = src->drawable.pScreen;
     int n = RegionNumRects(pRegion);
     BoxPtr b = RegionRects(pRegion);
-    GCPtr pGC;
     ColorConv *cv = NULL;
-    ColorLayout layout;
+    ColorLayout inLayout, outLayout;
 
     if (!n)
         return;
+    if (!cs && src->drawable.depth == dst->drawable.depth) {
+        GCPtr pGC = GetScratchGC(dst->drawable.depth, pScreen);
+        if (!pGC)
+            return;
+        ValidateGC(&dst->drawable, pGC);
+        for (int k = 0; k < n; k++)
+            (*pGC->ops->CopyArea) (&src->drawable, &dst->drawable, pGC,
+                                   b[k].x1, b[k].y1, b[k].x2 - b[k].x1,
+                                   b[k].y2 - b[k].y1, b[k].x1, b[k].y1);
+        FreeScratchGC(pGC);
+        return;
+    }
+    if (!cs)
+        cs = out;               /* to a deeper pixmap, unchanged */
+
     CompositeColorConvertProcPtr accel = colorAccel[pScreen->myNum];
     CompositeColorConvertRec params;
-    if (cs && accel && colorAccelParams(cs, &params) &&
+    if (accel && colorAccelParams(cs, out, &params) &&
         (*accel) (src, dst, pRegion, &params))
         return;
-    pGC = GetScratchGC(dst->drawable.depth, pScreen);
-    if (!pGC)
+
+    cv = calloc(1, sizeof(*cv));
+    if (!cv || !colorLayout(srcFormat, &inLayout) ||
+        !colorLayout(dstFormat, &outLayout) || !colorConvInit(cv, cs, out)) {
+        free(cv);
         return;
-    ValidateGC(&dst->drawable, pGC);
-
-    if (cs) {
-        PictFormatPtr format = PictureWindowFormat(top);
-        cv = calloc(1, sizeof(*cv));
-        if (!format || format->type != PictTypeDirect || !cv ||
-            !colorConvInit(cv, cs)) {
-            free(cv);
-            cv = NULL;          /* shown as it is */
-        } else {
-            const DirectFormatRec *d = &format->direct;
-            layout = (ColorLayout) {
-                .shift = { d->red, d->green, d->blue, d->alpha },
-                .mask = { d->redMask, d->greenMask, d->blueMask, d->alphaMask },
-            };
-        }
     }
-
+    GCPtr pGC = GetScratchGC(dst->drawable.depth, pScreen);
+    if (!pGC) {
+        free(cv);
+        return;
+    }
+    ValidateGC(&dst->drawable, pGC);
     for (int k = 0; k < n; k++) {
         int w = b[k].x2 - b[k].x1, h = b[k].y2 - b[k].y1;
-        if (!cv) {
-            (*pGC->ops->CopyArea) (&src->drawable, &dst->drawable, pGC,
-                                   b[k].x1, b[k].y1, w, h, b[k].x1, b[k].y1);
-            continue;
-        }
         /* in strips, to bound the buffer */
         int rows = max(1, min(h, (1 << 20) / max(w, 1)));
         CARD32 *buf = calloc((size_t) w * rows, sizeof(CARD32));
@@ -373,7 +507,7 @@ colorConvertRegion(WindowPtr top, PixmapPtr src, PixmapPtr dst,
             int sh = min(rows, b[k].y2 - y);
             (*pScreen->GetImage) (&src->drawable, b[k].x1, y, w, sh, ZPixmap,
                                   ~0UL, (char *) buf);
-            colorConvertSpan(cv, &layout, buf, w * sh);
+            colorConvertSpan(cv, &inLayout, &outLayout, buf, w * sh);
             (*pGC->ops->PutImage) (&dst->drawable, pGC, dst->drawable.depth,
                                    b[k].x1, y, w, sh, 0, ZPixmap, (char *) buf);
         }
@@ -414,14 +548,15 @@ compColorSource(WindowPtr top, PixmapPtr content)
         return content;
     }
 
+    int depth = content->drawable.depth;
     if (cw->content != content ||
         cw->converted->drawable.width != content->drawable.width ||
         cw->converted->drawable.height != content->drawable.height ||
-        cw->converted->drawable.depth != content->drawable.depth) {
+        cw->converted->drawable.depth != depth) {
         colorRelease(cw);
         cw->converted = (*pScreen->CreatePixmap) (pScreen, content->drawable.width,
                                                   content->drawable.height,
-                                                  content->drawable.depth, 0);
+                                                  depth, 0);
         if (!cw->converted)
             return content;
         cw->content = content;
@@ -438,25 +573,82 @@ compColorSource(WindowPtr top, PixmapPtr content)
 
     /* the top-level window's space, then each described window inside it
        over its own part: inner windows come later in preorder */
-    ColorWinPtr ts = colorSettings(top);
-    colorConvertRegion(top, content, cw->converted,
-                       ts->set && !colorIsSRGB(&ts->cs) ? &ts->cs : NULL,
-                       &cw->dirty);
+    const XpColorSpace *out = colorOutput(pScreen);
+    PictFormatPtr srcFormat = PictureWindowFormat(top);
+    PictFormatPtr dstFormat = srcFormat;
+    const XpColorSpace *own = colorOwn(top);
+    if (!own)
+        own = &xpColorSpaceSRGB;
+    colorConvertRegion(content, srcFormat, cw->converted, dstFormat,
+                       colorShownAsIs(own, out) ? NULL : own, out, &cw->dirty);
     RegionRec part;
     RegionNull(&part);
     for (WindowPtr pWin = colorNext(top, top); pWin; pWin = colorNext(top, pWin)) {
-        ColorWinPtr s = colorSettings(pWin);
-        if (!s->set)
+        own = colorOwn(pWin);
+        if (!own)
             continue;
         RegionCopy(&part, &pWin->borderClip);
         RegionTranslate(&part, -content->screen_x, -content->screen_y);
         RegionIntersect(&part, &part, &cw->dirty);
-        colorConvertRegion(top, content, cw->converted,
-                           colorIsSRGB(&s->cs) ? NULL : &s->cs, &part);
+        colorConvertRegion(content, srcFormat, cw->converted, dstFormat,
+                           colorShownAsIs(own, out) ? NULL : own, out, &part);
     }
     RegionUninit(&part);
     RegionEmpty(&cw->dirty);
     return cw->converted;
+}
+
+unsigned
+compColorSerial(void)
+{
+    return colorSerial;
+}
+
+/* A copy of src (sRGB, in format) as the output shows it, or NULL. */
+PixmapPtr
+compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format)
+{
+    const XpColorSpace *out = colorOutput(pScreen);
+    PixmapPtr dst;
+
+    if (src->drawable.bitsPerPixel != 32)
+        return NULL;
+    dst = (*pScreen->CreatePixmap) (pScreen, src->drawable.width,
+                                    src->drawable.height, src->drawable.depth, 0);
+    if (!dst)
+        return NULL;
+    BoxRec all = { 0, 0, src->drawable.width, src->drawable.height };
+    RegionRec r;
+    RegionInit(&r, &all, 1);
+    colorConvertRegion(src, format, dst, format,
+                       colorShownAsIs(&xpColorSpaceSRGB, out) ? NULL : &xpColorSpaceSRGB,
+                       out, &r);
+    RegionUninit(&r);
+    return dst;
+}
+
+/* An sRGB colour (8-bit, for the root background and shadows) as the
+   output shows it, in format's layout; for a1r8g8b8-style ARGB, a is
+   passed through. */
+CARD32
+compColorConvertPixel(ScreenPtr pScreen, PictFormatPtr format, CARD32 pixel)
+{
+    const XpColorSpace *out = colorOutput(pScreen);
+    ColorLayout l;
+    ColorConv *cv;
+
+    if (out == &xpColorSpaceSRGB || !colorLayout(format, &l))
+        return pixel;
+    cv = calloc(1, sizeof(*cv));
+    if (!cv || !colorConvInit(cv, &xpColorSpaceSRGB, out)) {
+        free(cv);
+        return pixel;
+    }
+    ColorLayout opaque = l;
+    opaque.mask[3] = 0;
+    colorConvertSpan(cv, &opaque, &opaque, &pixel, 1);
+    free(cv);
+    return pixel | (l.mask[3] << l.shift[3]);
 }
 
 void
@@ -473,6 +665,12 @@ compColorWindowDestroy(WindowPtr pWin)
     colorRelease(cw);
     RegionUninit(&cw->dirty);
     memset(cw, 0, sizeof(*cw));
+}
+
+void
+compColorCloseScreen(ScreenPtr pScreen)
+{
+    outputSet[pScreen->myNum] = false;
 }
 
 bool
@@ -658,6 +856,51 @@ ProcXpColorGetWindowColorSpace(ClientPtr client)
     return X_SEND_REPLY_SIMPLE(client, reply);
 }
 
+/* Fill d from cs; named primaries are recognised. */
+static void
+colorToDesc(const XpColorSpace *cs, CARD8 primaries, xXpColorSpaceDesc *d)
+{
+    *d = (xXpColorSpaceDesc) {
+        .primaries = primaries,
+        .transfer = (CARD8) cs->transfer,
+        .refWhite = (CARD32) lrint(cs->refWhite),
+        .minLum = (CARD32) lrint(cs->minLum * 10000),
+        .maxLum = (CARD32) lrint(cs->maxLum),
+    };
+    const XpColorXY *xy[4] = { &cs->primaries.r, &cs->primaries.g,
+                               &cs->primaries.b, &cs->primaries.white };
+    for (int i = 0; i < 4; i++) {
+        d->xy[2 * i] = (CARD32) lrint(xy[i]->x * 1e6);
+        d->xy[2 * i + 1] = (CARD32) lrint(xy[i]->y * 1e6);
+    }
+}
+
+static int
+ProcXpColorGetOutputColorSpace(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpColorGetOutputColorSpaceReq);
+    X_REQUEST_FIELD_CARD32(output);
+
+    RROutputPtr output;
+    int rc = dixLookupResourceByType((void **) &output, stuff->output, RROutputType,
+                                     client, DixReadAccess);
+    if (rc != Success) {
+        client->errorValue = stuff->output;
+        return rc;
+    }
+
+    const XpColorSpace *cs = colorOutput(output->pScreen);
+    CARD8 primaries = XpColorPrimariesCustom;
+    for (CARD8 p = XpColorPrimariesSRGB; p <= XpColorPrimariesLast; p++)
+        if (!memcmp(&cs->primaries, namedPrimaries[p], sizeof(XpColorPrimaries)))
+            primaries = p;
+    xXpColorGetOutputColorSpaceReply reply = { .set = cs != &xpColorSpaceSRGB };
+    colorToDesc(cs, primaries, &reply.desc);
+    if (client->swapped)
+        colorSwapDesc(&reply.desc);
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
 static int
 ProcXpColorClearWindowColorSpace(ClientPtr client)
 {
@@ -687,6 +930,8 @@ ProcXpColorDispatch(ClientPtr client)
         return ProcXpColorGetWindowColorSpace(client);
     case X_XpColorClearWindowColorSpace:
         return ProcXpColorClearWindowColorSpace(client);
+    case X_XpColorGetOutputColorSpace:
+        return ProcXpColorGetOutputColorSpace(client);
     default:
         return BadRequest;
     }

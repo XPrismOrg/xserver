@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * XPRISM-COLOR protocol, version 0.1 (wire format).
+ * XPRISM-COLOR protocol, version 0.2 (wire format).
  *
  * Applications say which colour space their windows' pixels are in; the
  * server's scene compositor converts them for the outputs. See
@@ -13,12 +13,13 @@
 
 #define XPRISM_COLOR_NAME           "XPRISM-COLOR"
 #define XPRISM_COLOR_MAJOR          0
-#define XPRISM_COLOR_MINOR          1
+#define XPRISM_COLOR_MINOR          2
 
 #define X_XpColorQueryVersion       0
 #define X_XpColorSetWindowColorSpace 1
 #define X_XpColorGetWindowColorSpace 2
 #define X_XpColorClearWindowColorSpace 3
+#define X_XpColorGetOutputColorSpace 4  /* 0.2 */
 
 /* primaries */
 #define XpColorPrimariesCustom      0   /* the xy coordinates sent */
@@ -119,5 +120,17 @@ typedef struct {
     CARD32 window;
 } xXpColorClearWindowColorSpaceReq;
 #define sz_xXpColorClearWindowColorSpaceReq 8
+
+/* 0.2: what a RandR output shows; set = 0 for sRGB. Same reply layout
+   as GetWindowColorSpace. */
+typedef struct {
+    CARD8 reqType;
+    CARD8 colorReqType;
+    CARD16 length;
+    CARD32 output;
+} xXpColorGetOutputColorSpaceReq;
+#define sz_xXpColorGetOutputColorSpaceReq 8
+
+typedef xXpColorGetWindowColorSpaceReply xXpColorGetOutputColorSpaceReply;
 
 #endif /* XPRISM_COLOR_PROTO_H */

@@ -130,7 +130,7 @@ applications in a sandbox, see the bubblewrap example in
 | I | Codebase audit, security hooks, launcher-assigned identity, capabilities in audit mode, platform abstraction layer, CI on Linux, FreeBSD and OpenBSD | Nearly complete |
 | II | Atomic modesetting, per-output scheduling, hotplug, variable refresh rate, multi-GPU | Planned; needs a display device to test on (vkms in CI or real hardware) |
 | III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | Nearly complete: needs testing on real hardware; direct scanout per monitor waits for Phase II |
-| IV | Per-output color management, wide gamut and HDR | In progress: windows' colour spaces ([XPRISM-COLOR](doc/xprism-color-protocol.md)) shown on sRGB screens; per-output spaces and HDR outputs next ([doc/color.md](doc/color.md)) |
+| IV | Per-output color management, wide gamut and HDR | In progress: windows' colour spaces ([XPRISM-COLOR](doc/xprism-color-protocol.md)) shown on sRGB, wide-gamut and HDR (PQ) outputs, converted on the GPU; linear-light composition and the modesetting driver next ([doc/color.md](doc/color.md)) |
 | V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | Planned |
 | VI | Running Wayland applications as X11 windows (WX11) | Planned |
 | VII | Completing the BSD backends, hardware validation | Planned |

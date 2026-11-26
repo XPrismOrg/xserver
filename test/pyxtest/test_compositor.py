@@ -420,6 +420,16 @@ class TestComposition:
         got = x.pixel(150, 150)
         assert _near(got, 0x80007F), hex(got)
 
+    def test_root_tile_background(self, xvfb):
+        """A tiled root background is painted under the windows."""
+        x = Client(xvfb)
+        pix = x.c.alloc_id()
+        x.req(53, 24, struct.pack("<IIHH", pix, x.root, 8, 8))     # CreatePixmap
+        x.fill(pix, GREEN, 0, 0, 8, 8)
+        x.req(2, 0, struct.pack("<III", x.root, 0x1, pix))         # CWBackPixmap
+        x.req(61, 0, struct.pack("<IhhHH", x.root, 0, 0, 0, 0))     # ClearArea
+        assert x.pixel(5, 5) == GREEN
+
     def test_opacity_hint(self, xvfb):
         x = Client(xvfb)
         under = x.window(100, 100, 100, 100, BLUE)

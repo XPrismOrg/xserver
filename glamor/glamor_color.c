@@ -49,6 +49,8 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     glUniform4f(glGetUniformLocation(prog->prog, "color_tone"),
                 c->tone ? 1.0f : 0.0f, c->toneKnee, c->toneSrcPQ, c->toneMaxL);
     glUniform1f(glGetUniformLocation(prog->prog, "color_ks"), c->toneKS);
+    glUniform3f(glGetUniformLocation(prog->prog, "color_out"),
+                c->outTransfer, c->outRefWhite, c->outPeak);
     return TRUE;
 }
 
@@ -62,6 +64,7 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "uniform vec3 color_out_luma;\n"                                    \
     "uniform vec4 color_tone;\n" /* on, knee, PQ(maxLum), maxL */      \
     "uniform float color_ks;\n"                                         \
+    "uniform vec3 color_out;\n" /* transfer, refWhite, peak */         \
     "float pq_to_nits(float v) {\n"                                     \
     "  float p = pow(clamp(v, 0.0, 1.0), 1.0 / 78.84375);\n"            \
     "  float num = max(p - 0.8359375, 0.0);\n"                          \
@@ -93,8 +96,17 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "  float k = ys > 0.0 ? color_tf.z * pow(ys, color_tf.w - 1.0) : 0.0;\n" \
     "  return k * e / color_tf.y;\n"                                    \
     "}\n"                                                               \
+    "vec3 color_encode(vec3 o) {\n"                                     \
+    "  float tf = color_out.x;\n"                                       \
+    "  if (tf < 0.5) return vec3(srgb_enc(o.r), srgb_enc(o.g), srgb_enc(o.b));\n" \
+    "  if (tf < 1.5) return pow(o, vec3(1.0 / 2.2));\n"                 \
+    "  if (tf < 2.5) return o;\n"                                       \
+    "  o *= color_out.y;\n"                                             \
+    "  return vec3(nits_to_pq(o.r), nits_to_pq(o.g), nits_to_pq(o.b));\n" \
+    "}\n"                                                               \
     "float gamut_scale(float c, float y, float s) {\n"                  \
-    "  if (c > 1.0 && c - y > 0.0) return min(s, (1.0 - y) / (c - y));\n" \
+    "  float p = color_out.z;\n"                                        \
+    "  if (c > p && c - y > 0.0) return min(s, (p - y) / (c - y));\n"   \
     "  if (c < 0.0) return min(s, y / (y - c));\n"                      \
     "  return s;\n"                                                     \
     "}\n"
@@ -117,10 +129,10 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "      o *= mapped / y;\n"                                          \
     "      y = mapped;\n"                                               \
     "    }\n"                                                           \
-    "    y = clamp(y, 0.0, 1.0);\n"                                     \
+    "    y = clamp(y, 0.0, color_out.z);\n"                             \
     "    float sc = gamut_scale(o.r, y, gamut_scale(o.g, y, gamut_scale(o.b, y, 1.0)));\n" \
-    "    o = clamp(vec3(y) + sc * (o - vec3(y)), 0.0, 1.0);\n"          \
-    "    vec3 enc = vec3(srgb_enc(o.r), srgb_enc(o.g), srgb_enc(o.b));\n" \
+    "    o = clamp(vec3(y) + sc * (o - vec3(y)), 0.0, color_out.z);\n"  \
+    "    vec3 enc = clamp(color_encode(o), 0.0, 1.0);\n"                \
     "    frag_color = vec4(enc * a, a);\n"                              \
     "  }\n"
 
@@ -148,8 +160,8 @@ glamor_color_convert(PixmapPtr src, PixmapPtr dst, RegionPtr region,
     GLshort *v;
     char *vbo_offset;
 
-    if ((depth != 24 && depth != 32) || dst->drawable.depth != depth ||
-        src == dst || src->drawable.width != dst->drawable.width ||
+    if ((depth != 24 && depth != 30 && depth != 32) ||
+        dst->drawable.depth != depth || src == dst || src->drawable.width != dst->drawable.width ||
         src->drawable.height != dst->drawable.height ||
         !glamor_pixmap_has_fbo(src) || !glamor_pixmap_has_fbo(dst) ||
         glamor_pixmap_is_large(src) || glamor_pixmap_is_large(dst))
@@ -157,14 +169,14 @@ glamor_color_convert(PixmapPtr src, PixmapPtr dst, RegionPtr region,
     if (!nbox)
         return TRUE;
 
-    prog = &glamor_priv->color_prog[depth == 24];
+    prog = &glamor_priv->color_prog[depth != 32];
     if (prog->failed)
         return FALSE;
 
     glamor_make_current(glamor_priv);
     if (!prog->prog &&
         !glamor_build_program(screen, prog, &glamor_facet_color, NULL, NULL,
-                              depth == 24 ? "#define COLOR_OPAQUE true\n"
+                              depth != 32 ? "#define COLOR_OPAQUE true\n"
                                           : "#define COLOR_OPAQUE false\n"))
         return FALSE;
     if (!glamor_set_alu(&dst->drawable, GXcopy))

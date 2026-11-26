@@ -110,6 +110,9 @@ typedef struct {
     PixUnion bg;
     /* fullscreen window shown directly (unredirected), or None */
     XID direct;
+    /* the root background's tile as the output shows it (XPRISM-COLOR) */
+    PixmapPtr bgTileSrc, bgTile;
+    unsigned colorSerial;
     /* report drawing onto the root window, before and after it happens */
     DamagePtr rootDamage;
     DamagePtr rootDrawnDamage;
@@ -694,6 +697,11 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             if (node->shadow) {
                 node->shadowBlur = attrs->shadowBlur;
                 node->shadowColor = attrs->shadowColor;
+                if (!compColorOutputIsSRGB(pScreen))
+                    node->shadowColor = (attrs->shadowColor & 0xff000000) |
+                        (compColorConvertPixel(pScreen,
+                                               PictureMatchFormat(pScreen, 24, PICT_x8r8g8b8),
+                                               attrs->shadowColor & 0xffffff) & 0xffffff);
                 node->shadowBox = (BoxRec) {
                     .x1 = max(x, -32767), .y1 = max(y, -32767),
                     .x2 = min(x + (local.x2 - local.x1), 32767),
@@ -784,11 +792,20 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             sceneUnionBox(pDamage, &ss->nodes[i].box);
     }
 
+    /* colour descriptions or the output's colour space changed: the root
+       background's conversion with them */
+    if (ss->colorSerial != compColorSerial()) {
+        ss->colorSerial = compColorSerial();
+        ss->bgTileSrc = NULL;
+        ss->fullDamage = true;
+    }
+
     /* root background (xsetroot, wallpaper setters) */
     if (pRoot->backgroundState != ss->bgState ||
         memcmp(&pRoot->background, &ss->bg, sizeof(PixUnion))) {
         ss->bgState = pRoot->backgroundState;
         ss->bg = pRoot->background;
+        ss->bgTileSrc = NULL;   /* a new pixmap may have the old address */
         ss->fullDamage = true;
     }
 
@@ -845,15 +862,30 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
     ChangeGCVal vals[5];
     BITS32 mask;
     if (pRoot->backgroundState == BackgroundPixmap) {
+        PixmapPtr pTile = pRoot->background.pixmap;
+        SceneScreenPtr ss = sceneScreen(pScreen);
+        /* on outputs other than sRGB, a converted copy */
+        if (!compColorOutputIsSRGB(pScreen)) {
+            if (ss->bgTileSrc != pTile) {
+                if (ss->bgTile)
+                    dixDestroyPixmap(ss->bgTile, 0);
+                ss->bgTile = compColorConvertedCopy(pScreen, pTile,
+                                                    PictureWindowFormat(pRoot));
+                ss->bgTileSrc = pTile;
+            }
+            if (ss->bgTile)
+                pTile = ss->bgTile;
+        }
         mask = GCFillStyle | GCTile | GCTileStipXOrigin | GCTileStipYOrigin;
         vals[0].val = FillTiled;
-        vals[1].ptr = pRoot->background.pixmap;
+        vals[1].ptr = pTile;
         vals[2].val = pRoot->drawable.x - t->ox;
         vals[3].val = pRoot->drawable.y - t->oy;
     } else {
         mask = GCForeground;
-        vals[0].val = pRoot->backgroundState == BackgroundPixel ?
-            pRoot->background.pixel : pScreen->blackPixel;
+        vals[0].val = compColorConvertPixel(pScreen, PictureWindowFormat(pRoot),
+                                            pRoot->backgroundState == BackgroundPixel ?
+                                            pRoot->background.pixel : pScreen->blackPixel);
     }
     ChangeGC(NULL, pGC, mask, vals);
     if (t->screen) {
@@ -2081,8 +2113,11 @@ sceneCloseScreen(CallbackListPtr *pcbl, ScreenPtr pScreen, void *unused)
 {
     SceneScreenPtr ss = sceneScreen(pScreen);
 
+    compColorCloseScreen(pScreen);
     if (!ss)
         return;
+    if (ss->bgTile)
+        dixDestroyPixmap(ss->bgTile, 0);
     free(ss->nodes);
     free(ss);
     dixSetPrivate(&pScreen->devPrivates, &sceneScreenKeyRec, NULL);

@@ -233,6 +233,14 @@ void compColorDamage(WindowPtr top, RegionPtr pRegion);
 /* what to show for top: content, or content converted */
 PixmapPtr compColorSource(WindowPtr top, PixmapPtr content);
 void compColorWindowDestroy(WindowPtr pWin);
+void compColorCloseScreen(ScreenPtr pScreen);
+/* changes with any description or output colour space */
+unsigned compColorSerial(void);
+/* a copy of an sRGB pixmap as the output shows it, or NULL */
+PixmapPtr compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format);
+bool compColorOutputIsSRGB(ScreenPtr pScreen);
+/* an sRGB colour as the output shows it, in format's layout */
+CARD32 compColorConvertPixel(ScreenPtr pScreen, PictFormatPtr format, CARD32 pixel);
 
 /*
  * compoverlay.c

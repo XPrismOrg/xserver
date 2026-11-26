@@ -1,10 +1,11 @@
 # Colour management, wide gamut and HDR (Phase IV design)
 
-Status: being implemented. Steps 1 and 2 are done: the colour library
-(`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`) and
-[XPRISM-COLOR 0.1](xprism-color-protocol.md), with which windows are
-converted for sRGB outputs. Nothing else is implemented yet unless a
-section says so.
+Status: being implemented. Steps 1 to 3 are done: the colour library
+(`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
+[XPRISM-COLOR 0.2](xprism-color-protocol.md) with window descriptions,
+and output colour spaces in Xvfb, including HDR (PQ) outputs; the
+conversion runs on the GPU with glamor. Composition in linear light and
+the modesetting driver remain, see Steps.
 
 ## Goals
 
@@ -119,9 +120,13 @@ Phase II, for vkms in CI or real hardware.
    on the CPU otherwise. Composition
    stays in sRGB; composition in linear light comes with the
    64-bit-per-pixel buffers of step 3.
-3. Output colour spaces in Xvfb (a test option per screen/CRTC), and
-   composition for wide-gamut SDR outputs.
-4. HDR: half-float composition with glamor, PQ/HLG encoding, tone
-   mapping of HDR content on SDR outputs.
+3. Done: output colour spaces in Xvfb (`-colorspace`, per screen),
+   `GetOutputColorSpace`, and composition for wide-gamut SDR and for
+   HDR (PQ) outputs: every window is converted into the output's space
+   and composed in its encoding; windows already in it are shown as
+   they are, and can be shown directly.
+4. HDR: half-float composition with glamor, in linear light (the
+   blending of translucent windows); PQ encoding and tone mapping are
+   done (steps 2 and 3).
 5. modesetting: `Colorspace`, `HDR_OUTPUT_METADATA`, `max bpc`, 10-bit
    and fp16 scanout (needs a display device).

@@ -279,7 +279,7 @@ typedef struct glamor_screen_private {
 
     /* Render convolution filter, for sources with and without alpha */
     glamor_program      convolve_prog[2];
-    glamor_program      color_prog[2];     /* [depth == 24] */
+    glamor_program      color_prog[2];     /* [opaque] */
 
     /* glamor line shader */
     glamor_program_fill poly_line_program;

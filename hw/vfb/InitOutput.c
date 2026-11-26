@@ -77,6 +77,7 @@ from The Open Group.
 #include "miline.h"
 #include "glx_extinit.h"
 #include "randrstr.h"
+#include "compositeext.h"
 
 #ifdef GLAMOR
 #include "glamor.h"
@@ -118,6 +119,8 @@ typedef struct {
     Bool crtcSizeSet;           /* -crtcs N@WxH, else CRTCs match the screen */
     int originX, originY;       /* position in the combined (Xinerama) space */
     Bool originSet;             /* -origin, else right of the previous screen */
+    Bool colorSet;              /* -colorspace, else sRGB */
+    CompositeColorSpaceRec color;
     char *pfbMemory;
     XWDColor *pXWDCmap;
     XWDFileHeader *pXWDHeader;
@@ -322,12 +325,77 @@ ddxInputThreadInit(void)
 }
 #endif
 
+/* -colorspace PRIMARIES[,TRANSFER[,PEAK]] */
+static Bool
+vfbParseColorSpace(const char *arg, CompositeColorSpaceRec *cs)
+{
+    static const struct {
+        const char *name;
+        float xy[8];
+    } primaries[] = {
+        { "srgb", { 0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290 } },
+        { "p3", { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290 } },
+        { "bt2020", { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290 } },
+    };
+    static const char *const transfers[] = { "srgb", "gamma22", "linear", "pq" };
+    char buf[64], *t, *n, *end;
+    unsigned i;
+
+    if (strlen(arg) >= sizeof(buf))
+        return FALSE;
+    strcpy(buf, arg);
+    t = strchr(buf, ',');
+    if (t)
+        *t++ = '\0';
+    n = t ? strchr(t, ',') : NULL;
+    if (n)
+        *n++ = '\0';
+
+    memset(cs, 0, sizeof(*cs));
+    for (i = 0; i < (sizeof(primaries) / sizeof(primaries[0])); i++)
+        if (!strcmp(buf, primaries[i].name))
+            break;
+    if (i == (sizeof(primaries) / sizeof(primaries[0])))
+        return FALSE;
+    memcpy(cs->xy, primaries[i].xy, sizeof(cs->xy));
+
+    cs->transfer = 0;
+    if (t) {
+        for (i = 0; i < (sizeof(transfers) / sizeof(transfers[0])); i++)
+            if (!strcmp(t, transfers[i]))
+                break;
+        if (i == (sizeof(transfers) / sizeof(transfers[0])))
+            return FALSE;
+        cs->transfer = i;
+    }
+    if (cs->transfer == 3) {    /* PQ: SDR white at 203 cd/m^2 (BT.2408) */
+        cs->refWhite = 203;
+        cs->minLum = 0.005;
+        cs->maxLum = 1000;
+        if (n) {
+            long peak = strtol(n, &end, 10);
+            if (*end || peak < 203 || peak > 10000)
+                return FALSE;
+            cs->maxLum = peak;
+        }
+    } else {
+        if (n)
+            return FALSE;
+        cs->refWhite = cs->maxLum = 80;
+        cs->minLum = 0.2;
+    }
+    return TRUE;
+}
+
 void
 ddxUseMsg(void)
 {
     ErrorF("-screen scrn WxHxD     set screen's width, height, depth\n");
     ErrorF("-origin X,Y            position of the last -screen in the Xinerama\n"
            "                       layout (default: right of the previous one)\n");
+    ErrorF("-colorspace P[,T[,N]]  colour space the last -screen's output shows:\n"
+           "                       primaries srgb, p3 or bt2020; transfer srgb,\n"
+           "                       gamma22, linear or pq; peak N cd/m^2 (pq)\n");
     ErrorF("-pixdepths list-of-int support given pixmap depths\n");
     ErrorF("+/-render		   turn on/off RENDER extension support"
            "(default on)\n");
@@ -420,6 +488,16 @@ ddxProcessArgument(int argc, char *argv[], int i)
                        argv[i + 1]);
         }
         currentScreen->originSet = TRUE;
+        return 2;
+    }
+
+    if (strcmp(argv[i], "-colorspace") == 0) {  /* -colorspace P[,T[,N]] */
+        CHECK_FOR_REQUIRED_ARGUMENTS(1);
+        if (!vfbParseColorSpace(argv[i + 1], &currentScreen->color)) {
+            UseMsg();
+            FatalError("Invalid -colorspace argument '%s'\n", argv[i + 1]);
+        }
+        currentScreen->colorSet = TRUE;
         return 2;
     }
 
@@ -1195,6 +1273,7 @@ static bool vfbScreenInit(ScreenPtr pScreen, int argc, char **argv, void *closur
 
     pScreen->x = pvfb->originX;
     pScreen->y = pvfb->originY;
+    CompositeSetOutputColorSpace(pScreen, pvfb->colorSet ? &pvfb->color : NULL);
 
     if (Render) {
         fbPictureInit(pScreen, 0, 0);

@@ -50,8 +50,9 @@ layers from the windows' own pixmaps rather than from the screen keeps
 windows above out of the blur. A change below a blurring window, within
 the blur radius, repaints the affected part of its blur.
 
-Windows whose applications described their colour space through
-[XPRISM-COLOR](xprism-color-protocol.md) are shown converted to sRGB: the
+Windows whose pixels are not in the colour space of the output
+([XPRISM-COLOR](xprism-color-protocol.md): described by their
+application, or sRGB on an output that is not) are shown converted: the
 compositor keeps a converted copy of each such window's contents,
 updated where the window is drawn on, and composes that instead.
 
@@ -87,7 +88,7 @@ of the following hold:
 - it covers the whole screen and has no shape;
 - it is opaque: no alpha channel and full opacity;
 - it has no transform and no decorations;
-- its pixels need no colour conversion (XPRISM-COLOR).
+- its pixels are in the output's colour space (XPRISM-COLOR).
 
 The compositor then removes the redirection from that window. Nothing is
 copied per frame, and on hardware Present can page-flip the window's

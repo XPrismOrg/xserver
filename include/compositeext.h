@@ -42,10 +42,13 @@ extern _X_EXPORT RESTYPE CompositeClientWindowType;
  * into dst, per pixel:
  *
  *   un-premultiply, decode transfer (to linear light, 1.0 = refWhite),
- *   multiply by matrix, tone map luminance above toneKnee (BT.2390, in
- *   the PQ domain: toneSrcPQ = PQ(maxLum), toneMaxL = PQ(refWhite) /
+ *   multiply by matrix (to the output's primaries; 1.0 is now the
+ *   output's reference white), tone map luminance above toneKnee
+ *   (BT.2390 in the PQ domain, on the content's cd/m^2 = value * refWhite:
+ *   toneSrcPQ = PQ(content peak), toneMaxL = PQ(output peak) /
  *   toneSrcPQ, toneKS = its knee), move towards luminance (outLuma) until
- *   every channel is within [0, 1], encode sRGB, premultiply.
+ *   every channel is within [0, outPeak], encode outTransfer (PQ:
+ *   of value * outRefWhite), premultiply.
  *
  * Returns FALSE, having converted nothing, when it cannot; the server
  * then converts on the CPU.
@@ -61,6 +64,9 @@ typedef struct {
     Bool tone;
     float toneKnee;             /* relative to refWhite */
     float toneSrcPQ, toneMaxL, toneKS;
+    int outTransfer;            /* sRGB, gamma 2.2, linear or PQ */
+    float outRefWhite;          /* cd/m^2 */
+    float outPeak;              /* relative to outRefWhite; 1 for SDR */
 } CompositeColorConvertRec;
 
 typedef Bool (*CompositeColorConvertProcPtr) (PixmapPtr src, PixmapPtr dst,
@@ -70,5 +76,20 @@ typedef Bool (*CompositeColorConvertProcPtr) (PixmapPtr src, PixmapPtr dst,
 /* Set (or with NULL, remove) the screen's conversion function. */
 extern _X_EXPORT void CompositeSetColorConvert(ScreenPtr pScreen,
                                                CompositeColorConvertProcPtr proc);
+
+/*
+ * XPrism: the colour space the screen's output shows (doc/color.md).
+ * Without one, sRGB. The built-in compositor composes for it. Output
+ * transfer functions: sRGB, gamma 2.2, linear or PQ (HDR); for PQ,
+ * maxLum is the display's peak and refWhite where SDR white is shown.
+ */
+typedef struct {
+    float xy[8];                /* CIE xy of red, green, blue and white */
+    int transfer;               /* as in CompositeColorConvertRec */
+    float refWhite, minLum, maxLum;     /* cd/m^2 */
+} CompositeColorSpaceRec;
+
+extern _X_EXPORT void CompositeSetOutputColorSpace(ScreenPtr pScreen,
+                                                   const CompositeColorSpaceRec *space);
 
 #endif                          /* _COMPOSITEEXT_H_ */

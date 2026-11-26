@@ -1,12 +1,13 @@
-# XPRISM-COLOR extension, version 0.1
+# XPRISM-COLOR extension, version 0.2
 
 The XPRISM-COLOR extension lets applications say which colour space the
 pixels of their windows are in: sRGB, wide-gamut spaces such as Display
 P3 and BT.2020, or HDR content encoded with the PQ or HLG transfer
 functions. The [built-in compositor](compositor.md) then shows each
-window converted for the screen, so applications do not need to know
-what the screen is. See [color.md](color.md) for the design and what
-later versions add (per-output colour spaces, HDR outputs).
+window converted for the output it is on, so applications do not need
+to know what the output is. Version 0.2 adds outputs in colour spaces
+other than sRGB, including HDR outputs, and `GetOutputColorSpace`. See
+[color.md](color.md) for the design.
 
 The wire format is defined in `Xext/composite/xprismcolorproto.h`.
 
@@ -81,21 +82,48 @@ For PQ, maxLum is the peak of the content (its mastering display); for
 HLG, the peak of the display that the content's OOTF assumes. Values
 above 10000 cd/m² are refused.
 
+## Outputs
+
+Each output shows a colour space too: sRGB unless the display driver
+says otherwise. The driver sets it (on Xvfb, the `-colorspace` option,
+see Xvfb(1)); the modesetting driver will set it from the monitor's
+capabilities and its `Colorspace` and `HDR_OUTPUT_METADATA` properties.
+An output's transfer function is sRGB, gamma 2.2, linear or PQ (HDR);
+for PQ, the output's reference white is where SDR white is shown (203
+cd/m² by default, BT.2408) and its maxLum the display's peak.
+
 ## How windows are shown
 
-The screen is sRGB in version 0.1. The compositor shows a described
-window by decoding its transfer function, converting its primaries to
-sRGB's, tone mapping HDR content, bringing colours outside the sRGB
-gamut into it, and encoding sRGB:
+The compositor shows every window in the colour space of its output.
+Where a window's space is the output's, its pixels are shown as they
+are; otherwise the compositor converts them: it decodes the window's
+transfer function, converts its primaries to the output's, tone maps
+content brighter than the output can show, brings colours outside the
+output's gamut into it, and encodes the output's transfer function.
+Windows without a description are sRGB, so on an output that is not
+sRGB they are converted too; on sRGB outputs, as in version 0.1, they
+cost nothing.
 
-- **Tone mapping**: content brighter than reference white (PQ and HLG
-  with maxLum above refWhite) is compressed with the ITU-R BT.2390 EETF
-  so that maxLum lands on SDR white. Below the knee of the curve nothing
-  changes.
-- **Gamut mapping**: a colour that sRGB cannot show is moved towards
-  the grey of its own luminance until it fits. That keeps its hue (P3's
-  pure red becomes the most saturated sRGB red of the same hue, not
-  sRGB's pure red with its channels clipped).
+- **Reference white** is shown at the output's reference white: SDR
+  white is full scale on SDR outputs, and 203 cd/m² on a PQ output.
+- **Tone mapping**: content brighter than the output can show (PQ and
+  HLG with maxLum above what the output's peak is relative to reference
+  white) is compressed with the ITU-R BT.2390 EETF so that maxLum lands
+  on the output's peak; on SDR outputs that is SDR white. Below the knee
+  of the curve nothing changes.
+- **Gamut mapping**: a colour that the output cannot show is moved
+  towards the grey of its own luminance until it fits (on a PQ output,
+  up to its peak). That keeps its hue (P3's pure red on an sRGB output
+  becomes the most saturated sRGB red of the same hue, not sRGB's pure
+  red with its channels clipped).
+
+The root window's background and the shadows of XPRISM-SCENE are sRGB
+and are converted the same way.
+
+A full-screen window is shown directly (without composition) only when
+it is shown as it is: its colour space is the output's, and for PQ, its
+reference white is the output's and its maxLum no higher than the
+output's peak.
 
 The CPU and the GPU (glamor) do the same conversion, and the tests
 check both against the same reference values.
@@ -104,8 +132,9 @@ The window's own contents are not changed: `GetImage` on the window
 returns the pixels the application drew. `GetImage` on the root window
 returns what the screen shows.
 
-Composition (blending of translucent windows) still happens in sRGB, as
-before; [color.md](color.md) describes composition in linear light.
+Composition (blending of translucent windows) happens in the output's
+encoding, as composition in sRGB did before;
+[color.md](color.md) describes composition in linear light.
 
 ## Requests
 
@@ -120,7 +149,7 @@ QueryVersion
     minor-version: CARD32
 ```
 
-Returns the version the server implements, 0.1.
+Returns the version the server implements, 0.2.
 
 ### SetWindowColorSpace
 
@@ -180,6 +209,29 @@ Removes the window's description: it inherits its parent's again.
 Descriptions belong to windows, not to the clients that set them: they
 stay when the client disconnects, and go when the window is destroyed.
 
+### GetOutputColorSpace (0.2)
+
+```
+GetOutputColorSpace
+    output: OUTPUT (RandR)
+  ->
+    set: BOOL
+    primaries: CARD8
+    transfer: CARD8
+    xy: LISTofCARD32 (8)
+    refWhite: CARD32
+    minLum: CARD32
+    maxLum: CARD32
+
+Errors: RandR's for an unknown output
+```
+
+Returns what the compositor shows on the output, in the form of
+`GetWindowColorSpace`; `set` is False for sRGB. Applications can use it
+to choose what to render, for example HDR only where an output can
+show it. An event when it changes will come with the modesetting
+driver, where outputs change at run time; on Xvfb they do not.
+
 ## Performance
 
 Windows without a description cost nothing, and an sRGB description
@@ -194,6 +246,21 @@ none either. Described windows are converted where they are drawn on:
   and video. Setting `XPRISM_NO_GPU_COLOR` in the server's environment
   forces this path, for comparison.
 
-A full-screen window with a description that needs converting is
-composited instead of being shown directly: the screen cannot convert
-it.
+On an output that is not sRGB, every top-level window whose pixels
+are not in the output's space has a converted copy of its contents,
+which doubles their memory.
+
+## Limitations of version 0.2
+
+- Composition is not yet in linear light (see above).
+- Converted copies have the window's depth: ARGB (depth 32) windows on
+  HDR outputs are converted at 8 bits per channel, which bands in
+  gradients. Opaque windows on a depth-30 screen have 10 bits.
+- One colour space per screen: on the modesetting driver, screens with
+  several monitors will need one per CRTC.
+- Outputs with the HLG transfer function are not supported (content
+  with it is).
+- The software cursor (Xvfb, and drivers without a hardware cursor) is
+  drawn in the output's encoding unconverted.
+- The root background's tile is converted when it is set; drawing into
+  the tile pixmap afterwards is not shown.
