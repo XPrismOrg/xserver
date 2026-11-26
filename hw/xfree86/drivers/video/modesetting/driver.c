@@ -1521,11 +1521,17 @@ PreInit(ScrnInfoPtr pScrn, int flags)
     ret = drmSetClientCap(ms->fd, DRM_CLIENT_CAP_ATOMIC, 0);
     ms->atomic_modeset_capable = (ret == 0);
 
-    if (xf86ReturnOptValBool(ms->drmmode.Options, OPTION_ATOMIC, FALSE)) {
+    /* XPrism: atomic modesetting is the default where the kernel driver
+       supports it (test/pyxtest/test_kms.py); Option "Atomic" "false"
+       selects the legacy interface. */
+    if (xf86ReturnOptValBool(ms->drmmode.Options, OPTION_ATOMIC, TRUE)) {
+        Bool asked = xf86IsOptionSet(ms->drmmode.Options, OPTION_ATOMIC);
+
         ret = drmSetClientCap(ms->fd, DRM_CLIENT_CAP_ATOMIC, 2);
         ms->atomic_modeset = (ret == 0);
         if (!ms->atomic_modeset)
-            xf86DrvMsg(pScrn->scrnIndex, X_WARNING, "Atomic modesetting not supported\n");
+            xf86DrvMsg(pScrn->scrnIndex, asked ? X_WARNING : X_INFO,
+                       "Atomic modesetting not supported\n");
     } else {
         ms->atomic_modeset = FALSE;
     }

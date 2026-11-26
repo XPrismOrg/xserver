@@ -137,8 +137,11 @@ The default is
 .B on.
 .TP
 .BI "Option \*qAtomic\*q \*q" boolean \*q
-Enable atomic modesetting when supported.  The default is
-.B off.
+Use atomic modesetting when the kernel driver supports it.  The default is
+.B on;
+with
+.B off
+the legacy modesetting interface is used.
 .TP
 .SH "SEE ALSO"
 .BR @xservername@ (@appmansuffix@),

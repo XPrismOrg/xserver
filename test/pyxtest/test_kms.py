@@ -94,7 +94,8 @@ def device_lock():
         os.close(fd)
 
 
-@pytest.fixture(params=[True, False], ids=["atomic", "legacy"])
+# None: no option, which must select atomic modesetting (the default)
+@pytest.fixture(params=[True, False, None], ids=["atomic", "legacy", "default"])
 def server(request, vkms, device_lock, tmp_path, monkeypatch):
     node, seat = vkms
     conf = tmp_path / "xorg.conf"
@@ -109,7 +110,7 @@ Section "Device"
     Driver "modesetting"
     Option "kmsdev" "{node}"
     Option "AccelMethod" "none"
-    Option "Atomic" "{"true" if request.param else "false"}"
+{"" if request.param is None else f'    Option "Atomic" "{"true" if request.param else "false"}"'}
 EndSection
 """)
     (tmp_path / "conf.d").mkdir()
@@ -122,7 +123,7 @@ EndSection
     srv.start()
     try:
         text = log.read_text(errors="replace")
-        assert ("Atomic modesetting enabled" in text) == request.param, text[-2000:]
+        assert ("Atomic modesetting enabled" in text) == (request.param is not False), text[-2000:]
         yield srv, node, log
     finally:
         srv.stop()
