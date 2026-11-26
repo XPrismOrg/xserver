@@ -36,6 +36,7 @@ X_KEY_A, EV_KEY_A = 38, 30
 X_SHIFT_L = 50
 Z_PIXMAP = 2
 CW_WIDTH, CW_HEIGHT = 1 << 2, 1 << 3
+CW_STACK_MODE, STACK_ABOVE = 1 << 6, 0
 
 
 def _reply(conn, seq):
@@ -239,7 +240,15 @@ def test_two_clients_two_windows(xserver, client):
     conn = RawX11Connection(xserver.display_num)
     wa, wb = _window_named(conn, "first"), _window_named(conn, "second")
     assert wa and wb and wa != wb
-    assert _pixel(conn, wb, 5, 5) == 0xffff00
+    # both open at 0, 0: raising one covers the other. Without a compositor
+    # X then loses the covered contents, and WX11 must repaint on Expose
+    for win, color in [(wa, 0x0000ff), (wb, 0xffff00), (wa, 0x0000ff)]:
+        conn.send_request(struct.pack("<BxHIHxxI", X_CONFIGURE_WINDOW, 4, win,
+                                      CW_STACK_MODE, STACK_ABOVE))
+        end = time.monotonic() + 5
+        while _pixel(conn, win, 5, 5) != color and time.monotonic() < end:
+            time.sleep(0.05)
+        assert _pixel(conn, win, 5, 5) == color
 
 
 class Input:

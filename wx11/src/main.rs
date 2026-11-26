@@ -62,6 +62,8 @@ struct Toplevel {
     surface: ToplevelSurface,
     window: Option<u32>,
     size: (u32, u32),
+    /// the last frame, to repaint what X lost (Expose)
+    pixels: Vec<u8>,
 }
 
 /// A popup (menu, tooltip) shown as an override-redirect X window, placed
@@ -71,6 +73,7 @@ struct Popup {
     surface: PopupSurface,
     window: Option<u32>,
     size: (u32, u32),
+    pixels: Vec<u8>,
     grabbed: bool,
 }
 
@@ -258,6 +261,7 @@ impl State {
             }
         };
         popup.size = (w, h);
+        popup.pixels = pixels.to_vec();
         self.x.put_image(window, w, h, pixels);
     }
 
@@ -354,6 +358,26 @@ impl State {
         };
         top.size = (w, h);
         self.x.put_image(window, w, h, &pixels);
+        top.pixels = pixels;
+    }
+
+    /// X lost part of window (it was covered, without a compositor or
+    /// backing store): paint the last frame again
+    fn repaint(&self, window: u32) {
+        let shown = self
+            .toplevel_for_window(window)
+            .map(|t| (t.size, &t.pixels))
+            .or_else(|| {
+                self.popups
+                    .values()
+                    .find(|p| p.window == Some(window))
+                    .map(|p| (p.size, &p.pixels))
+            });
+        if let Some(((w, h), pixels)) = shown {
+            if pixels.len() == (w * h * 4) as usize {
+                self.x.put_image(window, w, h, pixels);
+            }
+        }
     }
 
     fn hide(&mut self, id: &Id) {
@@ -548,6 +572,7 @@ impl State {
                         }
                     }
                 }
+                x::Event::Expose(win) => self.repaint(win),
                 x::Event::Resized(win, w, h) => {
                     if let Some(t) = self.toplevel_for_window(win) {
                         if t.size != (w, h) {
@@ -713,6 +738,7 @@ impl XdgShellHandler for State {
                 surface,
                 window: None,
                 size: (0, 0),
+                pixels: Vec::new(),
             },
         );
     }
@@ -754,6 +780,7 @@ impl XdgShellHandler for State {
                 surface,
                 window: None,
                 size: (0, 0),
+                pixels: Vec::new(),
                 grabbed: false,
             },
         );

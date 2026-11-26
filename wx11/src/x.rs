@@ -18,6 +18,8 @@ use x11rb::wrapper::ConnectionExt as _;
 pub enum Event {
     /// the window manager asks to close the window (WM_DELETE_WINDOW)
     Close(u32),
+    /// X lost (part of) the window's contents
+    Expose(u32),
     /// the window's size changed
     Resized(u32, u32, u32),
     /// the window got (true) or lost the keyboard focus
@@ -316,6 +318,7 @@ impl XSide {
             | EventMask::POINTER_MOTION
             | EventMask::ENTER_WINDOW
             | EventMask::LEAVE_WINDOW
+            | EventMask::EXPOSURE
     }
 
     /// an override-redirect window at x, y on the root (a popup: the
@@ -533,6 +536,8 @@ impl XSide {
                 {
                     out.push(Event::Close(m.window))
                 }
+                // the last of a series of exposures: repaint once
+                XEvent::Expose(e) if e.count == 0 => out.push(Event::Expose(e.window)),
                 XEvent::ConfigureNotify(c) => {
                     out.push(Event::Resized(c.window, c.width as u32, c.height as u32))
                 }
