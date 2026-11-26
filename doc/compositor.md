@@ -23,8 +23,9 @@ handler) the compositor runs one frame per screen:
    each viewable `InputOutput` window as a node: id, bounds (border
    included, shape-aware), and opacity.
 2. **Damage.** It compares the snapshot with the previous frame. New,
-   removed, moved, resized, restacked or re-opacified nodes add their
-   old and new bounds. Every window's content damage (a Damage object
+   removed, moved, resized or re-opacified nodes add their old and new
+   bounds. A restack adds only the overlap of each pair of windows whose
+   relative order flipped, which is the only place it can show. Every window's content damage (a Damage object
    per top-level) is added on top, and a change of the root background
    damages the whole screen.
 3. **Paint.** Only inside the damaged region, it paints the root
@@ -81,8 +82,6 @@ no longer all-powerful by default (Phase V).
   output.
 - **No direct scanout yet.** A fullscreen window is still copied every
   frame. Direct scanout needs atomic KMS (Phase II).
-- **Coarse damage.** A stacking change damages the full bounds of every
-  window whose position in the stack changed.
 - **Drawing on the root window.** Wallpapers set as the root background
   (xsetroot, feh, nitrogen) work. Clients that draw *directly* onto the
   root window are painted over wherever windows change. External

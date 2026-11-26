@@ -210,20 +210,51 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
         n++;
     }
 
-    /* geometry, opacity, stacking, map state */
+    /* geometry, opacity, map state; remember where each node was */
+    int *oldIndex = n ? calloc(n, sizeof(int)) : NULL;
     for (int i = 0; i < n; i++) {
         int oi;
         const SceneNodeRec *old = sceneFindNode(ss->nodes, ss->numNodes,
                                                 nodes[i].id, &oi);
+        if (oldIndex)
+            oldIndex[i] = -1;
         if (!old) {
             sceneUnionBox(pDamage, &nodes[i].box);
             continue;
         }
-        if (oi != i || old->opacity != nodes[i].opacity ||
+        if (old->opacity != nodes[i].opacity ||
             memcmp(&old->box, &nodes[i].box, sizeof(BoxRec))) {
             sceneUnionBox(pDamage, &old->box);
             sceneUnionBox(pDamage, &nodes[i].box);
+            continue;           /* fully damaged already */
         }
+        if (oldIndex)
+            oldIndex[i] = oi;
+    }
+
+    /* stacking: where two unchanged windows swapped order, only their
+       overlap can look different. Windows mapped or unmapped in between
+       shift indices without changing anyone's relative order. */
+    if (oldIndex) {
+        for (int i = 0; i < n; i++) {
+            if (oldIndex[i] < 0)
+                continue;
+            for (int j = i + 1; j < n; j++) {
+                if (oldIndex[j] < 0 || oldIndex[j] > oldIndex[i])
+                    continue;
+                BoxRec both = {
+                    .x1 = max(nodes[i].box.x1, nodes[j].box.x1),
+                    .y1 = max(nodes[i].box.y1, nodes[j].box.y1),
+                    .x2 = min(nodes[i].box.x2, nodes[j].box.x2),
+                    .y2 = min(nodes[i].box.y2, nodes[j].box.y2),
+                };
+                if (both.x1 < both.x2 && both.y1 < both.y2)
+                    sceneUnionBox(pDamage, &both);
+            }
+        }
+        free(oldIndex);
+    } else if (n) {
+        ss->fullDamage = true;  /* out of memory: repaint everything */
     }
     for (int i = 0; i < ss->numNodes; i++) {
         int ni;

@@ -224,6 +224,60 @@ def _near(got, want, tol=2):
     return all(abs(((got >> s) & 0xFF) - ((want >> s) & 0xFF)) <= tol for s in (16, 8, 0))
 
 
+def _three(xvfb):
+    """a red (bottom), b green, c blue (top), overlapping diagonally."""
+    x = Client(xvfb)
+    a = x.window(100, 100, 100, 100, RED)
+    b = x.window(150, 150, 100, 100, GREEN)
+    c = x.window(200, 200, 100, 100, BLUE)
+    for w in (a, b, c):
+        x.map(w)
+    return x, a, b, c
+
+
+class TestRestack:
+    def test_raise_bottom_to_top(self, xvfb):
+        x, a, b, c = _three(xvfb)
+        assert x.pixel(175, 175) == GREEN
+        x.raise_(a)
+        assert x.pixel(175, 175) == RED      # a over b
+        assert x.pixel(225, 225) == BLUE     # b/c order unchanged
+        assert x.pixel(195, 195) == RED      # a over b, under nothing
+
+    def test_lower_top_to_bottom(self, xvfb):
+        x, a, b, c = _three(xvfb)
+        x.req(X_CONFIGURE_WINDOW, 0, struct.pack("<IHxxI", c, CONFIG_STACK_MODE, 1))  # Below
+        assert x.pixel(225, 225) == GREEN    # b over c now
+        assert x.pixel(175, 175) == GREEN    # b over a, unchanged
+        assert x.pixel(280, 280) == BLUE
+
+    def test_map_below_keeps_order(self, xvfb):
+        x, a, b, c = _three(xvfb)
+        d = x.window(0, 0, 50, 50, GREEN)
+        x.map(d)
+        x.raise_(a)
+        assert x.pixel(175, 175) == RED
+        assert x.pixel(25, 25) == GREEN
+
+
+class TestDamageIsNarrow:
+    """Drawing directly on the root survives where the compositor does not
+    repaint, which makes the repainted area visible."""
+
+    @pytest.fixture
+    def compositor(self):
+        return "on"
+
+    def test_restack_repaints_only_the_overlap(self, xvfb):
+        x, a, b, c = _three(xvfb)
+        x.pixel(0, 0)                        # frame done
+        x.fill(x.root, 0xFFFFFF, 105, 105, 10, 10)   # mark on a, outside b
+        assert x.pixel(110, 110) == 0xFFFFFF
+        x.raise_(a)                          # a over b and c; only a∩b changes (a∩c is empty)
+        assert x.pixel(175, 175) == RED
+        assert x.pixel(110, 110) == 0xFFFFFF  # not repainted
+
+
 class TestComposition:
     """What only a compositor can do."""
 
