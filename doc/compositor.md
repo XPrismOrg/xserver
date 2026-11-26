@@ -80,6 +80,23 @@ pixels, including what shows through the window, into the window's
 pixmap: an approximation, since a translucent window has no single pixel
 value at that point.
 
+## Frame pacing
+
+Each output is composed at most once per refresh period of its mode
+(60 Hz when the mode carries no timing, as with Xvfb), however often
+clients draw. The area that changed is split by output: the part shown by
+an output composed less than a refresh period ago is kept, and the server
+wakes up to compose it when that output is due. Areas that no output
+shows, or that an output which is due also shows, are composed at once.
+Outputs with different refresh rates are paced independently. Frames
+composed because a client reads from or draws on the root window always
+include every change, so `GetImage` sees the screen as it is.
+
+Measured on Xvfb with a client redrawing a window about 25,000 times per
+second: 66 frames per second with pacing, about 1,000 without
+(`test_scene_pacing.py`). `XPRISM_NO_FRAME_PACING` in the server's
+environment turns pacing off.
+
 ## Fullscreen windows
 
 A window is drawn directly to the screen, without composition, when all
@@ -159,9 +176,11 @@ kernel driver included) are expected to work the same way.
 
 ## Limitations
 
-- All screens are updated from the main loop rather than at each
-  output's vertical blank. Per-output scheduling depends on the atomic
-  modesetting work planned for Phase II.
+- Pacing limits how often each output is composed, but frames are not
+  yet timed against the output's vertical blank: a frame is composed as
+  soon as its output is due, not just before the next vblank, so its
+  latency can reach a refresh period on top of the driver's (TearFree's)
+  own.
 - Direct drawing of fullscreen windows applies only to windows that cover
   the whole screen. A window covering one of several monitors is still
   composited, and hardware overlay planes are not used.

@@ -45,6 +45,7 @@
 #include "dix/request_priv.h"
 #include "dix/resource_priv.h"
 #include "xprismsceneproto.h"
+#include "randrstr.h"
 #ifdef XINERAMA
 #include "Xext/panoramiX/panoramiXsrv.h"
 #include "Xext/panoramiX/panoramiX_priv.h"
@@ -99,11 +100,20 @@ typedef struct {
     int smW, smH, smRadius, smBlur;
 } SceneAttrsRec, *SceneAttrsPtr;
 
+#define SCENE_MAX_PACED 16
+
 typedef struct {
     bool active;                /* we hold Manual redirection of root */
     bool yielded;               /* a legacy compositor holds it */
     bool fullDamage;            /* repaint everything next frame */
     bool rootHidden;            /* the root had no clip: frames skipped */
+    /* frame pacing: each output is composed at most once per refresh */
+    RegionRec deferred;         /* damage on outputs that are not due yet */
+    CARD64 due;                 /* when the first of them is due */
+    struct {
+        RRCrtcPtr crtc;
+        CARD64 last;            /* when it was last composed, microseconds */
+    } paced[SCENE_MAX_PACED];
     SceneNodeRec *nodes;        /* previous frame */
     int numNodes;
     /* root background as last painted */
@@ -1747,6 +1757,124 @@ sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss, bool allowStart)
         ss->direct = want->drawable.id;
 }
 
+/* ---- frame pacing ----------------------------------------------------- */
+
+static bool scenePacingOff;     /* XPRISM_NO_FRAME_PACING */
+
+/* An output's refresh period in microseconds; 60 Hz if its mode carries
+   no timing (Xvfb's modes, for one). */
+static CARD64
+scenePeriod(RRCrtcPtr crtc)
+{
+    xRRModeInfo *m = &crtc->mode->mode;
+
+    if (m->dotClock && m->hTotal && m->vTotal) {
+        CARD64 period = (CARD64) m->hTotal * m->vTotal * 1000000 / m->dotClock;
+        if (m->modeFlags & RR_DoubleScan)
+            period *= 2;
+        if (m->modeFlags & RR_Interlace)
+            period /= 2;
+        if (period >= 1000)     /* up to 1000 Hz */
+            return period;
+    }
+    return 1000000 / 60;
+}
+
+static CARD64 *
+scenePacedLast(SceneScreenPtr ss, RRCrtcPtr crtc)
+{
+    int free_slot = -1;
+
+    for (int i = 0; i < SCENE_MAX_PACED; i++) {
+        if (ss->paced[i].crtc == crtc)
+            return &ss->paced[i].last;
+        if (!ss->paced[i].crtc && free_slot < 0)
+            free_slot = i;
+    }
+    if (free_slot < 0)
+        return NULL;
+    ss->paced[free_slot].crtc = crtc;
+    ss->paced[free_slot].last = 0;
+    return &ss->paced[free_slot].last;
+}
+
+static bool
+sceneCrtcBox(RRCrtcPtr crtc, BoxPtr box)
+{
+    int w, h;
+
+    if (!crtc->mode || !crtc->numOutputs)
+        return false;
+    RRCrtcGetScanoutSize(crtc, &w, &h);
+    *box = (BoxRec) { crtc->x, crtc->y, crtc->x + w, crtc->y + h };
+    return true;
+}
+
+/*
+ * Split a frame's damage by output. Damage on an output that was composed
+ * less than a refresh period ago is kept for later, and the block handler
+ * makes the server wake up when that output is due; the rest is composed
+ * now. Damage that
+ * no output shows, or that an output which is due also shows, is never
+ * held back. Frames composed on demand (all) compose everything: a client
+ * reads or draws on the root window right after.
+ */
+static void
+scenePace(ScreenPtr pScreen, SceneScreenPtr ss, RegionPtr damage, bool all)
+{
+    rrScrPrivPtr pScrPriv = dixPrivateKeyRegistered(rrPrivKey) ?
+        rrGetScrPriv(pScreen) : NULL;
+    CARD64 now = GetTimeInMicros(), due = 0;
+    RegionRec waiting, part;
+    BoxRec box;
+
+    RegionUnion(damage, damage, &ss->deferred);
+    RegionEmpty(&ss->deferred);
+    if (!pScrPriv || !RegionNotEmpty(damage))
+        return;
+
+    RegionNull(&waiting);
+    RegionNull(&part);
+    for (int i = 0; i < pScrPriv->numCrtcs; i++) {
+        RRCrtcPtr crtc = pScrPriv->crtcs[i];
+
+        if (!sceneCrtcBox(crtc, &box))
+            continue;
+        RegionReset(&part, &box);
+        RegionIntersect(&part, &part, damage);
+        if (!RegionNotEmpty(&part))
+            continue;
+
+        CARD64 *last = scenePacedLast(ss, crtc);
+        CARD64 period = scenePeriod(crtc);
+        /* a little early is fine: the timer has millisecond precision */
+        if (!last || all || scenePacingOff || now - *last + 1000 >= period) {
+            if (last)
+                *last = now;
+            continue;
+        }
+        RegionUnion(&waiting, &waiting, &part);
+        if (!due || *last + period < due)
+            due = *last + period;
+    }
+    /* what an output composed now also shows is composed with it */
+    for (int i = 0; i < pScrPriv->numCrtcs && RegionNotEmpty(&waiting); i++) {
+        RRCrtcPtr crtc = pScrPriv->crtcs[i];
+        CARD64 *last;
+
+        if (!sceneCrtcBox(crtc, &box) || !(last = scenePacedLast(ss, crtc)) ||
+            *last != now)
+            continue;
+        RegionReset(&part, &box);
+        RegionSubtract(&waiting, &waiting, &part);
+    }
+    RegionSubtract(damage, damage, &waiting);
+    RegionCopy(&ss->deferred, &waiting);
+    RegionUninit(&waiting);
+    RegionUninit(&part);
+    ss->due = due;
+}
+
 /*
  * Compose one frame. A frame composed on demand (fromHook: before the
  * root window is read from or drawn on) runs in the middle of a request
@@ -1800,6 +1928,7 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
         RegionCopy(&damage, &pScreen->root->winSize);
         ss->fullDamage = false;
     }
+    scenePace(pScreen, ss, &damage, fromHook);
     sceneExpandForBlur(nodes, wins, n, &damage);
     /* a window shown directly draws itself: never paint over it */
     WindowPtr pDirect;
@@ -1872,6 +2001,13 @@ sceneBlockHandler(void *data, void *timeout)
         sceneActivate(pScreen, ss);
         if (ss->active)
             sceneFrame(pScreen, ss, false);
+        /* wake up when held-back damage is due: the main loop computed its
+           timeout before calling us, so a timer set now would not count */
+        if (ss->active && RegionNotEmpty(&ss->deferred)) {
+            CARD64 now = GetTimeInMicros();
+            AdjustWaitForDelay(timeout, ss->due > now ?
+                               (int) ((ss->due - now + 999) / 1000) : 0);
+        }
     }
 }
 
@@ -2246,6 +2382,7 @@ sceneCloseScreen(CallbackListPtr *pcbl, ScreenPtr pScreen, void *unused)
     if (!ss)
         return;
     sceneUntrackTile(ss);
+    RegionUninit(&ss->deferred);
     if (ss->bgTile)
         dixDestroyPixmap(ss->bgTile, 0);
     free(ss->nodes);
@@ -2269,6 +2406,8 @@ compSceneScreenInit(ScreenPtr pScreen)
     SceneScreenPtr ss = calloc(1, sizeof(SceneScreenRec));
     if (!ss)
         return false;
+    RegionNull(&ss->deferred);
+    scenePacingOff = getenv("XPRISM_NO_FRAME_PACING") != NULL;
     dixSetPrivate(&pScreen->devPrivates, &sceneScreenKeyRec, ss);
     dixScreenHookClose(pScreen, sceneCloseScreen);
     WindowPointMapHook = sceneMapPoint;

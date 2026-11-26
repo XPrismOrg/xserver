@@ -61,6 +61,7 @@ if pytest.found()
      'test_color_cursor.py',
      'test_scene_protocol.py',
      'test_scene_input.py',
+     'test_scene_pacing.py',
         'test_explicit_sync.py',
         'test_fb.py',
         'test_font.py',

@@ -296,7 +296,8 @@ class RawX11Connection:
         self.seq += 1
         assert self.sock
         self.sock.sendall(data)
-        return self.seq
+        # replies and errors carry the low 16 bits of the sequence number
+        return self.seq & 0xFFFF
 
     def send_request_with_fds(self, data: bytes | X11Request, fds: list[int]) -> int:
         """Like send_request, passing *fds* along (SCM_RIGHTS)."""
@@ -305,7 +306,7 @@ class RawX11Connection:
         self.seq += 1
         assert self.sock
         socket.send_fds(self.sock, [data], fds)
-        return self.seq
+        return self.seq & 0xFFFF
 
     def recv_response(self, timeout: float = 5.0) -> X11Error | X11Reply | None:
         ready = select.select([self.sock], [], [], timeout)
