@@ -34,6 +34,9 @@ Options: `--display DISPLAY` (default `$DISPLAY`), `--socket NAME` (in
 - the clipboard (text) both ways: a Wayland copy owns X's CLIPBOARD
   (UTF8_STRING, TEXT, STRING as Latin-1, TARGETS), and the X clipboard is
   offered to the Wayland client with the keyboard
+- transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
+  compositing manager (or XPrism's compositor) blends
+- windows X lost while covered (no compositor) are repainted on Expose
 
 Buffers are copied into the window with `PutImage` for now.
 
@@ -42,8 +45,7 @@ Buffers are copied into the window with `PutImage` for now.
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
-- subsurfaces, alpha (ARGB visual), keeping popups on screen (positioner
-  constraints)
+- subsurfaces, keeping popups on screen (positioner constraints)
 - the PRIMARY selection, clipboard types other than text, large X
   transfers (INCR), and drag and drop (XDND)
 - a security context per Wayland client (AD-2)

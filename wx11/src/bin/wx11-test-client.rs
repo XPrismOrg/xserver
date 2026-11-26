@@ -13,13 +13,16 @@
 // "popup configure X Y W H", "popup drawn", "popup done"; input events on
 // the popup say "popup" ("pointer enter popup X Y", "keyboard enter popup").
 //
+// --alpha draws an argb8888 buffer; --color then takes AARRGGBB
+// (premultiplied).
+//
 // --copy TEXT puts TEXT on the clipboard once the window has the keyboard
 // ("copied"; "sent" when someone pasted it); --paste prints every clipboard
 // text it is offered ("pasted TEXT").
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]
-//                    [--copy TEXT] [--paste]
+//                    [--copy TEXT] [--paste] [--alpha]
 
 use std::fs::File;
 use std::io::Write;
@@ -66,6 +69,7 @@ struct App {
     data_device: Option<wl_data_device::WlDataDevice>,
     copy: Option<String>,
     paste: bool,
+    alpha: bool,
 }
 
 const TEXT: &str = "text/plain;charset=utf-8";
@@ -103,7 +107,12 @@ impl App {
         }
         let shm = self.shm.as_ref().unwrap();
         let pool = shm.create_pool(file.as_fd(), len as i32, qh, ());
-        let buffer = pool.create_buffer(0, w, h, stride, wl_shm::Format::Xrgb8888, qh, ());
+        let format = if self.alpha {
+            wl_shm::Format::Argb8888
+        } else {
+            wl_shm::Format::Xrgb8888
+        };
+        let buffer = pool.create_buffer(0, w, h, stride, format, qh, ());
         pool.destroy();
         surface.attach(Some(&buffer), 0, 0);
         surface.damage_buffer(0, 0, w, h);
@@ -486,10 +495,11 @@ fn main() {
     let mut popup_spec = None;
     let mut copy = None;
     let mut paste = false;
+    let mut alpha = false;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
-        let v = if a == "--grab" || a == "--paste" {
+        let v = if a == "--grab" || a == "--paste" || a == "--alpha" {
             String::new()
         } else {
             args.next().unwrap_or_default()
@@ -522,12 +532,16 @@ fn main() {
                 paste = true;
                 continue;
             }
+            "--alpha" => {
+                alpha = true;
+                continue;
+            }
             "--grab" => {
                 popup_spec.as_mut().expect("--popup first").grab = true;
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--alpha]");
                 std::process::exit(2);
             }
         }
@@ -555,6 +569,7 @@ fn main() {
         data_device: None,
         copy,
         paste,
+        alpha,
     };
     queue.roundtrip(&mut app).expect("roundtrip");
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {

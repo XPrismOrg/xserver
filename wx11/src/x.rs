@@ -2,13 +2,16 @@
 //
 // The X side of WX11: one X window per Wayland toplevel.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::os::fd::{AsFd, OwnedFd};
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
-    AtomEnum, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, GrabMode,
-    GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, WindowClass,
+    AtomEnum, ColormapAlloc, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
+    EventMask, GrabMode, GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, VisualClass,
+    WindowClass,
 };
 use x11rb::protocol::xproto::{SelectionNotifyEvent, SELECTION_NOTIFY_EVENT};
 use x11rb::protocol::Event as XEvent;
@@ -79,6 +82,12 @@ pub struct XSide {
     root: u32,
     depth: u8,
     visual: u32,
+    /// a 32-bit TrueColor visual with alpha, a colormap and a GC for it,
+    /// for Wayland buffers with alpha (argb8888); a GC only draws on
+    /// drawables of its own depth
+    argb: Option<(u32, u32, u32)>,
+    /// the windows created with the ARGB visual
+    deep: RefCell<HashSet<u32>>,
     gc: u32,
     wm_protocols: u32,
     wm_delete_window: u32,
@@ -98,6 +107,13 @@ impl XSide {
         let (conn, screen_num) = RustConnection::connect(display)?;
         let screen = &conn.setup().roots[screen_num];
         let (root, depth, visual) = (screen.root, screen.root_depth, screen.root_visual);
+        let argb_visual = screen
+            .allowed_depths
+            .iter()
+            .filter(|d| d.depth == 32)
+            .flat_map(|d| d.visuals.iter())
+            .find(|v| v.class == VisualClass::TRUE_COLOR)
+            .map(|v| v.visual_id);
         let atom = |name: &str| -> Result<u32, Box<dyn std::error::Error>> {
             Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
         };
@@ -112,6 +128,19 @@ impl XSide {
         let wx11_selection = atom("WX11_SELECTION")?;
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
+        let argb = match argb_visual {
+            Some(v) => {
+                let cmap = conn.generate_id()?;
+                conn.create_colormap(ColormapAlloc::NONE, cmap, root, v)?;
+                let pixmap = conn.generate_id()?;
+                conn.create_pixmap(32, pixmap, root, 1, 1)?;
+                let gc32 = conn.generate_id()?;
+                conn.create_gc(gc32, pixmap, &CreateGCAux::new())?;
+                conn.free_pixmap(pixmap)?;
+                Some((v, cmap, gc32))
+            }
+            None => None,
+        };
         let sel_win = conn.generate_id()?;
         conn.create_window(
             0,
@@ -140,6 +169,8 @@ impl XSide {
             root,
             depth,
             visual,
+            argb,
+            deep: RefCell::new(HashSet::new()),
             gc,
             wm_protocols,
             wm_delete_window,
@@ -323,14 +354,11 @@ impl XSide {
 
     /// an override-redirect window at x, y on the root (a popup: the
     /// window manager does not manage it)
-    pub fn create_popup(&self, x: i32, y: i32, w: u32, h: u32) -> u32 {
+    pub fn create_popup(&self, x: i32, y: i32, w: u32, h: u32, alpha: bool) -> u32 {
         let win = self.conn.generate_id().expect("X resource id");
-        let aux = CreateWindowAux::new()
-            .background_pixel(0)
-            .override_redirect(1)
-            .event_mask(Self::event_mask());
+        let (depth, visual, aux) = self.window_kind(win, alpha);
         let _ = self.conn.create_window(
-            self.depth,
+            depth,
             win,
             self.root,
             x as i16,
@@ -339,8 +367,8 @@ impl XSide {
             h.max(1) as u16,
             0,
             WindowClass::INPUT_OUTPUT,
-            self.visual,
-            &aux,
+            visual,
+            &aux.override_redirect(1),
         );
         let _ = self.conn.map_window(win);
         win
@@ -386,13 +414,28 @@ impl XSide {
         let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
     }
 
-    pub fn create_window(&self, w: u32, h: u32, title: &str, app_id: &str) -> u32 {
-        let win = self.conn.generate_id().expect("X resource id");
+    /// depth, visual and attributes of a new window: with alpha the ARGB
+    /// visual (which needs its own colormap and border), if the server
+    /// has one; win is remembered as 32-bit
+    fn window_kind(&self, win: u32, alpha: bool) -> (u8, u32, CreateWindowAux) {
         let aux = CreateWindowAux::new()
             .background_pixel(0)
+            .border_pixel(0)
             .event_mask(Self::event_mask());
+        match self.argb {
+            Some((visual, cmap, _)) if alpha => {
+                self.deep.borrow_mut().insert(win);
+                (32, visual, aux.colormap(cmap))
+            }
+            _ => (self.depth, self.visual, aux),
+        }
+    }
+
+    pub fn create_window(&self, w: u32, h: u32, title: &str, app_id: &str, alpha: bool) -> u32 {
+        let win = self.conn.generate_id().expect("X resource id");
+        let (depth, visual, aux) = self.window_kind(win, alpha);
         let _ = self.conn.create_window(
-            self.depth,
+            depth,
             win,
             self.root,
             0,
@@ -401,7 +444,7 @@ impl XSide {
             h.max(1) as u16,
             0,
             WindowClass::INPUT_OUTPUT,
-            self.visual,
+            visual,
             &aux,
         );
         let _ = self.conn.change_property32(
@@ -465,11 +508,17 @@ impl XSide {
     }
 
     pub fn destroy_window(&self, win: u32) {
+        self.deep.borrow_mut().remove(&win);
         let _ = self.conn.destroy_window(win);
     }
 
     /// draw BGRX pixels into the window, in as many requests as needed
     pub fn put_image(&self, win: u32, w: u32, h: u32, pixels: &[u8]) {
+        // argb8888 and the ARGB visual are both premultiplied BGRA
+        let (depth, gc) = match self.argb {
+            Some((_, _, gc32)) if self.deep.borrow().contains(&win) => (32, gc32),
+            _ => (self.depth, self.gc),
+        };
         let stride = w as usize * 4;
         let max = self.conn.maximum_request_bytes().saturating_sub(64);
         let rows = (max / stride).clamp(1, h as usize);
@@ -479,13 +528,13 @@ impl XSide {
             let _ = self.conn.put_image(
                 ImageFormat::Z_PIXMAP,
                 win,
-                self.gc,
+                gc,
                 w as u16,
                 n as u16,
                 0,
                 y as i16,
                 0,
-                self.depth,
+                depth,
                 &pixels[y * stride..(y + n) * stride],
             );
             y += n;

@@ -30,6 +30,7 @@ use smithay::reexports::wayland_server::backend::{ClientData, ClientId, Disconne
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
+use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{Serial, SERIAL_COUNTER};
@@ -153,7 +154,8 @@ impl CompositorHandler for State {
 
 /// the pixels of an shm buffer as BGRX rows (width, height, pixels); the
 /// buffer is released
-fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>)> {
+/// (and whether it has alpha: argb8888)
+fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>, bool)> {
     let mut image = None;
     let _ = with_buffer_contents(buffer, |ptr, len, data| {
         let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
@@ -172,7 +174,8 @@ fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>)> {
             let src = unsafe { std::slice::from_raw_parts(ptr.add(start), w as usize * 4) };
             pixels.extend_from_slice(src);
         }
-        image = Some((w as u32, h as u32, pixels));
+        let alpha = data.format == wl_shm::Format::Argb8888;
+        image = Some((w as u32, h as u32, pixels, alpha));
     });
     buffer.release();
     image
@@ -214,8 +217,8 @@ impl State {
         let (buffer, callbacks) = take_commit(surface);
         match buffer {
             Some(BufferAssignment::NewBuffer(buffer)) => {
-                if let Some((w, h, pixels)) = read_pixels(&buffer) {
-                    self.show_popup(&id, w, h, &pixels);
+                if let Some((w, h, pixels, alpha)) = read_pixels(&buffer) {
+                    self.show_popup(&id, w, h, &pixels, alpha);
                 }
             }
             Some(BufferAssignment::Removed) => self.hide_popup(&id),
@@ -233,7 +236,7 @@ impl State {
             .or_else(|| self.popups.get(&id).and_then(|p| p.window))
     }
 
-    fn show_popup(&mut self, id: &Id, w: u32, h: u32, pixels: &[u8]) {
+    fn show_popup(&mut self, id: &Id, w: u32, h: u32, pixels: &[u8], alpha: bool) {
         let popup = &self.popups[id];
         let parent = popup
             .surface
@@ -252,7 +255,7 @@ impl State {
                 win
             }
             None => {
-                let win = self.x.create_popup(x, y, w, h);
+                let win = self.x.create_popup(x, y, w, h, alpha);
                 popup.window = Some(win);
                 if popup.grabbed {
                     self.x.grab_pointer(win);
@@ -326,7 +329,8 @@ impl State {
     }
 
     fn show_buffer(&mut self, id: &Id, buffer: &WlBuffer) {
-        let Some((w, h, pixels)) = read_pixels(buffer) else {
+        // a window keeps the visual of its first buffer
+        let Some((w, h, pixels, alpha)) = read_pixels(buffer) else {
             return;
         };
 
@@ -351,7 +355,7 @@ impl State {
                 win
             }
             None => {
-                let win = self.x.create_window(w, h, &title, &app_id);
+                let win = self.x.create_window(w, h, &title, &app_id, alpha);
                 top.window = Some(win);
                 win
             }

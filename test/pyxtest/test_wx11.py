@@ -470,3 +470,29 @@ def test_x_copy_after_wayland_copy_takes_over(xserver, client):
     inp.focus(wb)
     assert _answer(conn, b"new"), "WX11 kept offering the old Wayland text"
     b.wait_for("pasted new")
+
+
+def _depth(conn, win):
+    r = _reply(conn, conn.send_request(struct.pack("<BxHI", X_GET_GEOMETRY, 2, win)))
+    return r.data[1]
+
+
+def _argb(conn, win, x, y):
+    r = _reply(conn, conn.send_request(struct.pack("<BBHIhhHHI", X_GET_IMAGE, Z_PIXMAP, 5, win,
+                                                   x, y, 1, 1, 0xFFFFFFFF)))
+    return struct.unpack_from("<I", r.data, 32)[0]
+
+
+def test_alpha_buffer_gets_an_argb_window(xserver, client):
+    # half-transparent red, premultiplied
+    c, win = _shown(xserver, client, "glass", "--alpha", "--color", "80800000")
+    conn = RawX11Connection(xserver.display_num)
+    assert _depth(conn, win) == 32
+    assert _argb(conn, win, 5, 5) == 0x80800000
+
+
+def test_opaque_buffer_keeps_the_screen_depth(xserver, client):
+    c, win = _shown(xserver, client, "solid", "--color", "00ff00")
+    conn = RawX11Connection(xserver.display_num)
+    assert _depth(conn, win) == 24
+    assert _pixel(conn, win, 5, 5) == 0x00ff00
