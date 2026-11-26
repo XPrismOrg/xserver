@@ -41,6 +41,15 @@ root window, the compositor updates each screen in three steps:
    just before the window. Both masks are computed once per window and
    size, and reused until either changes.
 
+For a window with background blur, the compositor renders the layers
+below it (root background, windows, their shadows) into a scratch
+picture covering the repainted part of the window plus the blur radius,
+halves it until the remaining radius is at most 4 pixels, blurs it with
+two Gaussian passes and scales it back up behind the window. Reading the
+layers from the windows' own pixmaps rather than from the screen keeps
+windows above out of the blur. A change below a blurring window, within
+the blur radius, repaints the affected part of its blur.
+
 All drawing goes through Render, so it is GPU-accelerated wherever the
 driver accelerates Render (glamor) and done in software otherwise. Opaque
 windows look exactly the same with the compositor enabled as without it.
@@ -53,7 +62,7 @@ of the following hold:
 - it is the topmost viewable window;
 - it covers the whole screen and has no shape;
 - it is opaque: no alpha channel and full opacity;
-- it has no transform, rounded corners or shadow.
+- it has no transform and no decorations.
 
 The compositor then removes the redirection from that window. Nothing is
 copied per frame, and on hardware Present can page-flip the window's
@@ -102,9 +111,12 @@ Taking over requires the `compositor.legacy` capability, see
   overwritten wherever the compositor repaints, which is also the case
   with external compositors.
 - The window manager can currently set opacity, transforms, rounded
-  corners and shadows. Transforms affect only the display; input is still
-  delivered according to the window's actual geometry, and transformed
-  windows have no shadow.
+  corners, shadows and background blur. Transforms affect only the
+  display; input is still delivered according to the window's actual
+  geometry, and transformed windows have no shadow or blur.
+- Background blur costs about 1 to 25 ms to repaint a whole 600x400
+  window in software, depending on the radius, and well under 1 ms for
+  small updates. It has not been measured with glamor yet.
 - Shadow and corner masks are computed on the CPU whenever a decorated
   window changes size. For a 1200x950 window with the largest blur this
   takes about 40 ms, so interactively resizing large windows with

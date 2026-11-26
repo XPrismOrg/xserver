@@ -60,7 +60,14 @@ typedef struct {
     BoxRec shadowBox;           /* screen coords, if shadow */
     CARD16 shadowBlur;
     CARD32 shadowColor;
+    CARD16 bgBlur;              /* background blur radius, 0 = none */
 } SceneNodeRec;
+
+typedef struct {
+    PicturePtr mask;
+    int w, h, radius;
+    CARD8 alpha;
+} SceneCornerCache;
 
 /* What the window manager set through XPRISM-SCENE (window private,
    zero-initialized storage: nothing set). */
@@ -75,10 +82,11 @@ typedef struct {
     CARD16 shadowBlur;
     INT16 shadowDx, shadowDy;
     CARD32 shadowColor;         /* ARGB, not premultiplied */
+    /* 0.3 */
+    CARD16 bgBlur;
     /* cached alpha masks, rebuilt when their key changes */
-    PicturePtr cornerMask;
-    int cmW, cmH, cmRadius;
-    CARD8 cmAlpha;
+    SceneCornerCache corner;    /* with the window's opacity */
+    SceneCornerCache backdrop;  /* opaque, for the blurred backdrop */
     PicturePtr shadowMask;
     int smW, smH, smRadius, smBlur;
 } SceneAttrsRec, *SceneAttrsPtr;
@@ -266,16 +274,17 @@ sceneStride(int w)
 }
 
 static PicturePtr
-sceneCornerMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h, CARD8 alpha)
+sceneCornerMask(ScreenPtr pScreen, SceneCornerCache *cache, int radius,
+                int w, int h, CARD8 alpha)
 {
-    int r = min(attrs->radius, min(w, h) / 2);
+    int r = min(radius, min(w, h) / 2);
 
-    if (attrs->cornerMask && attrs->cmW == w && attrs->cmH == h &&
-        attrs->cmRadius == r && attrs->cmAlpha == alpha)
-        return attrs->cornerMask;
-    if (attrs->cornerMask)
-        FreePicture(attrs->cornerMask, 0);
-    attrs->cornerMask = NULL;
+    if (cache->mask && cache->w == w && cache->h == h &&
+        cache->radius == r && cache->alpha == alpha)
+        return cache->mask;
+    if (cache->mask)
+        FreePicture(cache->mask, 0);
+    cache->mask = NULL;
 
     int stride = sceneStride(w);
     uint8_t *buf = calloc((size_t) stride, h);
@@ -285,13 +294,13 @@ sceneCornerMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h, CARD8 alph
         for (int x = 0; x < w; x++)
             buf[y * stride + x] =
                 (uint8_t) lround(alpha * sceneRoundRectCoverage(x, y, 0, 0, w, h, r));
-    attrs->cornerMask = sceneAlphaPicture(pScreen, w, h, buf);
+    cache->mask = sceneAlphaPicture(pScreen, w, h, buf);
     free(buf);
-    attrs->cmW = w;
-    attrs->cmH = h;
-    attrs->cmRadius = r;
-    attrs->cmAlpha = alpha;
-    return attrs->cornerMask;
+    cache->w = w;
+    cache->h = h;
+    cache->radius = r;
+    cache->alpha = alpha;
+    return cache->mask;
 }
 
 /* One box-blur pass over n samples, step apart, using a running sum.
@@ -369,8 +378,10 @@ sceneShadowMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h)
 static void
 sceneResetAttrs(SceneAttrsPtr attrs)
 {
-    if (attrs->cornerMask)
-        FreePicture(attrs->cornerMask, 0);
+    if (attrs->corner.mask)
+        FreePicture(attrs->corner.mask, 0);
+    if (attrs->backdrop.mask)
+        FreePicture(attrs->backdrop.mask, 0);
     if (attrs->shadowMask)
         FreePicture(attrs->shadowMask, 0);
     memset(attrs, 0, sizeof(*attrs));
@@ -485,6 +496,14 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 
         if (attrs->mask & XpSceneNodeCornerRadius)
             node->radius = attrs->radius;
+        if ((attrs->mask & XpSceneNodeBackgroundBlur) && attrs->bgBlur &&
+            !node->transformed) {
+            /* only what shows through the window is blurred */
+            PictFormatPtr format = PictureWindowFormat(pWin);
+            if (node->opacity != 0xffffffff ||
+                (format && format->direct.alphaMask))
+                node->bgBlur = attrs->bgBlur;
+        }
         if ((attrs->mask & XpSceneNodeShadow) && !node->transformed) {
             int bw = wBorderWidth(pWin), b = attrs->shadowBlur;
             int x = pWin->drawable.x - bw + attrs->shadowDx - b;
@@ -539,7 +558,8 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             old->radius != nodes[i].radius || old->shadow != nodes[i].shadow ||
             old->shadowBlur != nodes[i].shadowBlur ||
             /* a shadow has the window's size, so box covers its position */
-            old->shadowColor != nodes[i].shadowColor) {
+            old->shadowColor != nodes[i].shadowColor ||
+            old->bgBlur != nodes[i].bgBlur) {
             sceneUnionBox(pDamage, &old->box);
             sceneUnionBox(pDamage, &nodes[i].box);
             continue;           /* fully damaged already */
@@ -593,11 +613,92 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 
 /* ---- painting -------------------------------------------------------- */
 
+/*
+ * Where layers are painted: the screen, or a scratch picture covering part
+ * of it (background blur renders the layers below a window there). ox, oy
+ * are the screen coordinates of the picture's origin.
+ */
+typedef struct {
+    PicturePtr pict;
+    int ox, oy;
+    bool screen;
+} SceneTarget;
+
+/* Clip the target to pRegion (screen coordinates). */
 static void
-scenePaintShadow(ScreenPtr pScreen, PicturePtr pDst, WindowPtr pWin,
-                 SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pDamage)
+sceneTargetClip(const SceneTarget *t, RegionPtr pRegion)
+{
+    RegionTranslate(pRegion, -t->ox, -t->oy);
+    SetPictureClipRegion(t->pict, 0, 0, pRegion);
+    RegionTranslate(pRegion, t->ox, t->oy);
+}
+
+/* The outer box of a window, border included, in screen coordinates. */
+static BoxRec
+sceneOuterBox(WindowPtr pWin)
+{
+    int bw = wBorderWidth(pWin);
+    return (BoxRec) {
+        .x1 = pWin->drawable.x - bw, .y1 = pWin->drawable.y - bw,
+        .x2 = pWin->drawable.x + pWin->drawable.width + bw,
+        .y2 = pWin->drawable.y + pWin->drawable.height + bw,
+    };
+}
+
+static void
+scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pRegion)
 {
     WindowPtr pRoot = pScreen->root;
+
+    if (t->screen) {
+        /* Composite inhibits the root background while Manual redirection
+           is in place: painting it is our job now */
+        pRoot->inhibitBGPaint = FALSE;
+        miPaintWindow(pRoot, pRegion, PW_BACKGROUND);
+        pRoot->inhibitBGPaint = TRUE;
+        return;
+    }
+
+    DrawablePtr pDrawable = t->pict->pDrawable;
+    GCPtr pGC = GetScratchGC(pDrawable->depth, pScreen);
+    if (!pGC)
+        return;
+    ChangeGCVal vals[4];
+    BITS32 mask;
+    if (pRoot->backgroundState == BackgroundPixmap) {
+        mask = GCFillStyle | GCTile | GCTileStipXOrigin | GCTileStipYOrigin;
+        vals[0].val = FillTiled;
+        vals[1].ptr = pRoot->background.pixmap;
+        vals[2].val = pRoot->drawable.x - t->ox;
+        vals[3].val = pRoot->drawable.y - t->oy;
+    } else {
+        mask = GCForeground;
+        vals[0].val = pRoot->backgroundState == BackgroundPixel ?
+            pRoot->background.pixel : pScreen->blackPixel;
+    }
+    ChangeGC(NULL, pGC, mask, vals);
+    ValidateGC(pDrawable, pGC);
+
+    int n = RegionNumRects(pRegion);
+    BoxPtr boxes = RegionRects(pRegion);
+    xRectangle *rects = calloc(n ? n : 1, sizeof(xRectangle));
+    if (rects) {
+        for (int k = 0; k < n; k++)
+            rects[k] = (xRectangle) {
+                .x = boxes[k].x1 - t->ox, .y = boxes[k].y1 - t->oy,
+                .width = boxes[k].x2 - boxes[k].x1,
+                .height = boxes[k].y2 - boxes[k].y1,
+            };
+        (*pGC->ops->PolyFillRect) (pDrawable, pGC, n, rects);
+        free(rects);
+    }
+    FreeScratchGC(pGC);
+}
+
+static void
+scenePaintShadow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
+                 SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pRegion)
+{
     int bw = wBorderWidth(pWin), error;
     PicturePtr pMask = sceneShadowMask(pScreen, attrs,
                                        pWin->drawable.width + 2 * bw,
@@ -608,18 +709,16 @@ scenePaintShadow(ScreenPtr pScreen, PicturePtr pDst, WindowPtr pWin,
     RegionRec clip, box;
     RegionInit(&box, (BoxPtr) &node->shadowBox, 1);
     RegionNull(&clip);
-    RegionIntersect(&clip, pDamage, &box);
+    RegionIntersect(&clip, pRegion, &box);
 
     /* Nothing of the shadow shows through the window itself, even when
        it is translucent. Only the corner squares keep it, where rounding
        cuts the window away. */
-    int x1 = pWin->drawable.x - bw, y1 = pWin->drawable.y - bw;
-    int x2 = x1 + pWin->drawable.width + 2 * bw;
-    int y2 = y1 + pWin->drawable.height + 2 * bw;
-    int r = min(node->radius, min(x2 - x1, y2 - y1) / 2);
+    BoxRec o = sceneOuterBox(pWin);
+    int r = min(node->radius, min(o.x2 - o.x1, o.y2 - o.y1) / 2);
     BoxRec cross[2] = {
-        { .x1 = x1 + r, .y1 = y1, .x2 = x2 - r, .y2 = y2 },
-        { .x1 = x1, .y1 = y1 + r, .x2 = x2, .y2 = y2 - r },
+        { .x1 = o.x1 + r, .y1 = o.y1, .x2 = o.x2 - r, .y2 = o.y2 },
+        { .x1 = o.x1, .y1 = o.y1 + r, .x2 = o.x2, .y2 = o.y2 - r },
     };
     RegionPtr pBody = RegionCreate(NullBox, 0);
     if (pBody) {
@@ -647,17 +746,344 @@ scenePaintShadow(ScreenPtr pScreen, PicturePtr pDst, WindowPtr pWin,
         };
         PicturePtr pSrc = CreateSolidPicture(0, &color, &error);
         if (pSrc) {
-            RegionTranslate(&clip, -pRoot->drawable.x, -pRoot->drawable.y);
-            SetPictureClipRegion(pDst, 0, 0, &clip);
+            sceneTargetClip(t, &clip);
             const BoxRec *b = &node->shadowBox;
-            CompositePicture(PictOpOver, pSrc, pMask, pDst, 0, 0, 0, 0,
-                             b->x1 - pRoot->drawable.x, b->y1 - pRoot->drawable.y,
+            CompositePicture(PictOpOver, pSrc, pMask, t->pict, 0, 0, 0, 0,
+                             b->x1 - t->ox, b->y1 - t->oy,
                              b->x2 - b->x1, b->y2 - b->y1);
             FreePicture(pSrc, 0);
         }
     }
     RegionUninit(&clip);
     RegionUninit(&box);
+}
+
+static void
+scenePaintWindow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
+                 SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pRegion)
+{
+    int error;
+    RegionRec clip;
+
+    RegionNull(&clip);
+    if (node->transformed) {
+        RegionRec shown;
+        RegionInit(&shown, (BoxPtr) &node->box, 1);
+        RegionIntersect(&clip, pRegion, &shown);
+        RegionUninit(&shown);
+    } else {
+        RegionIntersect(&clip, pRegion, &pWin->borderSize);
+    }
+    if (!RegionNotEmpty(&clip)) {
+        RegionUninit(&clip);
+        return;
+    }
+
+    PixmapPtr pPixmap = (*pScreen->GetWindowPixmap) (pWin);
+    PicturePtr pSrc = CreatePicture(0, &pPixmap->drawable,
+                                    PictureWindowFormat(pWin), 0, NULL,
+                                    serverClient, &error);
+    if (!pSrc) {
+        RegionUninit(&clip);
+        return;
+    }
+
+    PicturePtr pMask = NULL;
+    bool ownMask = false;
+    if (node->radius) {
+        /* cached; owned by attrs */
+        pMask = sceneCornerMask(pScreen, &attrs->corner, node->radius,
+                                pPixmap->drawable.width,
+                                pPixmap->drawable.height,
+                                node->opacity >> 24);
+        if (pMask && node->transformed) {
+            SetPictureTransform(pMask, &attrs->inverse);
+            SetPictureFilter(pMask, (char *) "bilinear", 8, NULL, 0);
+        } else if (pMask) {
+            SetPictureTransform(pMask, NULL);
+        }
+    } else if (node->opacity != 0xffffffff) {
+        xRenderColor alpha = { .alpha = node->opacity >> 16 };
+        pMask = CreateSolidPicture(0, &alpha, &error);
+        ownMask = true;
+    }
+
+    sceneTargetClip(t, &clip);
+    if (node->transformed) {
+        /* Render maps destination to source: give it the inverse */
+        SetPictureTransform(pSrc, &attrs->inverse);
+        SetPictureFilter(pSrc, (char *) "bilinear", 8, NULL, 0);
+        const BoxRec *b = &node->box;
+        CompositePicture(PictOpOver, pSrc, pMask, t->pict,
+                         b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
+                         b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
+                         b->x1 - t->ox, b->y1 - t->oy,
+                         b->x2 - b->x1, b->y2 - b->y1);
+    } else {
+        CompositePicture(PictOpOver, pSrc, pMask, t->pict,
+                         0, 0, 0, 0,
+                         pPixmap->screen_x - t->ox, pPixmap->screen_y - t->oy,
+                         pPixmap->drawable.width, pPixmap->drawable.height);
+    }
+    if (pMask && ownMask)
+        FreePicture(pMask, 0);
+    FreePicture(pSrc, 0);
+    RegionUninit(&clip);
+}
+
+/* ---- background blur (0.3) -------------------------------------------- */
+
+/* Every box of pRegion grown by e on each side, added to pRegion. */
+static void
+sceneGrowRegion(RegionPtr pRegion, int e)
+{
+    int n = RegionNumRects(pRegion);
+    BoxPtr rects = RegionRects(pRegion);
+    BoxPtr grown = calloc(n ? n : 1, sizeof(BoxRec));
+
+    if (!grown)
+        return;
+    for (int k = 0; k < n; k++)
+        grown[k] = (BoxRec) {
+            .x1 = max(rects[k].x1 - e, -32767), .y1 = max(rects[k].y1 - e, -32767),
+            .x2 = min(rects[k].x2 + e, 32767), .y2 = min(rects[k].y2 + e, 32767),
+        };
+    for (int k = 0; k < n; k++)
+        sceneUnionBox(pRegion, &grown[k]);
+    free(grown);
+}
+
+/*
+ * A blurred backdrop pixel depends on everything below the window within
+ * the blur radius. So where anything below changed within the radius of a
+ * blurring window, its blur changes too, within the radius of the change.
+ * Going up the stack, a window's changed blur is in turn a change below
+ * the windows above it.
+ */
+static void
+sceneExpandForBlur(const SceneNodeRec *nodes, WindowPtr *wins, int n,
+                   RegionPtr pDamage)
+{
+    for (int i = 0; i < n; i++) {
+        if (!nodes[i].bgBlur)
+            continue;
+        int r = nodes[i].bgBlur;
+        BoxRec box = sceneOuterBox(wins[i]);
+        BoxRec reach = { box.x1 - r, box.y1 - r, box.x2 + r, box.y2 + r };
+        RegionRec part, win;
+        RegionInit(&part, &reach, 1);
+        RegionIntersect(&part, &part, pDamage);
+        if (RegionNotEmpty(&part)) {
+            sceneGrowRegion(&part, r);
+            RegionInit(&win, &box, 1);
+            RegionIntersect(&part, &part, &win);
+            RegionUnion(pDamage, pDamage, &part);
+            RegionUninit(&win);
+        }
+        RegionUninit(&part);
+    }
+}
+
+/* Separable Gaussian kernel for Render's convolution filter. */
+static xFixed *
+sceneGaussKernel(int radius, bool horizontal, int *nparams)
+{
+    int size = 2 * radius + 1;
+    xFixed *params = calloc(size + 2, sizeof(xFixed));
+    double *w = calloc(size, sizeof(double));
+    if (!params || !w) {
+        free(params);
+        free(w);
+        return NULL;
+    }
+    double sigma = radius / 2.0, sum = 0;
+    for (int k = 0; k < size; k++) {
+        double d = k - radius;
+        w[k] = exp(-d * d / (2 * sigma * sigma));
+        sum += w[k];
+    }
+    params[0] = IntToxFixed(horizontal ? size : 1);
+    params[1] = IntToxFixed(horizontal ? 1 : size);
+    for (int k = 0; k < size; k++)
+        params[2 + k] = pixman_double_to_fixed(w[k] / sum);
+    free(w);
+    *nparams = size + 2;
+    return params;
+}
+
+static PicturePtr
+sceneScratchPicture(ScreenPtr pScreen, int w, int h, PictFormatPtr format)
+{
+    int error;
+    PixmapPtr pPixmap = (*pScreen->CreatePixmap) (pScreen, max(w, 1), max(h, 1),
+                                                  format->depth, 0);
+    if (!pPixmap)
+        return NULL;
+    XID repeat = RepeatPad;
+    PicturePtr pPicture = CreatePicture(0, &pPixmap->drawable, format,
+                                        CPRepeat, &repeat, serverClient, &error);
+    dixDestroyPixmap(pPixmap, 0);
+    return pPicture;
+}
+
+static void
+sceneScaleTransform(PictTransform *t, xFixed scale)
+{
+    memset(t, 0, sizeof(*t));
+    t->matrix[0][0] = scale;
+    t->matrix[1][1] = scale;
+    t->matrix[2][2] = xFixed1;
+}
+
+/* Gaussian blur of pPict (w x h) by radius r, in place. */
+static void
+sceneBlurPicture(ScreenPtr pScreen, PicturePtr pPict, int w, int h, int r)
+{
+    int nh = 0, nv = 0;
+    xFixed *kh = sceneGaussKernel(r, true, &nh);
+    xFixed *kv = sceneGaussKernel(r, false, &nv);
+    PicturePtr pTmp = sceneScratchPicture(pScreen, w, h, pPict->pFormat);
+
+    if (kh && kv && pTmp) {
+        SetPictureFilter(pPict, (char *) "convolution", 11, kh, nh);
+        CompositePicture(PictOpSrc, pPict, NULL, pTmp, 0, 0, 0, 0, 0, 0, w, h);
+        SetPictureFilter(pTmp, (char *) "convolution", 11, kv, nv);
+        CompositePicture(PictOpSrc, pTmp, NULL, pPict, 0, 0, 0, 0, 0, 0, w, h);
+        SetPictureFilter(pPict, (char *) "nearest", 7, NULL, 0);
+    }
+    free(kh);
+    free(kv);
+    if (pTmp)
+        FreePicture(pTmp, 0);
+}
+
+static void sceneRenderLayers(ScreenPtr pScreen, const SceneTarget *t,
+                              WindowPtr *wins, const SceneNodeRec *nodes,
+                              int upto, RegionPtr pRegion, int depth);
+
+/* Larger radii are blurred at a reduced scale: each pass then needs at
+   most this many taps on either side. */
+#define SCENE_BLUR_TAPS 4
+/* Blurring windows seen through blurring windows: how deep to recurse. */
+#define SCENE_BLUR_DEPTH 3
+
+/*
+ * Draw window i's backdrop, blurred, within pRegion: the layers below it
+ * are rendered into a scratch picture (never read back from the screen,
+ * which also holds the layers above), reduced by halving for large radii,
+ * blurred, and scaled back up onto the target.
+ */
+static void
+scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
+                   const SceneNodeRec *nodes, int i, RegionPtr pRegion, int depth)
+{
+    WindowPtr pWin = wins[i], pRoot = pScreen->root;
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    const SceneNodeRec *node = &nodes[i];
+    BoxRec b = sceneOuterBox(pWin);
+    const BoxRec *scr = RegionExtents(&pRoot->winSize);
+    int r = node->bgBlur;
+
+    RegionRec clip;
+    RegionNull(&clip);
+    RegionIntersect(&clip, pRegion, &pWin->borderSize);
+    if (!RegionNotEmpty(&clip)) {
+        RegionUninit(&clip);
+        return;
+    }
+
+    /* what the blur reads: the clip and the radius around it */
+    const BoxRec *ext = RegionExtents(&clip);
+    BoxRec e = {
+        .x1 = max(ext->x1 - r, scr->x1), .y1 = max(ext->y1 - r, scr->y1),
+        .x2 = min(ext->x2 + r, scr->x2), .y2 = min(ext->y2 + r, scr->y2),
+    };
+    int ew = e.x2 - e.x1, eh = e.y2 - e.y1;
+    PictFormatPtr format = PictureWindowFormat(pRoot);
+    PicturePtr levels[8] = { 0 };
+    int lw[8], lh[8], nlevels = 0;
+
+    levels[0] = sceneScratchPicture(pScreen, ew, eh, format);
+    if (!levels[0])
+        goto out;
+    lw[0] = ew;
+    lh[0] = eh;
+    nlevels = 1;
+
+    SceneTarget below = { .pict = levels[0], .ox = e.x1, .oy = e.y1 };
+    RegionRec area;
+    RegionInit(&area, &e, 1);
+    sceneRenderLayers(pScreen, &below, wins, nodes, i, &area, depth + 1);
+    RegionUninit(&area);
+    SetPictureClipRegion(levels[0], 0, 0, NULL);
+
+    /* halve until the radius fits; bilinear sampling at 2x is an exact
+       2x2 average */
+    int scale = 1;
+    PictTransform half;
+    sceneScaleTransform(&half, IntToxFixed(2));
+    while (r > SCENE_BLUR_TAPS * scale && nlevels < 8) {
+        int k = nlevels;
+        lw[k] = (lw[k - 1] + 1) / 2;
+        lh[k] = (lh[k - 1] + 1) / 2;
+        levels[k] = sceneScratchPicture(pScreen, lw[k], lh[k], format);
+        if (!levels[k])
+            goto out;
+        SetPictureTransform(levels[k - 1], &half);
+        SetPictureFilter(levels[k - 1], (char *) "bilinear", 8, NULL, 0);
+        CompositePicture(PictOpSrc, levels[k - 1], NULL, levels[k],
+                         0, 0, 0, 0, 0, 0, lw[k], lh[k]);
+        nlevels++;
+        scale *= 2;
+    }
+    PicturePtr pSmall = levels[nlevels - 1];
+    sceneBlurPicture(pScreen, pSmall, lw[nlevels - 1], lh[nlevels - 1],
+                     max(1, (r + scale / 2) / scale));
+
+    PicturePtr pMask = NULL;
+    if (node->radius) {
+        pMask = sceneCornerMask(pScreen, &attrs->backdrop, node->radius,
+                                b.x2 - b.x1, b.y2 - b.y1, 0xff);
+        if (!pMask)
+            goto out;
+    }
+    PictTransform up;
+    sceneScaleTransform(&up, xFixed1 / scale);
+    SetPictureTransform(pSmall, scale > 1 ? &up : NULL);
+    SetPictureFilter(pSmall, (char *) "bilinear", 8, NULL, 0);
+    sceneTargetClip(t, &clip);
+    CompositePicture(pMask ? PictOpOver : PictOpSrc, pSmall, pMask, t->pict,
+                     b.x1 - e.x1, b.y1 - e.y1, 0, 0,
+                     b.x1 - t->ox, b.y1 - t->oy, b.x2 - b.x1, b.y2 - b.y1);
+out:
+    for (int k = 0; k < nlevels; k++)
+        FreePicture(levels[k], 0);
+    RegionUninit(&clip);
+}
+
+/* Paint the root background and windows [0, upto) within pRegion. */
+static void
+sceneRenderLayers(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
+                  const SceneNodeRec *nodes, int upto, RegionPtr pRegion,
+                  int depth)
+{
+    const BoxRec *ext = RegionExtents(pRegion);
+
+    scenePaintRootBackground(pScreen, t, pRegion);
+    for (int i = 0; i < upto; i++) {
+        WindowPtr pWin = wins[i];
+        SceneAttrsPtr attrs = sceneAttrs(pWin);
+        const BoxRec *nb = &nodes[i].box;
+
+        if (nb->x2 <= ext->x1 || nb->x1 >= ext->x2 ||
+            nb->y2 <= ext->y1 || nb->y1 >= ext->y2)
+            continue;
+        if (nodes[i].shadow)
+            scenePaintShadow(pScreen, t, pWin, attrs, &nodes[i], pRegion);
+        if (nodes[i].bgBlur && depth < SCENE_BLUR_DEPTH)
+            scenePaintBackdrop(pScreen, t, wins, nodes, i, pRegion, depth);
+        scenePaintWindow(pScreen, t, pWin, attrs, &nodes[i], pRegion);
+    }
 }
 
 static void
@@ -671,12 +1097,6 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
     if (!RegionNotEmpty(pDamage))
         return;
 
-    /* Composite inhibits the root background while Manual redirection
-       is in place: painting it is our job now */
-    pRoot->inhibitBGPaint = FALSE;
-    miPaintWindow(pRoot, pDamage, PW_BACKGROUND);
-    pRoot->inhibitBGPaint = TRUE;
-
     XID subwindowMode = IncludeInferiors;
     PicturePtr pDst = CreatePicture(0, &pRoot->drawable,
                                     PictureWindowFormat(pRoot),
@@ -684,79 +1104,11 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
                                     serverClient, &error);
     if (!pDst)
         return;
-
-    RegionRec clip;
-    RegionNull(&clip);
-
-    for (int i = 0; i < n; i++) {
-        WindowPtr pWin = wins[i];
-        SceneAttrsPtr attrs = sceneAttrs(pWin);
-
-        if (nodes[i].shadow)
-            scenePaintShadow(pScreen, pDst, pWin, attrs, &nodes[i], pDamage);
-
-        if (nodes[i].transformed) {
-            RegionRec shown;
-            RegionInit(&shown, (BoxPtr) &nodes[i].box, 1);
-            RegionIntersect(&clip, pDamage, &shown);
-            RegionUninit(&shown);
-        } else {
-            RegionIntersect(&clip, pDamage, &pWin->borderSize);
-        }
-        if (!RegionNotEmpty(&clip))
-            continue;
-
-        PixmapPtr pPixmap = (*pScreen->GetWindowPixmap) (pWin);
-        PicturePtr pSrc = CreatePicture(0, &pPixmap->drawable,
-                                        PictureWindowFormat(pWin), 0, NULL,
-                                        serverClient, &error);
-        if (!pSrc)
-            continue;
-
-        PicturePtr pMask = NULL;
-        bool ownMask = false;
-        if (nodes[i].radius) {
-            /* cached; owned by attrs */
-            pMask = sceneCornerMask(pScreen, attrs, pPixmap->drawable.width,
-                                    pPixmap->drawable.height,
-                                    nodes[i].opacity >> 24);
-            if (pMask && nodes[i].transformed) {
-                SetPictureTransform(pMask, &attrs->inverse);
-                SetPictureFilter(pMask, (char *) "bilinear", 8, NULL, 0);
-            } else if (pMask) {
-                SetPictureTransform(pMask, NULL);
-            }
-        } else if (nodes[i].opacity != 0xffffffff) {
-            xRenderColor alpha = { .alpha = nodes[i].opacity >> 16 };
-            pMask = CreateSolidPicture(0, &alpha, &error);
-            ownMask = true;
-        }
-
-        RegionTranslate(&clip, -pRoot->drawable.x, -pRoot->drawable.y);
-        SetPictureClipRegion(pDst, 0, 0, &clip);
-        if (nodes[i].transformed) {
-            /* Render maps destination to source: give it the inverse */
-            SetPictureTransform(pSrc, &sceneAttrs(pWin)->inverse);
-            SetPictureFilter(pSrc, (char *) "bilinear", 8, NULL, 0);
-            const BoxRec *b = &nodes[i].box;
-            CompositePicture(PictOpOver, pSrc, pMask, pDst,
-                             b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
-                             b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
-                             b->x1 - pRoot->drawable.x, b->y1 - pRoot->drawable.y,
-                             b->x2 - b->x1, b->y2 - b->y1);
-        } else {
-            CompositePicture(PictOpOver, pSrc, pMask, pDst,
-                             0, 0, 0, 0,
-                             pPixmap->screen_x - pRoot->drawable.x,
-                             pPixmap->screen_y - pRoot->drawable.y,
-                             pPixmap->drawable.width, pPixmap->drawable.height);
-        }
-        if (pMask && ownMask)
-            FreePicture(pMask, 0);
-        FreePicture(pSrc, 0);
-    }
-
-    RegionUninit(&clip);
+    SceneTarget screen = {
+        .pict = pDst, .ox = pRoot->drawable.x, .oy = pRoot->drawable.y,
+        .screen = true,
+    };
+    sceneRenderLayers(pScreen, &screen, wins, nodes, n, pDamage, 0);
     FreePicture(pDst, 0);
 }
 
@@ -850,10 +1202,17 @@ sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss)
 static void
 sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
 {
+    /* Painting reads the screen (background blur), and reads of a root
+       window compose pending changes first (compSceneValidate): a frame
+       must not start another one. */
+    static bool inFrame;
     RegionRec damage;
     WindowPtr *wins;
     SceneNodeRec *nodes;
 
+    if (inFrame)
+        return;
+    inFrame = true;
     sceneUpdateDirect(pScreen, ss);
 
     RegionNull(&damage);
@@ -862,6 +1221,7 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
         RegionCopy(&damage, &pScreen->root->winSize);
         ss->fullDamage = false;
     }
+    sceneExpandForBlur(nodes, wins, n, &damage);
     /* a window shown directly draws itself: never paint over it */
     WindowPtr pDirect;
     if (ss->direct != None &&
@@ -875,20 +1235,17 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
     free(ss->nodes);
     ss->nodes = nodes;
     ss->numNodes = n;
+    inFrame = false;
 }
 
 /* Bring the screen up to date before its contents are read. */
 void
 compSceneValidate(ScreenPtr pScreen)
 {
-    static bool inFrame;
     SceneScreenPtr ss = sceneScreen(pScreen);
 
-    if (!ss || !ss->active || inFrame)
-        return;
-    inFrame = true;
-    sceneFrame(pScreen, ss);
-    inFrame = false;
+    if (ss && ss->active)
+        sceneFrame(pScreen, ss);
 }
 
 static void
@@ -1107,7 +1464,15 @@ ProcXpSceneClearNodeAttributes(ClientPtr client)
 static int
 ProcXpSceneSetNodeDecoration(ClientPtr client)
 {
-    X_REQUEST_HEAD_STRUCT(xXpSceneSetNodeDecorationReq);
+    /* 0.2 clients send the request without backgroundBlur */
+    X_REQUEST_HEAD_NO_CHECK(xXpSceneSetNodeDecorationReq);
+    bool hasBlur = client->req_len == bytes_to_int32(sz_xXpSceneSetNodeDecorationReq);
+    if (!hasBlur &&
+        client->req_len != bytes_to_int32(sz_xXpSceneSetNodeDecorationReq02))
+        return BadLength;
+    if (hasBlur)
+        X_REQUEST_FIELD_CARD16(backgroundBlur);
+    CARD16 bgBlur = hasBlur ? stuff->backgroundBlur : 0;
     X_REQUEST_FIELD_CARD32(window);
     X_REQUEST_FIELD_CARD32(mask);
     X_REQUEST_FIELD_CARD16(cornerRadius);
@@ -1130,6 +1495,16 @@ ProcXpSceneSetNodeDecoration(ClientPtr client)
         client->errorValue = stuff->shadowBlur;
         return BadValue;
     }
+    if (stuff->mask & XpSceneNodeBackgroundBlur) {
+        if (!hasBlur) {
+            client->errorValue = stuff->mask;
+            return BadValue;
+        }
+        if (bgBlur > XpSceneMaxBackgroundBlur) {
+            client->errorValue = bgBlur;
+            return BadValue;
+        }
+    }
 
     WindowPtr pWin;
     int rc = sceneLookupNode(client, stuff->window, &pWin);
@@ -1145,6 +1520,8 @@ ProcXpSceneSetNodeDecoration(ClientPtr client)
         attrs->shadowDy = stuff->shadowDy;
         attrs->shadowColor = stuff->shadowColor;
     }
+    if (stuff->mask & XpSceneNodeBackgroundBlur)
+        attrs->bgBlur = bgBlur;
     attrs->mask |= stuff->mask;
     if (attrs->mask)
         attrs->owner = client;
@@ -1172,6 +1549,8 @@ ProcXpSceneGetNodeDecoration(ClientPtr client)
         .shadowDx = shadow ? attrs->shadowDx : 0,
         .shadowDy = shadow ? attrs->shadowDy : 0,
         .shadowColor = shadow ? attrs->shadowColor : 0,
+        .backgroundBlur = (attrs->mask & XpSceneNodeBackgroundBlur) ?
+            attrs->bgBlur : 0,
     };
     if (client->swapped) {
         swapl(&reply.mask);
@@ -1180,6 +1559,7 @@ ProcXpSceneGetNodeDecoration(ClientPtr client)
         swaps(&reply.shadowDx);
         swaps(&reply.shadowDy);
         swapl(&reply.shadowColor);
+        swaps(&reply.backgroundBlur);
     }
     return X_SEND_REPLY_SIMPLE(client, reply);
 }

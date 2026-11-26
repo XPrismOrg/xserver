@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# XPRISM-SCENE protocol v0.2 (Xext/composite/compscene.c,
+# XPRISM-SCENE protocol v0.3 (Xext/composite/compscene.c,
 # doc/xprism-scene-protocol.md): the window manager describes how the
 # scene compositor shows each top-level window.
 
@@ -17,7 +17,7 @@ CW_EVENT_MASK = 1 << 11
 SUBSTRUCTURE_REDIRECT = 1 << 20
 
 SET, GET, CLEAR, SET_DECO, GET_DECO = 1, 2, 3, 4, 5
-OPACITY, TRANSFORM, RADIUS, SHADOW = 1, 2, 4, 8
+OPACITY, TRANSFORM, RADIUS, SHADOW, BLUR = 1, 2, 4, 8, 16
 WHITE = 0xFFFFFF
 ONE = 1 << 16
 IDENTITY = [ONE, 0, 0, 0, ONE, 0, 0, 0, ONE]
@@ -98,15 +98,24 @@ class Scene:
         hdr = struct.pack(self.bo + "BxH", 12, 1 + len(body) // 4)
         return self._errors(self.c.send_request(hdr + body))
 
-    def decorate(self, wid, mask, radius=0, blur=0, dx=0, dy=0, color=0):
-        return self._errors(self._req(SET_DECO, "IIHHhhI", wid, mask, radius,
-                                      blur, dx, dy, color))
+    def map(self, wid):
+        """MapWindow from the WM, so not redirected back to it."""
+        return self._errors(self.c.send_request(
+            struct.pack(self.bo + "BxHI", 8, 2, wid)))
+
+    def decorate(self, wid, mask, radius=0, blur=0, dx=0, dy=0, color=0,
+                 bg_blur=0, v02=False):
+        if v02:   # the 0.2 request, without backgroundBlur
+            return self._errors(self._req(SET_DECO, "IIHHhhI", wid, mask, radius,
+                                          blur, dx, dy, color))
+        return self._errors(self._req(SET_DECO, "IIHHhhIHxx", wid, mask, radius,
+                                      blur, dx, dy, color, bg_blur))
 
     def decoration(self, wid):
         r = self._result(self._req(GET_DECO, "I", wid))
         if isinstance(r, X11Error):
             return r
-        return struct.unpack_from(self.bo + "IHHhhI", r.data, 8)
+        return struct.unpack_from(self.bo + "IHHhhIH", r.data, 8)
 
 
 def _red_over_blue(xvfb):
@@ -129,7 +138,7 @@ class TestAbsent:
 
 
 def test_query_version(xvfb):
-    assert Scene(xvfb).version() == (0, 2)
+    assert Scene(xvfb).version() == (0, 3)
 
 
 def test_only_the_window_manager_may_describe_the_scene(xvfb):
@@ -229,7 +238,7 @@ def test_bad_requests(xvfb):
 def test_swapped_client(xvfb):
     x, w = _red_over_blue(xvfb)
     wm = Scene(xvfb, swapped=True)
-    assert wm.version() == (0, 2)
+    assert wm.version() == (0, 3)
     assert wm.become_wm(x) == []
     assert wm.set(w, OPACITY, 0x80000000) == []
     assert _near(x.pixel(150, 150), 0x80007F)
@@ -280,7 +289,7 @@ def test_rounded_corners(xvfb):
     assert x.pixel(150, 100) == RED          # middle of an edge
     assert x.pixel(100, 150) == RED
     assert x.pixel(150, 150) == RED
-    assert wm.decoration(w) == (RADIUS, 20, 0, 0, 0, 0)
+    assert wm.decoration(w) == (RADIUS, 20, 0, 0, 0, 0, 0)
     assert wm.clear(w, RADIUS) == []
     assert x.pixel(100, 100) == RED
     assert wm.decoration(w)[0] == 0
@@ -305,7 +314,7 @@ def test_sharp_shadow(xvfb):
     assert x.pixel(150, 150) == RED          # window drawn above its shadow
     assert x.pixel(110, 210) == ROOT_BG      # shadow is offset, not grown
     assert x.pixel(225, 225) == ROOT_BG
-    assert wm.decoration(w) == (SHADOW, 0, 0, 20, 20, 0xFFFFFFFF)
+    assert wm.decoration(w) == (SHADOW, 0, 0, 20, 20, 0xFFFFFFFF, 0)
 
 
 def test_shadow_colour_is_not_premultiplied(xvfb):
@@ -386,9 +395,9 @@ def test_swapped_decoration(xvfb):
     x, w = _red_over_blue(xvfb)
     wm = Scene(xvfb, swapped=True)
     wm.become_wm(x)
-    assert wm.decorate(w, RADIUS | SHADOW, radius=12, blur=6, dx=-3, dy=5,
-                       color=0x80102030) == []
-    assert wm.decoration(w) == (RADIUS | SHADOW, 12, 6, -3, 5, 0x80102030)
+    assert wm.decorate(w, RADIUS | SHADOW | BLUR, radius=12, blur=6, dx=-3, dy=5,
+                       color=0x80102030, bg_blur=9) == []
+    assert wm.decoration(w) == (RADIUS | SHADOW | BLUR, 12, 6, -3, 5, 0x80102030, 9)
 
 
 def test_window_manager_exit_clears_decoration(xvfb):
@@ -411,3 +420,138 @@ def test_destroying_decorated_window(xvfb):
     x.req(4, 0, struct.pack("<I", w))   # DestroyWindow
     assert x.pixel(150, 150) == ROOT_BG
     assert x.pixel(205, 150) == ROOT_BG
+
+
+# ---- 0.3: background blur --------------------------------------------------
+
+def _blur_scene(xvfb):
+    """Red left of x=400, blue right of it; a nearly transparent black
+    window across the edge."""
+    x = Client(xvfb)
+    red = x.window(0, 0, 400, 400, RED)
+    blue = x.window(400, 0, 400, 400, BLUE)
+    glass = x.window(300, 100, 200, 200, 0x000000)
+    for w in (red, blue, glass):
+        x.map(w)
+    wm = Scene(xvfb)
+    wm.become_wm(x)
+    wm.set(glass, OPACITY, 0x10000000)
+    return x, wm, glass, blue
+
+
+def _rgb(p):
+    return (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF
+
+
+def test_background_blur(xvfb):
+    x, wm, glass, _ = _blur_scene(xvfb)
+    assert _rgb(x.pixel(398, 200))[2] == 0          # sharp edge without blur
+    assert wm.decorate(glass, BLUR, bg_blur=16) == []
+    r, g, b = _rgb(x.pixel(398, 200))
+    assert r > 60 and b > 60, (r, g, b)               # red and blue mixed
+    r, g, b = _rgb(x.pixel(310, 200))
+    assert r > 200 and b < 4, (r, g, b)               # far from the edge
+    assert x.pixel(398, 350) == RED                   # nothing outside the window
+    assert x.pixel(402, 50) == BLUE
+    assert wm.decoration(glass)[6] == 16
+    assert wm.clear(glass, BLUR) == []
+    assert _rgb(x.pixel(398, 200))[2] == 0
+
+
+def test_background_blur_follows_changes_nearby(xvfb):
+    x, wm, glass, blue = _blur_scene(xvfb)
+    wm.decorate(glass, BLUR, bg_blur=16)
+    assert _rgb(x.pixel(450, 297))[1] == 0
+    # just below the glass, outside it, but within the blur radius
+    x.fill(blue, GREEN, 0, 300, 400, 10)
+    assert _rgb(x.pixel(450, 297))[1] > 20
+
+
+def test_background_blur_with_rounded_corners(xvfb):
+    x = Client(xvfb)
+    for w in (x.window(0, 0, 400, 400, RED), x.window(400, 0, 400, 400, BLUE),
+              x.window(0, 0, 800, 100, GREEN)):          # edge along the glass top
+        x.map(w)
+    glass = x.window(300, 100, 200, 200, 0x000000)
+    x.map(glass)
+    wm = Scene(xvfb)
+    wm.become_wm(x)
+    wm.set(glass, OPACITY, 0x10000000)
+    wm.decorate(glass, BLUR | RADIUS, bg_blur=16, radius=30)
+    assert x.pixel(301, 101) == RED                   # cut-away corner: unblurred
+    assert x.pixel(499, 101) == BLUE
+    r, g, b = _rgb(x.pixel(398, 200))
+    assert r > 60 and b > 60, (r, g, b)
+    r, g, b = _rgb(x.pixel(350, 102))
+    assert g > 60, (r, g, b)                          # green blurred in at the top
+
+
+def test_background_blur_ignores_windows_above(xvfb):
+    """The blur reads the layers below the glass, not the finished screen,
+    which also has the white window above the glass."""
+    x, wm, glass, _ = _blur_scene(xvfb)
+    above = x.window(500, 100, 40, 200, WHITE)     # right beside the glass
+    assert x.sync() == []
+    assert wm.map(above) == []
+    assert x.pixel(520, 200) == WHITE
+    wm.decorate(glass, BLUR, bg_blur=16)
+    r, g, b = _rgb(x.pixel(495, 200))                # blue below, white near
+    assert g < 4 and b > 200, (r, g, b)
+
+
+def test_background_blur_requests(xvfb):
+    x, wm, glass, _ = _blur_scene(xvfb)
+    assert wm.decorate(glass, BLUR, bg_blur=65) == [BAD_VALUE]
+    assert wm.decorate(glass, BLUR, v02=True) == [BAD_VALUE]   # no field in 0.2
+    assert wm.decorate(glass, RADIUS, radius=8, v02=True) == []
+    assert wm.decoration(glass)[:2] == (RADIUS, 8)
+    bad = wm._req(SET_DECO, "IIHHhhIHxxI", glass, RADIUS, 8, 0, 0, 0, 0, 0, 0)
+    assert wm._errors(bad) == [16]                    # BadLength
+
+
+def _set_root_background(x, mask, value):
+    """ChangeWindowAttributes on the root (CWBackPixel 2, CWBackPixmap 1),
+    then ClearArea to show it."""
+    x.req(2, 0, struct.pack("<III", x.root, mask, value))
+    x.req(61, 0, struct.pack("<IhhHH", x.root, 0, 0, 0, 0))
+    assert x.sync() == []
+
+
+def _glass_only(xvfb, x):
+    glass = x.window(300, 100, 200, 200, 0x000000)
+    x.map(glass)
+    wm = Scene(xvfb)
+    wm.become_wm(x)
+    wm.set(glass, OPACITY, 0x10000000)
+    return wm, glass
+
+
+def test_background_blur_reads_root_colour(xvfb):
+    x = Client(xvfb)
+    x.map(x.window(0, 0, 400, 800, RED))
+    _set_root_background(x, 2, GREEN)
+    wm, glass = _glass_only(xvfb, x)
+    wm.decorate(glass, BLUR, bg_blur=16)
+    r, g, b = _rgb(x.pixel(398, 200))
+    assert r > 60 and g > 60, (r, g, b)               # red window and green root
+    r, g, b = _rgb(x.pixel(480, 200))
+    assert g > 200 and r < 4, (r, g, b)
+
+
+def test_background_blur_reads_root_tile(xvfb):
+    """Stripes 32 pixels wide: the tile must stay aligned to the root."""
+    x = Client(xvfb)
+    tile = x.c.alloc_id()
+    x.req(53, 24, struct.pack("<IIHH", tile, x.root, 64, 1))  # CreatePixmap
+    x.fill(tile, RED, 0, 0, 32, 1)
+    x.fill(tile, BLUE, 32, 0, 32, 1)
+    _set_root_background(x, 1, tile)
+    assert x.pixel(336, 200) == RED and x.pixel(368, 200) == BLUE
+    wm, glass = _glass_only(xvfb, x)
+    wm.decorate(glass, BLUR, bg_blur=16)
+    r, g, b = _rgb(x.pixel(336, 200))                 # middle of a red stripe
+    assert r > b + 60, (r, g, b)
+    r, g, b = _rgb(x.pixel(368, 200))                 # middle of a blue stripe
+    assert b > r + 60, (r, g, b)
+    r, g, b = _rgb(x.pixel(352, 200))                 # on an edge: mixed
+    assert abs(r - b) < 40, (r, g, b)

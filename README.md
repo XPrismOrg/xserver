@@ -55,8 +55,8 @@ what would be denied. See [doc/capabilities.md](doc/capabilities.md).
 With `-compositor on`, the server composites windows itself. ARGB
 windows and window opacity work without an external compositor, and
 fullscreen windows bypass composition. The window manager can set
-per-window opacity, transforms, rounded corners and shadows through the
-XPRISM-SCENE extension.
+per-window opacity, transforms, rounded corners, shadows and background
+blur through the XPRISM-SCENE extension.
 External compositors such as picom still work. See
 [doc/compositor.md](doc/compositor.md) and
 [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md).

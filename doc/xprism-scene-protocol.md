@@ -1,4 +1,4 @@
-# XPRISM-SCENE extension, version 0.2
+# XPRISM-SCENE extension, version 0.3
 
 The XPRISM-SCENE extension lets the window manager control how the
 [built-in compositor](compositor.md) presents each top-level window. The
@@ -7,8 +7,9 @@ window manager does not need access to the contents of other clients'
 windows.
 
 Version 0.1 defines two attributes per window, opacity and a transform.
-Version 0.2 adds two decorations, rounded corners and a drop shadow.
-Later versions are expected to add blur regions and animation timing.
+Version 0.2 adds two decorations, rounded corners and a drop shadow, and
+version 0.3 a third, background blur. Later versions are expected to add
+animation timing.
 
 The wire format is defined in `Xext/composite/xprismsceneproto.h`.
 
@@ -50,15 +51,19 @@ is still delivered according to the window's actual geometry. Transforms
 are intended for animations; windows should be moved and resized with
 `ConfigureWindow`.
 
-## Decorations (0.2)
+## Decorations (0.2, 0.3)
 
 | Mask bit | Decoration | Description |
 |---|---|---|
 | `1 << 2` | corner radius | The window's corners are rounded with this radius, in pixels, up to 1024. The radius is limited to half the window's shorter side. Corners are antialiased, and the rounding is applied together with the window's opacity and transform. |
 | `1 << 3` | shadow | A shadow with the window's outer size and rounded corners is drawn below the window, moved by `dx`, `dy` and blurred with a radius of `blur` pixels, up to 128. The colour is ARGB without premultiplication, so `0x80000000` is half-transparent black. Shadows are not drawn for transformed windows. |
 
+| `1 << 4` | background blur (0.3) | What shows through the window is blurred with a radius of up to 64 pixels. Only has an effect while the window is translucent, through its opacity or an alpha channel, and is not applied to transformed windows. |
+
 The shadow is drawn over the windows below, and the window is drawn over
-its own shadow. A window with a decoration is always composited, even if
+its own shadow. Background blur shows the windows below the window and
+the root background, never the windows above it; a blurring window seen
+through another one is itself blurred, up to three levels deep. A window with a decoration is always composited, even if
 it covers the whole screen.
 
 ## Lifetime
@@ -79,7 +84,7 @@ majorVersion: CARD32
 minorVersion: CARD32
   =>
 majorVersion: CARD32    (0)
-minorVersion: CARD32    (2)
+minorVersion: CARD32    (3)
 ```
 
 The client sends the highest version it supports; the server replies
@@ -130,21 +135,27 @@ defined bit.
 ### SetNodeDecoration (4, since 0.2)
 
 ```
-window:       WINDOW
-mask:         CARD32    decorations to set
-cornerRadius: CARD16    used if mask includes corner radius
-shadowBlur:   CARD16    used if mask includes shadow
-shadowDx:     INT16
-shadowDy:     INT16
-shadowColor:  CARD32
+window:         WINDOW
+mask:           CARD32  decorations to set
+cornerRadius:   CARD16  used if mask includes corner radius
+shadowBlur:     CARD16  used if mask includes shadow
+shadowDx:       INT16
+shadowDy:       INT16
+shadowColor:    CARD32
+backgroundBlur: CARD16  0.3; used if mask includes background blur
+unused:         CARD16
 ```
 
 Sets the decorations selected by `mask`, which may only contain
-decoration bits (`1 << 2`, `1 << 3`); other decorations are unchanged.
+decoration bits (`1 << 2` to `1 << 4`); other decorations are unchanged.
+The request is 28 bytes long. The 24-byte form of version 0.2, which ends
+after `shadowColor`, is still accepted, but cannot set background blur.
 
-Errors: `BadValue` (other bits in `mask`, a radius over 1024 or a blur
-over 128), `BadWindow`, `BadMatch` (not a top-level window),
-`BadAccess` (the client is not the window manager).
+Errors: `BadLength` (neither 24 nor 28 bytes), `BadValue` (other bits in
+`mask`, background blur in a 24-byte request, a radius over 1024, a
+shadow blur over 128 or a background blur over 64), `BadWindow`,
+`BadMatch` (not a top-level window), `BadAccess` (the client is not the
+window manager).
 
 ### GetNodeDecoration (5, since 0.2)
 
@@ -157,6 +168,7 @@ shadowBlur:   CARD16    the shadow fields are 0 if no shadow is set
 shadowDx:     INT16
 shadowDy:     INT16
 shadowColor:  CARD32
+backgroundBlur: CARD16  0.3; 0 if not set
 ```
 
 Errors: `BadWindow`, `BadMatch`, `BadAccess`, as for
