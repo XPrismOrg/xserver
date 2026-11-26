@@ -90,6 +90,14 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
                     if (XpCapIsActive(client))
                         goto pass;
                     goto block;
+                // seats of its own, if granted input.virtual_seat (the
+                // capability check decides); never others' devices
+                case X_XIChangeHierarchy:
+                    if ((subj->ns->xpcaps & XP_CAP_BIT(XP_CAP_INPUT_VIRTUAL_SEAT)) &&
+                        ((param->access_mode & DixCreateAccess) ||
+                         XpCapOwnsSeat(client, param->dev)))
+                        goto pass;
+                    goto block;
                 default:
                     XNS_HOOK_LOG("BLOCKED unhandled Xinput request\n");
                     goto block;

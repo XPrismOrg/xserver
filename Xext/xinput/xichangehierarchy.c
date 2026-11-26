@@ -38,6 +38,7 @@
 #include <X11/extensions/XI2proto.h>
 #include <X11/extensions/geproto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/exevents_priv.h"
 #include "dix/extension_priv.h"
@@ -193,6 +194,7 @@ add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES],
 
     for (int i = 0; i < currentMaxClients; i++)
         XIBarrierNewMasterDevice(clients[i], ptr->id);
+    XpCapSeatAdded(client, ptr);
     if (ptr_out)
         *ptr_out = ptr;
 
@@ -383,6 +385,7 @@ remove_master(ClientPtr client, xXIRemoveMasterInfo * r, int flags[MAXDEVICES])
     flags[keybd->id] |= XIMasterRemoved;
     flags[ptr->id] |= XIMasterRemoved;
 
+    XpCapSeatRemoved(ptr);
     RemoveDevice(XTestptr, FALSE);
     RemoveDevice(XTestkeybd, FALSE);
     RemoveDevice(keybd, FALSE);

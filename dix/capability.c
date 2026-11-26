@@ -627,6 +627,67 @@ remove_seat(ClientPtr unused, void *closure)
     return TRUE;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Seats of confined clients
+ * ------------------------------------------------------------------ */
+
+#define SEAT_GOING (-1)
+static int seat_owner[MAXDEVICES];      /* client index; SEAT_GOING once
+                                           the owner went */
+
+void
+XpCapSeatAdded(ClientPtr client, DeviceIntPtr ptr)
+{
+    if (!ptr || ptr->id >= MAXDEVICES || !client || client == serverClient ||
+        xpCapMode == XP_CAP_MODE_OFF || !provider_grants ||
+        provider_grants(client) == XP_CAP_ALL)
+        return;                 /* unconfined: seats stay, as in X11 */
+    seat_owner[ptr->id] = client->index;
+}
+
+void
+XpCapSeatRemoved(DeviceIntPtr ptr)
+{
+    if (ptr && ptr->id < MAXDEVICES)
+        seat_owner[ptr->id] = 0;
+}
+
+Bool
+XpCapOwnsSeat(ClientPtr client, DeviceIntPtr dev)
+{
+    if (!client || !dev)
+        return FALSE;
+    /* a master of the seat, or a slave attached to it (its XTest devices) */
+    DeviceIntPtr ptr = GetMaster(dev, MASTER_POINTER);
+    return ptr && ptr->id < MAXDEVICES && seat_owner[ptr->id] == client->index &&
+           client->index != 0;
+}
+
+static Bool
+remove_owned_seat(ClientPtr unused, void *closure)
+{
+    int id = (int) (intptr_t) closure;
+    DeviceIntPtr d;
+
+    if (seat_owner[id] == SEAT_GOING &&
+        dixLookupDevice(&d, id, serverClient, DixReadAccess) == Success &&
+        InputDevIsMaster(d) && d->type == MASTER_POINTER)
+        XIRemoveSeat(d);
+    seat_owner[id] = 0;
+    return TRUE;
+}
+
+static void
+remove_seats_of(ClientPtr client)
+{
+    for (int id = 0; id < MAXDEVICES; id++)
+        if (seat_owner[id] == client->index) {
+            seat_owner[id] = SEAT_GOING;
+            /* not from inside CloseDownClient */
+            QueueWorkProc(remove_owned_seat, NULL, (void *) (intptr_t) id);
+        }
+}
+
 /* legacy compatibility (idea.txt section 7) is explicit, never silent:
    every client with unrestricted access is on record, and so is a server
    with no policy at all */
@@ -674,6 +735,8 @@ cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
         note_unconfined(client);
         return;
     }
+    if (client->clientState == ClientStateGone)
+        remove_seats_of(client);
     if (!c || client->clientState != ClientStateGone)
         return;
     if (c->prompt) {
@@ -971,6 +1034,7 @@ cap_device(CallbackListPtr *pcbl, void *unused, void *calldata)
 void
 XpCapInit(void)
 {
+    memset(seat_owner, 0, sizeof(seat_owner));  /* devices are new */
     if (xpCapMode == XP_CAP_MODE_OFF)
         return;
 

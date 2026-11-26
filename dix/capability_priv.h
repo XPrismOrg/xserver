@@ -181,6 +181,16 @@ Bool XpCapSeesWindow(ClientPtr client, WindowPtr pWin);
  */
 Bool XpCapIsActive(ClientPtr client);
 
+/**
+ * MPX seats (master devices) a confined client adds go with it: the
+ * device hierarchy calls these when a master pointer is added by @p
+ * client, or removed by anyone.
+ */
+void XpCapSeatAdded(ClientPtr client, DeviceIntPtr ptr);
+void XpCapSeatRemoved(DeviceIntPtr ptr);
+/** is @p dev a master device of a seat @p client added, or attached to one? */
+Bool XpCapOwnsSeat(ClientPtr client, DeviceIntPtr dev);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

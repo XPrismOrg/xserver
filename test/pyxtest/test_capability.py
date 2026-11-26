@@ -8,6 +8,7 @@
 import re
 import shutil
 import struct
+import time
 import tempfile
 from pathlib import Path
 
@@ -513,6 +514,130 @@ class TestActiveClientAudit:
         game, wid = _game(xserver)
         _move(xserver, 500, 500)
         assert _warp(game, wid, 20, 30) == [BAD_ACCESS]
+
+
+SEAT_COOKIE = b"\x77" * 16
+XI_QUERY_DEVICE, XI_ALL_MASTER_DEVICES, XI_REMOVE_MASTER, XI_ATTACH_SLAVE = 48, 1, 2, 3
+
+
+def _masters(xserver):
+    root = _connect(xserver, ROOT_COOKIE)
+    op = _xi(root)
+    seq = root.send_request(struct.pack("<BBHHxx", op, XI_QUERY_DEVICE, 2,
+                                        XI_ALL_MASTER_DEVICES))
+    while True:
+        r = root.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return struct.unpack_from("<H", r.data, 8)[0]
+
+
+def _add_master(conn, name=b"app seat"):
+    op = _xi(conn)
+    info = struct.pack("<HHHBB", XI_ADD_MASTER, (8 + len(name) + 3) // 4, len(name), 1, 1) + \
+        name + b"\0" * (-len(name) % 4)
+    return _errors_of(conn, struct.pack("<BBHBxxx", op, XI_CHANGE_HIERARCHY,
+                                        (8 + len(info)) // 4, 1) + info)
+
+
+def _newest_master_pointer(conn):
+    op = _xi(conn)
+    seq = conn.send_request(struct.pack("<BBHHxx", op, XI_QUERY_DEVICE, 2,
+                                        XI_ALL_MASTER_DEVICES))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            break
+    ids, off = [], 32
+    for _ in range(struct.unpack_from("<H", r.data, 8)[0]):
+        did, use, _att, ncls, nlen = struct.unpack_from("<HHHHH", r.data, off)
+        if use == 1:                                        # XIMasterPointer
+            ids.append(did)
+        off += 12 + ((nlen + 3) // 4) * 4
+        for _c in range(ncls):
+            off += struct.unpack_from("<H", r.data, off + 2)[0] * 4
+    return max(ids)
+
+
+def _remove_master(conn, did):
+    op = _xi(conn)
+    return _errors_of(conn, struct.pack("<BBHBxxxHHHBxHH", op, XI_CHANGE_HIERARCHY, 5, 1,
+                                        XI_REMOVE_MASTER, 3, did, 2, 0, 0))
+
+
+def _attach(conn, slave, master):
+    op = _xi(conn)
+    return _errors_of(conn, struct.pack("<BBHBxxxHHHH", op, XI_CHANGE_HIERARCHY, 4, 1,
+                                        XI_ATTACH_SLAVE, 2, slave, master))
+
+
+def _wait_masters(xserver, n):
+    for _ in range(50):
+        if _masters(xserver) == n:
+            break
+        time.sleep(0.05)
+    return _masters(xserver)
+
+
+class TestSeats:
+    """MPX seats a confined client adds (with input.virtual_seat) go when
+    it disconnects; an unconfined client's stay, as in X11."""
+
+    @pytest.fixture
+    def xserver_args(self, tmp_path):
+        conf = tmp_path / "ns.conf"
+        conf.write_text(
+            f"auth {COOKIE_PROTO.decode()} {ROOT_COOKIE.hex()}\n"
+            f"namespace seats root\n"
+            f"  auth {COOKIE_PROTO.decode()} {SEAT_COOKIE.hex()}\n"
+            f"  allow xinput\n"
+            f"  grant input.virtual_seat\n"
+        )
+        return ["-namespace", str(conf), "-capmode", "enforce"]
+
+    def test_confined_seat_goes_with_its_client(self, xserver):
+        before = _masters(xserver)
+        conn = _connect(xserver, SEAT_COOKIE)
+        assert _add_master(conn) == []
+        assert _masters(xserver) == before + 2
+        conn.close()
+        assert _wait_masters(xserver, before) == before
+
+    def test_seat_removed_before(self, xserver):
+        before = _masters(xserver)
+        conn = _connect(xserver, SEAT_COOKIE)
+        assert _add_master(conn) == []
+        root = _connect(xserver, ROOT_COOKIE)
+        # the newest master pointer: remove it, then let the owner go
+        assert _remove_master(root, _newest_master_pointer(root)) == []
+        assert _masters(xserver) == before
+        # a new seat of the root's may take the id; the owner leaving
+        # must not take it away
+        assert _add_master(root, b"root seat") == []
+        conn.close()
+        time.sleep(0.3)
+        assert _masters(xserver) == before + 2
+
+    def test_not_others_devices(self, xserver):
+        root = _connect(xserver, ROOT_COOKIE)
+        assert _add_master(root, b"root seat") == []
+        theirs = _newest_master_pointer(root)
+        conn = _connect(xserver, SEAT_COOKIE)
+        assert _add_master(conn) == []
+        own = _newest_master_pointer(root)
+        assert _remove_master(conn, theirs) == [BAD_ACCESS]
+        # the Xvfb keyboard (a slave of the user's seat) into its own
+        assert _attach(conn, 6, own) == [BAD_ACCESS]
+        assert _remove_master(conn, own) == []
+
+    def test_unconfined_seat_stays(self, xserver):
+        before = _masters(xserver)
+        conn = _connect(xserver, ROOT_COOKIE)
+        assert _add_master(conn) == []
+        conn.close()
+        time.sleep(0.3)
+        assert _masters(xserver) == before + 2
 
 
 X_SET_SCREEN_SAVER, X_FORCE_SCREEN_SAVER = 107, 115
