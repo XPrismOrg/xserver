@@ -301,6 +301,155 @@ class TestDefaultMode:
         assert _inspect_other_window(xserver, GRANTED_COOKIE) == []
 
 
+XKB_USE_EXTENSION, XKB_SELECT_EVENTS, XKB_GET_STATE = 0, 1, 4
+XKB_STATE_NOTIFY_MASK = 1 << 2
+XKB_USE_CORE_KBD = 0x100
+X_QUERY_POINTER = 38
+KEYCODE_SHIFT_L, KEYCODE_CAPS_LOCK = 50, 66
+SHIFT_MASK, LOCK_MASK = 1, 2
+
+
+def _xkb(conn):
+    """XKB opcode and first event of conn, initialised and selecting
+    StateNotify"""
+    ext = conn.query_extension("XKEYBOARD")
+    conn.send_request(struct.pack("<BBHHH", ext.opcode, XKB_USE_EXTENSION, 2, 1, 0))
+    r = conn.recv_response(timeout=5.0)
+    assert r is not None and not isinstance(r, X11Error) and r.data[1], r
+    assert _errors_of(conn, struct.pack("<BBHHHHHHH", ext.opcode, XKB_SELECT_EVENTS, 4,
+                                        XKB_USE_CORE_KBD, XKB_STATE_NOTIFY_MASK, 0,
+                                        XKB_STATE_NOTIFY_MASK, 0, 0)) == []
+    return ext
+
+
+def _xkb_state(conn, ext):
+    """(mods, baseMods, latchedMods, lockedMods) from XkbGetState"""
+    seq = conn.send_request(struct.pack("<BBHHxx", ext.opcode, XKB_GET_STATE, 2,
+                                        XKB_USE_CORE_KBD))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return tuple(r.data[8:12])
+
+
+def _state_notifies(conn, ext, timeout=0.5):
+    """(baseMods, lockedMods, keycode) of the StateNotify events received"""
+    out = []
+    while True:
+        r = conn.recv_response(timeout=timeout)
+        if r is None:
+            return out
+        if not isinstance(r, X11Error) and (r.response_type & 0x7f) == ext.first_event \
+                and r.data[1] == 2:                         # XkbStateNotify
+            out.append((r.data[10], r.data[12], r.data[28]))
+            timeout = 0.2
+
+
+def _core_mods(conn):
+    """the modifiers in QueryPointer's mask (on a window of conn's own:
+    Xnamespace refuses the root to confined clients)"""
+    wid = conn.create_window()
+    seq = conn.send_request(struct.pack("<BxHI", X_QUERY_POINTER, 2, wid))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return struct.unpack_from("<H", r.data, 24)[0] & 0xff
+
+
+def _press(xserver, keycode, release=False):
+    injector = _connect(xserver, ROOT_COOKIE)
+    opcode = _opcode(xserver, Extension.XTEST)
+    if not release:
+        _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=xtest.KeyPress,
+                                                    detail=keycode))
+    else:
+        _errors_of(injector, xtest.FakeInputRequest(opcode=opcode, type=xtest.KeyRelease,
+                                                    detail=keycode))
+
+
+class TestKeyState:
+    """The modifiers held down are keyboard input too: a client without
+    the focus sees only the locked ones (Caps Lock, the layout), through
+    XKB, QueryPointer and XIQueryPointer, and no StateNotify when a
+    modifier is merely pressed."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_held_modifiers(self, xserver):
+        focused = _connect(xserver, SANDBOX_COOKIE)
+        _focused_window(xserver, focused)
+        other = _connect(xserver, SANDBOX_COOKIE)
+        fx, ox = _xkb(focused), _xkb(other)
+        _press(xserver, KEYCODE_SHIFT_L)
+        try:
+            assert _xkb_state(focused, fx)[:2] == (SHIFT_MASK, SHIFT_MASK)
+            assert _xkb_state(other, ox) == (0, 0, 0, 0)
+            assert _core_mods(focused) == SHIFT_MASK
+            assert _core_mods(other) == 0
+        finally:
+            _press(xserver, KEYCODE_SHIFT_L, release=True)
+
+    def test_state_notify(self, xserver):
+        focused = _connect(xserver, SANDBOX_COOKIE)
+        _focused_window(xserver, focused)
+        other = _connect(xserver, SANDBOX_COOKIE)
+        fx, ox = _xkb(focused), _xkb(other)
+        _press(xserver, KEYCODE_SHIFT_L)
+        _press(xserver, KEYCODE_SHIFT_L, release=True)
+        assert (SHIFT_MASK, 0, KEYCODE_SHIFT_L) in _state_notifies(focused, fx)
+        assert _state_notifies(other, ox) == []
+
+    def test_locked_modifiers(self, xserver):
+        focused = _connect(xserver, SANDBOX_COOKIE)
+        _focused_window(xserver, focused)
+        other = _connect(xserver, SANDBOX_COOKIE)
+        ox = _xkb(other)
+        _press(xserver, KEYCODE_CAPS_LOCK)
+        _press(xserver, KEYCODE_CAPS_LOCK, release=True)
+        try:
+            notes = _state_notifies(other, ox)
+            assert notes and all(n == (0, LOCK_MASK, 0) for n in notes), notes
+            assert _xkb_state(other, ox) == (LOCK_MASK, 0, 0, LOCK_MASK)
+            assert _core_mods(other) == LOCK_MASK
+        finally:
+            _press(xserver, KEYCODE_CAPS_LOCK)
+            _press(xserver, KEYCODE_CAPS_LOCK, release=True)
+
+    def test_xi_query_pointer(self, xserver):
+        other = _connect(xserver, SANDBOX_COOKIE)
+        _focused_window(xserver, _connect(xserver, SANDBOX_COOKIE))
+        op = other.query_extension(Extension.XI).opcode
+        assert _errors_of(other, struct.pack("<BBHHH", op, 47, 2, 2, 2)) == []
+        own = other.create_window()
+        _press(xserver, KEYCODE_SHIFT_L)
+        try:
+            seq = other.send_request(struct.pack("<BBHIHxx", op, 40, 3, own, 2))
+            while True:
+                r = other.recv_response(timeout=5.0)
+                assert r is not None and not isinstance(r, X11Error), r
+                if r.response_type == 1 and r.sequence == seq:
+                    break
+            base, latched = struct.unpack_from("<II", r.data, 36)
+            assert (base, latched) == (0, 0)
+        finally:
+            _press(xserver, KEYCODE_SHIFT_L, release=True)
+
+    def test_unconfined(self, xserver):
+        _focused_window(xserver, _connect(xserver, SANDBOX_COOKIE))
+        root = _connect(xserver, ROOT_COOKIE)
+        rx = _xkb(root)
+        _press(xserver, KEYCODE_SHIFT_L)
+        try:
+            assert _xkb_state(root, rx)[1] == SHIFT_MASK
+            assert _core_mods(root) == SHIFT_MASK
+        finally:
+            _press(xserver, KEYCODE_SHIFT_L, release=True)
+
+
 X_CREATE_GC = 55
 X_COPY_AREA = 62
 GC_SUBWINDOW_MODE = 1 << 15

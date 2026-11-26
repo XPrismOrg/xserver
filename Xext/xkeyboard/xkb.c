@@ -33,6 +33,7 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include <X11/extensions/XI.h>
 #include <X11/extensions/XKMformat.h>
 
+#include "dix/capability_priv.h"
 #include "dix/devices_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/request_priv.h"
@@ -675,6 +676,16 @@ ProcXkbGetState(ClientPtr client)
         .compatState = xkb->compat_state,
         .ptrBtnState = xkb->ptr_buttons
     };
+
+    if (!XpCapSeesKeyState(client, dev)) {
+        /* XPrism: only the locked state for a client without the focus */
+        reply.mods = xkb->locked_mods;
+        reply.baseMods = reply.latchedMods = 0;
+        reply.group = xkb->locked_group;
+        reply.baseGroup = reply.latchedGroup = 0;
+        reply.compatState = XkbBuildCoreState(xkb->locked_mods, xkb->locked_group);
+        reply.ptrBtnState = 0;
+    }
 
     X_REPLY_FIELD_CARD16(ptrBtnState);
 

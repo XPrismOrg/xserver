@@ -155,6 +155,16 @@ int XpCapInjectTarget(ClientPtr client, DeviceIntPtr dev, int type, CARD32 *wait
  */
 int XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw);
 
+/**
+ * May @p client see the full state of keyboard @p kbd: the modifiers held
+ * and latched, the group shifted to, the key that changed them? Only the
+ * focused client, and holders of input.monitor; others see the locked
+ * modifiers and group (Caps Lock, the layout indicator). Quiet: neither
+ * logs nor asks, since toolkits read the state all the time. FALSE only
+ * in enforce mode.
+ */
+Bool XpCapSeesKeyState(ClientPtr client, DeviceIntPtr kbd);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

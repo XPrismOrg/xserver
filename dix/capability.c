@@ -45,6 +45,11 @@
  *                        without the focus, passive key grabs on others'
  *                        windows (XpCapCheckKeyboardGrab, cap_device)
  *
+ *   input.monitor (state) the modifiers held and latched, seen by a
+ *                        client without the focus: XKB StateNotify and
+ *                        GetState, QueryPointer, XIQueryPointer show it
+ *                        only the locked ones (XpCapSeesKeyState)
+ *
  *   capture.window (inferiors) other clients' windows inside one's own,
  *                        read with GetImage or IncludeInferiors copies
  *                        (XpCapCheckInferiors)
@@ -128,6 +133,7 @@ XpCapSetProvider(XpCapGrantsProc grants, XpCapLabelProc label)
 static Bool prompt_cap_ok(enum xp_cap cap);
 static Bool is_root(WindowPtr pWin);
 static Bool not_own(ClientPtr client, XID id);
+static Bool holds(ClientPtr client, enum xp_cap cap);
 
 /* per client */
 typedef struct {
@@ -403,6 +409,16 @@ XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw)
         return Success;             /* checked at the lookup */
     WindowPtr other = foreign_inferior(client, pWin);
     return other ? XpCapCheck(client, XP_CAP_CAPTURE_WINDOW, other->drawable.id) : Success;
+}
+
+Bool
+XpCapSeesKeyState(ClientPtr client, DeviceIntPtr kbd)
+{
+    if (xpCapMode != XP_CAP_MODE_ENFORCE || !provider_grants)
+        return TRUE;
+    if (!client || client == serverClient || client->clientGone)
+        return TRUE;
+    return holds(client, XP_CAP_INPUT_MONITOR) || XpCapHasFocus(client, kbd);
 }
 
 /* ------------------------------------------------------------------ *

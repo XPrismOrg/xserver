@@ -37,6 +37,7 @@
 #include <X11/extensions/XI.h>
 #include <X11/extensions/XI2proto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/eventconvert.h"
 #include "dix/exevents_priv.h"
@@ -133,6 +134,12 @@ ProcXIQueryPointer(ClientPtr client)
         reply.group.base_group = state->base_group;
         reply.group.latched_group = state->latched_group;
         reply.group.locked_group = state->locked_group;
+
+        if (!XpCapSeesKeyState(client, kbd)) {
+            /* XPrism: only the locked state for a client without the focus */
+            reply.mods.base_mods = reply.mods.latched_mods = 0;
+            reply.group.base_group = reply.group.latched_group = 0;
+        }
     }
 
     x_rpcbuf_t rpcbuf = { .swapped = client->swapped, .err_clear = TRUE };

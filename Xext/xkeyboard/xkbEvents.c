@@ -34,6 +34,7 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include <X11/extensions/XI.h>
 #include <X11/extensions/XIproto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/exevents_priv.h"
 #include "dix/input_priv.h"
@@ -236,10 +237,43 @@ XkbSendStateNotify(DeviceIntPtr kbd, xkbStateNotify * pSN)
     changed = pSN->changed;
     bState = pSN->ptrBtnState;
 
+    /* XPrism: what a client without the focus sees, the locked state */
+    CARD16 lockedChanged = changed & (XkbModifierLockMask | XkbGroupLockMask);
+    if (lockedChanged & XkbModifierLockMask)
+        lockedChanged |= XkbModifierStateMask | XkbCompatStateMask | XkbLookupModsMask |
+            XkbCompatLookupModsMask | XkbGrabModsMask | XkbCompatGrabModsMask;
+    if (lockedChanged & XkbGroupLockMask)
+        lockedChanged |= XkbGroupStateMask | XkbCompatStateMask;
+    xkbStateNotify locked = *pSN;
+    locked.keycode = 0;
+    locked.eventType = 0;
+    locked.requestMajor = locked.requestMinor = 0;
+    locked.mods = locked.grabMods = locked.compatGrabMods = state->locked_mods;
+    locked.lookupMods = locked.compatLookupMods = state->locked_mods;
+    locked.baseMods = locked.latchedMods = 0;
+    locked.group = state->locked_group;
+    locked.baseGroup = locked.latchedGroup = 0;
+    locked.compatState = XkbBuildCoreState(state->locked_mods, state->locked_group);
+
     while (interest) {
         if ((!interest->client->clientGone) &&
             (interest->client->xkbClientFlags & _XkbClientInitialized) &&
-            (interest->stateNotifyMask & changed)) {
+            (interest->stateNotifyMask & lockedChanged) &&
+            !XpCapSeesKeyState(interest->client, kbd)) {
+            xkbStateNotify ev = locked;
+            ev.time = time;
+            ev.changed = lockedChanged;
+            ev.ptrBtnState = 0;
+            if (interest->client->swapped) {
+                swapl(&ev.time);
+                swaps(&ev.changed);
+            }
+            xmitClientEvent(interest->client, *(xEvent*)&ev);
+        }
+        else if ((!interest->client->clientGone) &&
+            (interest->client->xkbClientFlags & _XkbClientInitialized) &&
+            (interest->stateNotifyMask & changed) &&
+            XpCapSeesKeyState(interest->client, kbd)) {
             pSN->time = time;
             pSN->changed = changed;
             pSN->ptrBtnState = bState;

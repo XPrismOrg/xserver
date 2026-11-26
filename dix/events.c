@@ -5377,6 +5377,12 @@ ProcQueryPointer(ClientPtr client)
         .rootY = pSprite->hot.y,
         .child = None
     };
+    if (keyboard && keyboard->key && !XpCapSeesKeyState(client, keyboard)) {
+        /* XPrism: only the locked modifiers for a client without the focus */
+        XkbStatePtr st = &keyboard->key->xkbInfo->state;
+        reply.mask = (reply.mask & ~(0xff | (3 << 13))) |
+            XkbBuildCoreState(st->locked_mods, st->locked_group);
+    }
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
         reply.sameScreen = xTrue;
         double wx = pSprite->hot.x + 0.5, wy = pSprite->hot.y + 0.5;

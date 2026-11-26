@@ -66,6 +66,8 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
             switch (client->minorOp) {
                 case X_ListInputDevices:
                 case X_XIQueryDevice:
+                case X_XIQueryPointer:          // as QueryPointer; the modifier
+                                                // state is the focused client's
                 case X_XIGrabDevice:            // menus (GTK, Qt)
                 case X_XIUngrabDevice:
                 case X_XIPassiveGrabDevice:
