@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Nexoniarz/xprism/actions/workflows/xprism.yml"><img src="https://github.com/Nexoniarz/xprism/actions/workflows/xprism.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/XPrismOrg/xserver/actions/workflows/xprism.yml"><img src="https://github.com/XPrismOrg/xserver/actions/workflows/xprism.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT%2FX11-blue" alt="License: MIT/X11">
 </p>
 
@@ -24,6 +24,9 @@ on a policy set by the user or the sandbox that launched the application.
 The project is in early development. It runs as a regular X server with
 everything XLibre provides. The features below are usable for testing, but
 the protocols added by XPrism may still change.
+
+The current version is **26.11.01**. Versions are `YY.MM.NN`, the NNth
+release of that month, with `.PP` added for patch releases (`26.11.01.01`).
 
 ## Features
 
@@ -84,8 +87,8 @@ XPrism uses Meson and has the same dependencies as XLibre. The
 list the packages for common distributions.
 
 ```sh
-git clone https://github.com/Nexoniarz/xprism.git
-cd xprism
+git clone https://github.com/XPrismOrg/xserver.git
+cd xserver
 meson setup build -Dxvfb=true
 ninja -C build
 ```
@@ -154,8 +157,9 @@ applications in a sandbox, see the bubblewrap example in
 
 ## Contributing
 
-Development happens on the `main` branch. Changes are expected to follow a
-few rules:
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how
+to build, test and submit changes, and everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md). In short:
 
 - Every security check comes with a test, and the test must be shown to
   fail when the check is removed.
@@ -164,6 +168,10 @@ few rules:
 - Changes to code inherited from XLibre are kept small and self-contained,
   so that merging from upstream stays practical and fixes can be offered
   back.
+
+Questions go to [Discussions](https://github.com/orgs/XPrismOrg/discussions),
+security issues to the [private reporting
+form](https://github.com/XPrismOrg/xserver/security/advisories/new).
 
 ## License
 

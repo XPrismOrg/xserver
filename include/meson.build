@@ -1,13 +1,25 @@
-# keep a pre-release suffix such as "-rc1" out of the version numbers
+# XPrism versions are YY.MM.NN[.PP]: year, month, the release of that
+# month (01-09), and an optional patch (01-99), e.g. 26.11.01 and
+# 26.11.01.01. Keep a pre-release suffix such as "-rc1" out of the numbers.
 version_number = meson.project_version().split('-')[0]
 version_suffix = meson.project_version().replace(version_number, '')
 version_split = version_number.split('.')
-major = version_split[0].to_int()
-minor = version_split[1].to_int()
-patch = version_split[2].to_int()
+if version_split.length() not in [3, 4]
+    error('version @0@ is not YY.MM.NN or YY.MM.NN.PP'.format(version_number))
+endif
+year = version_split[0].to_int()
+month = version_split[1].to_int()
+release_of_month = version_split[2].to_int()
+patch_release = version_split.length() == 4 ? version_split[3].to_int() : 0
+if month < 1 or month > 12 or release_of_month < 1 or release_of_month > 9 or patch_release > 99
+    error('version @0@: the month must be 1-12, the release 01-09 and the patch 00-99'.format(version_number))
+endif
 
-# convert to the old-style 1.x.y version scheme used up to 1.20.x for backwards compatibility
-release = 1 * 10000000 + major * 100000 + minor * 1000 + patch
+# The numeric release of the old 1.x.y scheme, which clients (VendorRelease)
+# and drivers (XORG_VERSION_CURRENT, xorgVersion.h) compare: 1, YY, MM, then
+# NN * 100 + PP in the last three digits. It grows with every release, as
+# it did for XLibre's 25.x.
+release = 1 * 10000000 + year * 100000 + month * 1000 + release_of_month * 100 + patch_release
 
 # For feature macros we're using either false (boolean) or '1', which correspond to the macro being
 # not defined at all and defined to 1. This is to match autotools behavior and thus preserve
@@ -126,6 +138,8 @@ conf_data.set_quoted('SUID_WRAPPER_DIR', join_paths(get_option('prefix'), get_op
 conf_data.set_quoted('COMPILEDDEFAULTFONTPATH', default_font_path)
 
 conf_data.set('XORG_VERSION_CURRENT', release)
+conf_data.set_quoted('XPRISM_VERSION_STRING', meson.project_version())
+# the name drivers and older code may still use
 conf_data.set_quoted('XLIBRE_VERSION_STRING', meson.project_version())
 conf_data.set_quoted('PACKAGE_VERSION_SUFFIX', version_suffix)
 

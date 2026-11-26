@@ -130,7 +130,7 @@ option('docs-pdf', type: 'combo', choices: ['true', 'false', 'auto'], value: 'au
 
 # optional xfree86 DDX drivers
 option('xf86-input-inputtest', type: 'boolean', value: true,
-       description: 'Test input driver support on XLibre')
+       description: 'Test input driver support (xf86-input-inputtest)')
 option('xf86-input-null', type: 'boolean', value: true,
        description: 'Null input driver')
 

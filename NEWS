@@ -1,3 +1,16 @@
+### xprism-xserver 26.11.01
+
+first XPrism version, based on xlibre-xserver 25.2
+https://github.com/XPrismOrg/xserver
+new version scheme: YY.MM.NN, with .PP for patch releases (26.11.01.01)
+capabilities: per-client permissions on top of Xnamespace, with prompts, audit log and scoped automation (doc/capabilities.md)
+compositor: built-in compositor and the XPRISM-SCENE, XPRISM-COLOR extensions (doc/compositor.md)
+os: platform abstraction layer for Linux and the BSDs (doc/pal.md)
+wx11: first version of the Wayland bridge, showing xdg-shell toplevels as X windows (wx11/README.md)
+pkg-config: new xprism-server.pc; xorg-server.pc and xlibre-server.pc stay for drivers
+
+The entries below are XLibre's releases, which XPrism continues.
+
 ### xlibre-xserver 25.2
 
 summer solstice release

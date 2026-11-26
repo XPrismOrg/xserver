@@ -27,8 +27,8 @@ abi_xinput=@abi_xinput@
 abi_extension=@abi_extension@
 
 Name: xlibre-server
-Description: Modular XLibre X Server
-URL: https://github.com/X11Libre/xserver/
+Description: XPrism X server, under its compatible name (see xprism-server)
+URL: https://github.com/XPrismOrg/xserver
 Version: @PACKAGE_VERSION@
 Requires.private: @SDK_REQUIRED_MODULES@
 Cflags: -I${sdkdir} @symbol_visibility@

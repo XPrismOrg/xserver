@@ -656,7 +656,8 @@ Orest Zborowski    \fIorestz@eskimo.com\fP
 .fi
 .RE
 .PP
-Xlibre source is available via git \fI<https://github.com/X11Libre/xserver.git/>\fP.
+XPrism source is available via git \fI<https://github.com/XPrismOrg/xserver.git>\fP.
+It is based on XLibre \fI<https://github.com/X11Libre/xserver.git>\fP.
 
 .SH LEGAL
 .B Xorg

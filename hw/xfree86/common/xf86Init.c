@@ -124,7 +124,7 @@ static Bool formatsDone = FALSE;
 static void
 xf86PrintBanner(void)
 {
-    xf86ErrorFVerb(0, "\nXPrism X Server, based on XLibre %s", XLIBRE_VERSION_STRING);
+    xf86ErrorFVerb(0, "\nXPrism X Server %s (based on XLibre)", XPRISM_VERSION_STRING);
 
 #ifdef XORG_CUSTOM_VERSION
     xf86ErrorFVerb(0, " (%s)", XORG_CUSTOM_VERSION);

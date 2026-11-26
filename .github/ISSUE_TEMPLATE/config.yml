@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: XLibre Community Support
-    url: https://github.com/orgs/X11Libre/discussions
+  - name: XPrism Community Support
+    url: https://github.com/orgs/XPrismOrg/discussions
     about: Please ask and answer questions here.
-  - name: Mailing List
-    url: https://www.freelists.org/list/xlibre
-    about: You can join the discussions on our mailing list.
+  - name: Security issues and Code of Conduct reports
+    url: https://github.com/XPrismOrg/xserver/security/advisories/new
+    about: Report these privately to the maintainers, not as a public issue.

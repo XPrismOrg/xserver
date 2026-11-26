@@ -4,10 +4,12 @@ project('xserver', 'c',
             'c_std=gnu99',
             'warning_level=1',
         ],
-        version: '25.2.0',
+        # YY.MM.NN, or YY.MM.NN.PP for a patch release: the NNth release
+        # of that month (include/meson.build checks the ranges)
+        version: '26.11.01',
         meson_version: '>= 0.61.0',
 )
-release_date = '2026-06-21'
+release_date = '2026-11-27'
 
 cc = meson.get_compiler('c')
 
@@ -800,6 +802,16 @@ if build_xorg_sdk
     configure_file(
         input: 'xlibre-server.pc.in',
         output: 'xlibre-server.pc',
+        configuration: sdkconfig,
+        install_dir: join_paths(get_option('prefix'),
+                                get_option('libdir'),
+                                'pkgconfig'),
+    )
+
+    # XPrism's own name; drivers keep finding xorg-server and xlibre-server
+    configure_file(
+        input: 'xprism-server.pc.in',
+        output: 'xprism-server.pc',
         configuration: sdkconfig,
         install_dir: join_paths(get_option('prefix'),
                                 get_option('libdir'),

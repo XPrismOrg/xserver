@@ -1,7 +1,7 @@
-# Overview of XLibre Server Source Code Structure
+# Overview of the XPrism Server Source Code Structure
 
-The XLibre Server is a modular codebase that implements a X Window System (X11)
-server. It's written in C, and supports a wide variety of platforms, hardware
+The XPrism server (a fork of the XLibre server) is a modular codebase that
+implements an X Window System (X11) server. It's written in C, and supports a wide variety of platforms, hardware
 configurations, and extensions.
 
 The codebase is organized into:
@@ -29,9 +29,9 @@ loadable extensions. These can depend on one another, and many rely on
 **Build Flexibility**: Meson options allow enabling/disabling features, servers,
 and extensions, with auto-detection for many.
 
-## Diagram of XLibre
+## Diagram of XPrism
 
-Below is a visual overview of how the components of the XLibre Server fit
+Below is a visual overview of how the components of the XPrism server fit
 together. This diagram should be read from the bottom up to understand how each
 layer builds on those below.
 
@@ -122,9 +122,9 @@ explanation.
 
 - **hw/**: Device Dependant X (DDX) - Hardware-specific code and servers  
     Hardware-dependent drivers and server variants, including subdirectories
-    like `xfree86/` (the main XLibre DDX), `kdrive/` (includes Xephyr),
+    like `xfree86/` (the main DDX, Xorg), `kdrive/` (includes Xephyr),
     `vfb/`, `xnest/`, `xquartz/` (macOS), and `xwin/` (Windows). These link
-    the various XLibre libraries/components (libxserver_*) into executables.
+    the various server libraries/components (libxserver_*) into executables.
     
     NOTE: Drivers (e.g., modesetting, intel, amd) are currently in separate
     repositories and are loaded as modules. There is an ongoing discussion
@@ -164,7 +164,7 @@ explanation.
     EXA provides an older framework for 2D hardware acceleration, handling
     operations like rendering and glyphs through e.g., `exa_render.c`. It
     provides a fallback to Glamor. It interconnects with the Render extension
-    for primitives. Primarily used in XLibre or Xephyr builds. Depends on
+    for primitives. Primarily used in Xorg or Xephyr builds. Depends on
     pixman.
 
 - **glamor/**: Glamor acceleration  
@@ -240,7 +240,8 @@ explanation.
     Bundles core extensions like SHM (`shm.c`), Sync (`sync.c`), BigRequests
     (`bigreq.c`), VidMode (`vidmode.c`), Xinerama (`panoramiX.c`), and others.
     It interconnects broadly with DIX for base protocol enhancements and miext/
-    for MI support. In XLibre, namespace/ adds client isolation/containers.
+    for MI support. namespace/ (Xnamespace) adds client isolation; XPrism's capability
+    layer in `dix/capability.c` builds on it (see `doc/capabilities.md`).
 
 - **xfixes/**: X Fixes extension  
     Protocol fixes and enhancements, like cursor confinement via `cursor.c`.
@@ -303,7 +304,7 @@ explanation.
   
   For example, for `xf86-input-libinput` place `libinput_drv.so` in
   `your_prefix/lib64/xorg/modules/xlibre-25/input` (you can copy this from your
-  main XLibre `usr/lib/` directory as long as it is ABI-compatible) and place
+  installed X server's `usr/lib/` directory as long as it is ABI-compatible) and place
   `80-libinput.conf` in `your_prefix/share/X11/xorg.conf.d/`.
   
   For gdb debugging, it is highly recommended to use SSH from another machine or

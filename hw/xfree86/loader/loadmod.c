@@ -814,7 +814,7 @@ LoadModule(const char *module, void *options, const XF86ModReqInfo *modreq,
         LogMessage(X_WARNING, "LoadModule: If you are using one of the legacy "
                               "branches of the nvidia proprierary DDX driver "
                               "(e.g. 470, 390, 340, etc.)\n");
-        LogMessage(X_WARNING, "LoadModule: you need to build Xlibre "
+        LogMessage(X_WARNING, "LoadModule: you need to build XPrism "
                               "with -Dlegacy_nvidia_padding=true\n");
         LogMessage(X_WARNING, "LoadModule: Otherwise, you will get a "
                               "segmentation fault due to the abi mismatch "

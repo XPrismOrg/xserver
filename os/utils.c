@@ -635,11 +635,11 @@ ProcessCommandLine(int argc, char *argv[])
         }
         else if (strcmp(argv[i],"-noreset") == 0){
             ErrorF("Ignoring -noreset: the server no longer resets when its last client leaves, so it is not needed "
-                   "(removed in XLibre, see https://github.com/orgs/X11Libre/discussions/424)\n");
+                   "(removed in XLibre, which XPrism is based on; see https://github.com/orgs/X11Libre/discussions/424)\n");
         }
         else if(strcmp(argv[i],"-reset") == 0){
             ErrorF("Ignoring -reset: the server no longer resets when its last client leaves "
-                   "(removed in XLibre, see https://github.com/orgs/X11Libre/discussions/424)\n");
+                   "(removed in XLibre, which XPrism is based on; see https://github.com/orgs/X11Libre/discussions/424)\n");
         }
         else if (strcmp(argv[i], "-p") == 0) {
             if (++i < argc)
