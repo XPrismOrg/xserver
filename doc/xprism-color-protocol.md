@@ -97,6 +97,9 @@ gamut into it, and encoding sRGB:
   pure red becomes the most saturated sRGB red of the same hue, not
   sRGB's pure red with its channels clipped).
 
+The CPU and the GPU (glamor) do the same conversion, and the tests
+check both against the same reference values.
+
 The window's own contents are not changed: `GetImage` on the window
 returns the pixels the application drew. `GetImage` on the root window
 returns what the screen shows.
@@ -180,10 +183,17 @@ stay when the client disconnects, and go when the window is destroyed.
 ## Performance
 
 Windows without a description cost nothing, and an sRGB description
-none either. In version 0.1, described windows are converted by the CPU
-where they are drawn on, whatever the DDX: about 4 ms for a full screen
-of 1280×1024 of the few colours typical of user interfaces, and 50 to
-150 ms (HLG the slowest) when every pixel differs, as in photographs and
-video. The conversion moves to the GPU with HDR composition.
+none either. Described windows are converted where they are drawn on:
+
+- with glamor, by a shader on the GPU: about 1 ms for a full screen of
+  1280×1024, whatever its contents (measured on NVIDIA and AMD render
+  nodes, readback of the screen included);
+- otherwise by the CPU, with a cache of converted pixels: about 4 ms for
+  a full screen of the few colours typical of user interfaces, 50 to
+  150 ms (HLG the slowest) when every pixel differs, as in photographs
+  and video. Setting `XPRISM_NO_GPU_COLOR` in the server's environment
+  forces this path, for comparison.
+
 A full-screen window with a description that needs converting is
-composited instead of being shown directly.
+composited instead of being shown directly: the screen cannot convert
+it.

@@ -34,4 +34,41 @@ extern _X_EXPORT Bool compIsAlternateVisual(ScreenPtr pScreen, XID visual);
 
 extern _X_EXPORT RESTYPE CompositeClientWindowType;
 
+/*
+ * XPrism: colour conversion of window contents for the built-in
+ * compositor (XPRISM-COLOR, doc/color.md), done by the acceleration
+ * architecture when it can. Pixels of src within region (pixmap
+ * coordinates; src and dst have the same size and depth) are converted
+ * into dst, per pixel:
+ *
+ *   un-premultiply, decode transfer (to linear light, 1.0 = refWhite),
+ *   multiply by matrix, tone map luminance above toneKnee (BT.2390, in
+ *   the PQ domain: toneSrcPQ = PQ(maxLum), toneMaxL = PQ(refWhite) /
+ *   toneSrcPQ, toneKS = its knee), move towards luminance (outLuma) until
+ *   every channel is within [0, 1], encode sRGB, premultiply.
+ *
+ * Returns FALSE, having converted nothing, when it cannot; the server
+ * then converts on the CPU.
+ */
+typedef struct {
+    int transfer;               /* 0 sRGB, 1 gamma 2.2, 2 linear, 3 PQ, 4 HLG */
+    float matrix[3][3];         /* linear source RGB to linear output RGB */
+    float refWhite;             /* cd/m^2 */
+    float maxLum;               /* cd/m^2; HLG: the display peak of the OOTF */
+    float hlgGamma;             /* HLG system gamma */
+    float luma[3];              /* luminance weights of the source primaries */
+    float outLuma[3];           /* and of the output's */
+    Bool tone;
+    float toneKnee;             /* relative to refWhite */
+    float toneSrcPQ, toneMaxL, toneKS;
+} CompositeColorConvertRec;
+
+typedef Bool (*CompositeColorConvertProcPtr) (PixmapPtr src, PixmapPtr dst,
+                                              RegionPtr region,
+                                              const CompositeColorConvertRec *conv);
+
+/* Set (or with NULL, remove) the screen's conversion function. */
+extern _X_EXPORT void CompositeSetColorConvert(ScreenPtr pScreen,
+                                               CompositeColorConvertProcPtr proc);
+
 #endif                          /* _COMPOSITEEXT_H_ */

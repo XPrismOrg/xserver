@@ -8,6 +8,7 @@
 # from the standards (IEC 61966-2-1, SMPTE ST 2084) and the gamut mapping
 # doc/color.md describes, not from the server's code.
 
+import math
 import struct
 
 import pytest
@@ -50,6 +51,37 @@ def pq_to_nits(v):
     c1, c2, c3 = 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32
     p = v ** (1 / m2)
     return 10000 * (max(p - c1, 0) / (c2 - c3 * p)) ** (1 / m1)
+
+
+def nits_to_pq(n):
+    m1, m2 = 2610 / 16384, 2523 / 4096 * 128
+    c1, c2, c3 = 3424 / 4096, 2413 / 4096 * 32, 2392 / 4096 * 32
+    p = (min(max(n, 0) / 10000, 1)) ** m1
+    return ((c1 + c2 * p) / (1 + c3 * p)) ** m2
+
+
+def tone_map(nits, src_max, dst_max):
+    """ITU-R BT.2390 EETF (black level 0) in the PQ domain."""
+    if dst_max >= src_max or nits <= 0:
+        return nits
+    src_pq = nits_to_pq(src_max)
+    e1 = nits_to_pq(min(nits, src_max)) / src_pq
+    max_l = nits_to_pq(dst_max) / src_pq
+    ks = max(1.5 * max_l - 0.5, 0)
+    if e1 > ks:
+        t = (e1 - ks) / (1 - ks)
+        e1 = ((2 * t**3 - 3 * t**2 + 1) * ks + (t**3 - 2 * t**2 + t) * (1 - ks)
+              + (-2 * t**3 + 3 * t**2) * max_l)
+    return pq_to_nits(e1 * src_pq)
+
+
+def hlg_grey(v, peak=1000):
+    """Display light of an HLG grey signal, cd/m^2 (BT.2100 OOTF)."""
+    a = 0.17883277
+    b, c = 1 - 4 * a, 0.5 - a * math.log(4 * a)
+    e = v * v / 3 if v <= 0.5 else (math.exp((v - c) / a) + b) / 12
+    gamma = 1.2 + 0.42 * math.log10(peak / 1000)
+    return peak * e ** gamma
 
 
 def _inv(m):
@@ -460,9 +492,11 @@ def test_pq_tone_mapping(xvfb):
         x.fill(w, v * 0x010101, 0, 0, 100, 100)
         shown.append(x.pixel(150, 150) & 0xFF)
     assert shown == sorted(shown) and len(set(shown)) == len(shown), shown
-    # below the knee (about 90 cd/m^2 here) nothing changes
-    lin = pq_to_nits(0x60 / 255) / 203
-    assert abs(shown[0] - round(srgb_encode(lin) * 255)) <= 2, shown
+    # below the knee (about 90 cd/m^2 here) nothing changes, above it
+    # the curve is BT.2390's
+    want = [round(srgb_encode(tone_map(pq_to_nits(v / 255), 10000, 203) / 203) * 255)
+            for v in (0x60, 0x80, 0x94, 0xB0, 0xD0, 0xFF)]
+    assert all(abs(g - w) <= 2 for g, w in zip(shown, want)), (shown, want)
 
 
 def test_hlg(xvfb):
@@ -477,7 +511,9 @@ def test_hlg(xvfb):
         x.fill(w, v * 0x010101, 0, 0, 100, 100)
         shown.append(x.pixel(150, 150))
     assert all(p & 0xFF == p >> 16 == (p >> 8) & 0xFF for p in shown)   # grey
-    assert shown == sorted(shown) and len(set(shown)) == 3, [hex(p) for p in shown]
+    want = [round(srgb_encode(tone_map(hlg_grey(v / 255), 1000, 203) / 203) * 255)
+            for v in (0x40, 0x80, 0xC0)]
+    assert all(abs((g & 0xFF) - w) <= 2 for g, w in zip(shown, want)), (shown, want)
 
 
 def test_fullscreen_window_is_converted(xvfb):

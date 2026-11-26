@@ -279,6 +279,7 @@ typedef struct glamor_screen_private {
 
     /* Render convolution filter, for sources with and without alpha */
     glamor_program      convolve_prog[2];
+    glamor_program      color_prog[2];     /* [depth == 24] */
 
     /* glamor line shader */
     glamor_program_fill poly_line_program;
@@ -1023,6 +1024,10 @@ void glamor_egl_screen_init(ScreenPtr screen,
 Bool glamor_change_window_attributes(WindowPtr pWin, unsigned long mask);
 
 void glamor_copy_window(WindowPtr window, xPoint old_origin, RegionPtr src_region);
+
+/* glamor_color.c */
+void glamor_color_init(ScreenPtr screen);
+void glamor_color_fini(ScreenPtr screen);
 
 /* glamor_convolve.c */
 Bool glamor_composite_convolution(CARD8 op, PicturePtr source, PicturePtr mask,

@@ -117,7 +117,8 @@ Taking over requires the `compositor.legacy` capability, see
 | `Xext/composite/compscene.c` | The compositor and the XPRISM-SCENE extension |
 | `Xext/composite/xprismsceneproto.h` | XPRISM-SCENE wire format |
 | `Xext/composite/compcolor.c` | Colour spaces and conversions (no server state) |
-| `Xext/composite/compcolorext.c` | The XPRISM-COLOR extension and conversion of windows' contents |
+| `Xext/composite/compcolorext.c` | The XPRISM-COLOR extension and conversion of windows' contents (CPU) |
+| `glamor/glamor_color.c` | The same conversion on the GPU |
 | `Xext/composite/xprismcolorproto.h` | XPRISM-COLOR wire format |
 | `Xext/composite/compalloc.c` | Hooks for external compositors taking over and releasing a screen |
 | `Xext/composite/compinit.c` | Initialization; composing pending changes before a root window is read |

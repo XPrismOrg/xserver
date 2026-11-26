@@ -52,6 +52,7 @@ typedef struct {
 } ColorWinRec, *ColorWinPtr;
 
 static DevPrivateKeyRec colorWinKeyRec;
+static CompositeColorConvertProcPtr colorAccel[MAXSCREENS];
 static unsigned colorTagged;    /* windows with a non-sRGB description */
 static unsigned colorSerial = 1;        /* changes with any description */
 
@@ -274,6 +275,48 @@ colorConvertSpan(ColorConv *cv, const ColorLayout *l, CARD32 *px, int n)
     }
 }
 
+void
+CompositeSetColorConvert(ScreenPtr pScreen, CompositeColorConvertProcPtr proc)
+{
+    colorAccel[pScreen->myNum] = proc;
+}
+
+/* What the acceleration architecture needs to convert from cs to sRGB. */
+static bool
+colorAccelParams(const XpColorSpace *cs, CompositeColorConvertRec *p)
+{
+    XpColorMatrix m, toXYZ;
+
+    memset(p, 0, sizeof(*p));
+    if (!xpColorConversion(&cs->primaries, &xpColorPrimariesSRGB, m) ||
+        !xpColorRGBToXYZ(&cs->primaries, toXYZ))
+        return false;
+    p->transfer = cs->transfer;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++)
+            p->matrix[i][j] = (float) m[i][j];
+        p->luma[i] = (float) toXYZ[1][i];
+    }
+    p->outLuma[0] = 0.2126f;
+    p->outLuma[1] = 0.7152f;
+    p->outLuma[2] = 0.0722f;
+    p->refWhite = (float) cs->refWhite;
+    p->maxLum = (float) cs->maxLum;
+    p->hlgGamma = (float) (1.2 + 0.42 * log10(cs->maxLum / 1000));
+    if ((cs->transfer == XpColorTransferPQ || cs->transfer == XpColorTransferHLG) &&
+        cs->maxLum > cs->refWhite) {
+        double srcPQ = xpColorNitsToPQ(cs->maxLum);
+        double maxL = xpColorNitsToPQ(cs->refWhite) / srcPQ;
+        p->tone = TRUE;
+        p->toneKnee = (float) (xpColorToneMapKnee(cs->maxLum, cs->refWhite) /
+                               cs->refWhite);
+        p->toneSrcPQ = (float) srcPQ;
+        p->toneMaxL = (float) maxL;
+        p->toneKS = (float) fmax(1.5 * maxL - 0.5, 0);
+    }
+    return true;
+}
+
 /* Convert pRegion (pixmap coordinates) of src into dst. cs NULL: copy. */
 static void
 colorConvertRegion(WindowPtr top, PixmapPtr src, PixmapPtr dst,
@@ -287,6 +330,11 @@ colorConvertRegion(WindowPtr top, PixmapPtr src, PixmapPtr dst,
     ColorLayout layout;
 
     if (!n)
+        return;
+    CompositeColorConvertProcPtr accel = colorAccel[pScreen->myNum];
+    CompositeColorConvertRec params;
+    if (cs && accel && colorAccelParams(cs, &params) &&
+        (*accel) (src, dst, pRegion, &params))
         return;
     pGC = GetScratchGC(dst->drawable.depth, pScreen);
     if (!pGC)

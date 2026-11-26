@@ -115,7 +115,8 @@ Phase II, for vkms in CI or real hardware.
 2. Done: XPRISM-COLOR window descriptions
    ([xprism-color-protocol.md](xprism-color-protocol.md)); the compositor
    converts described windows for sRGB outputs, with gamut mapping and
-   tone mapping of HDR content to SDR white, on the CPU. Composition
+   tone mapping of HDR content to SDR white, on the GPU with glamor and
+   on the CPU otherwise. Composition
    stays in sRGB; composition in linear light comes with the
    64-bit-per-pixel buffers of step 3.
 3. Output colour spaces in Xvfb (a test option per screen/CRTC), and

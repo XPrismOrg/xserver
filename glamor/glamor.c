@@ -973,6 +973,7 @@ glamor_init(ScreenPtr screen, unsigned int flags)
     glamor_sync_init(screen);
 
     glamor_priv->screen = screen;
+    glamor_color_init(screen);
 
     dixScreenHookClose(screen, glamor_close_screen);
     dixScreenHookPixmapDestroy(screen, glamor_pixmap_destroy);
@@ -1004,6 +1005,7 @@ static void glamor_close_screen(CallbackListPtr *pcbl, ScreenPtr screen, void *u
     PixmapPtr screen_pixmap;
 
     glamor_priv = glamor_get_screen_private(screen);
+    glamor_color_fini(screen);
     glamor_sync_close(screen);
     glamor_composite_glyphs_fini(screen);
     glamor_set_glvnd_vendor(screen, NULL);
