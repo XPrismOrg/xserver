@@ -34,7 +34,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 120
         env:
-            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=false -Dcompositor_default=${{ matrix.compositor == 'on' }}
+            MESON_ARGS: -Dprefix=/usr -Dxephyr=true -Dwerror=true -Dxorg=true -Dxvfb=true -Dxfbdev=true -Dtest_xephyr_gles=true -Dcompositor_default=${{ matrix.compositor == 'on' }}
             LIBGL_ALWAYS_SOFTWARE: 1
             GALLIUM_DRIVER: llvmpipe
             PIGLIT_PLATFORM: x11_egl

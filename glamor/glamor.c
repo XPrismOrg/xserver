@@ -593,9 +593,17 @@ glamor_setup_formats(ScreenPtr screen)
          *
          * Instead, just store 16 bits using the trusted 565 path, and
          * disable render accel for now.
+         *
+         * XPrism: the code used to keep rgba/5551 with acceleration on,
+         * contrary to the above. Solid fills then converted the pixel
+         * with the x1r5g5b5 layout and stored it as 5551, so a filled
+         * pixel read back shifted left by one with the low bit set
+         * (fill 1, read 3): hundreds of X Test Suite failures on GLES.
+         * Without acceleration, depth-15 pixmaps live in system memory
+         * (glamor_create_pixmap) and keep their bits exactly.
          */
         glamor_add_format(screen, 15, PIXMAN_x1r5g5b5,
-                          GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, TRUE);
+                          GL_RGB, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, FALSE);
     } else {
         glamor_add_format(screen, 15, PIXMAN_x1r5g5b5,
                           GL_RGBA, GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TRUE);

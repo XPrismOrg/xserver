@@ -24,15 +24,16 @@ fi
 
 cd $PIGLIT_DIR
 
-# Skip some tests that are failing at the time of importing the script.
-#    "REPORT: min_bounds, rbearing was 0, expecting 2"
+# XTS built for X11R6 expects a font's min/max bounds to leave out glyphs
+# with an empty bitmap and zero width ("min_bounds, rbearing was 0,
+# expecting 2"). Those glyphs are real characters, and the protocol takes
+# the bounds over all characters: the Xorg server answers the same way.
+# Test expectation, not a server bug.
 PIGLIT_ARGS="$PIGLIT_ARGS -x xlistfontswithinfo@3"
 PIGLIT_ARGS="$PIGLIT_ARGS -x xlistfontswithinfo@4"
 PIGLIT_ARGS="$PIGLIT_ARGS -x xloadqueryfont@1"
 PIGLIT_ARGS="$PIGLIT_ARGS -x xqueryfont@1"
 PIGLIT_ARGS="$PIGLIT_ARGS -x xqueryfont@2"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xsetfontpath@1"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xsetfontpath@2"
 # Run as meson unit tests.
 PIGLIT_ARGS="$PIGLIT_ARGS -x rendercheck"
 

@@ -15,14 +15,6 @@ export SERVER_COMMAND="$XSERVER_BUILDDIR/hw/kdrive/ephyr/Xephyr \
         -schedMax 2000 \
         -screen 1280x1024"
 
-# Tests that currently fail on llvmpipe on CI
-PIGLIT_ARGS="$PIGLIT_ARGS -x xcleararea@6"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xcleararea@7"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xclearwindow@4"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xclearwindow@5"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xcopyarea@1"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xsetfontpath@1"
-PIGLIT_ARGS="$PIGLIT_ARGS -x xsetfontpath@2"
 
 export PIGLIT_ARGS
 
