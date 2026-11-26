@@ -132,10 +132,34 @@ Taking over requires the `compositor.legacy` capability, see
 | `test/pyxtest/test_color_cursor.py` | The software cursor on colour-managed outputs |
 | `test/compcolor.c` | Unit tests of the colour library |
 
+## Tested on hardware
+
+On 2026-11-26 the compositor ran on real hardware: Xorg with the
+modesetting driver and glamor (OpenGL 4.6, radeonsi) on an AMD Renoir
+integrated GPU, driving a 1920x1080 DisplayPort monitor at 60 and 240 Hz
+with FreeSync (48 to 240 Hz). The following worked:
+
+- window moves, stacking and resizing with twm, with no stale contents;
+- rounded corners, shadows, opacity and background blur over a GL client
+  animating below, while windows are dragged;
+- switching to another VT and back, repeatedly (the compositor skips
+  frames while the root window has no clip and repaints everything when
+  it gets it back);
+- changing the refresh rate with RandR while composing;
+- a windowed GL client held the refresh rate (240 and 60 FPS);
+- a fullscreen GL client was drawn directly (no longer redirected),
+  flipped by Present, and with `_VARIABLE_REFRESH` set and its frame rate
+  capped at 100 the monitor reported 100 Hz under FreeSync, without
+  tearing; leaving fullscreen restored the composed desktop.
+
+NVIDIA GPUs, multiple monitors and HDR outputs have not been tested on
+hardware yet.
+
 ## Limitations
 
-- The compositor is disabled by default. It will be enabled by default
-  after it has been tested on real hardware with glamor.
+- The compositor is disabled by default. It has been tested on one AMD
+  GPU (see above); NVIDIA GPUs and multiple monitors are still to be
+  tested before it is enabled by default.
 - All screens are updated from the main loop rather than at each
   output's vertical blank. Per-output scheduling depends on the atomic
   modesetting work planned for Phase II.
