@@ -13,7 +13,32 @@ WAYLAND_DISPLAY=wayland-N some-wayland-app
 ```
 
 Options: `--display DISPLAY` (default `$DISPLAY`), `--socket NAME` (in
-`$XDG_RUNTIME_DIR`, default the first free `wayland-N`).
+`$XDG_RUNTIME_DIR`, default the first free `wayland-N`), `--sandbox-display
+DISPLAY` (see below).
+
+## Security
+
+Each Wayland client gets an **X connection of its own**, which creates and
+draws its windows (with `_NET_WM_PID` set to the client's process). XPrism
+therefore sees every Wayland application as a separate client: its
+capability checks, permission prompts and audit log apply per application,
+not to WX11 as a whole. When a client disconnects, its X connection closes
+and X removes everything it had.
+
+Sandboxes (Flatpak and others) register a listener with
+`wp_security_context_v1`. Clients that come through one connect to
+`--sandbox-display` instead, typically an XPrism namespace socket:
+
+```
+xns-listen -n sandboxed --create --app-id org.example.App $XDG_RUNTIME_DIR/xprism-sandbox &
+wx11 --sandbox-display $XDG_RUNTIME_DIR/xprism-sandbox
+```
+
+so XPrism confines them as it confines sandboxed X11 applications. The
+socket is used with the session's credentials (`XAUTHORITY`); it decides
+the namespace. Without `--sandbox-display` such clients get an ordinary
+connection, and WX11 says so. Sandboxed clients cannot create security
+contexts themselves.
 
 ## What works
 
@@ -48,7 +73,8 @@ Buffers are copied into the window with `PutImage` for now.
 - subsurfaces, keeping popups on screen (positioner constraints)
 - the PRIMARY selection, clipboard types other than text, large X
   transfers (INCR), and drag and drop (XDND)
-- a security context per Wayland client (AD-2)
+- one namespace per sandboxed application (today all sandboxed clients
+  share `--sandbox-display`)
 
 ## Tests
 

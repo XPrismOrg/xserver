@@ -8,6 +8,14 @@
 // core events: the X server has already decided which client gets it, so
 // WX11 only forwards to the toplevel of the window the event arrived on.
 // Its keymap is the X server's keyboard layout (_XKB_RULES_NAMES).
+//
+// Each Wayland client gets an X connection of its own, which creates and
+// draws its windows: XPrism sees every Wayland application as a client of
+// its own (permissions, prompts, audit), not all of them as WX11.
+// Clients that come through a wp_security_context_v1 listener (a sandbox
+// such as Flatpak) connect to --sandbox-display instead, for example an
+// XPrism namespace socket made with xns-listen. WX11's own connection
+// bridges the clipboard.
 
 mod x;
 
@@ -25,7 +33,9 @@ use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction};
+use smithay::reexports::calloop::{
+    EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
+};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
@@ -54,6 +64,11 @@ use smithay::wayland::socket::ListeningSocketSource;
 use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
 
+use smithay::delegate_security_context;
+use smithay::wayland::security_context::{
+    SecurityContext, SecurityContextHandler, SecurityContextListenerSource, SecurityContextState,
+};
+use std::rc::Rc;
 use x::XSide;
 
 type Id = smithay::reexports::wayland_server::backend::ObjectId;
@@ -61,6 +76,8 @@ type Id = smithay::reexports::wayland_server::backend::ObjectId;
 /// A Wayland toplevel shown as an X window.
 struct Toplevel {
     surface: ToplevelSurface,
+    /// the connection of the client's that made the window
+    x: Option<Rc<XSide>>,
     window: Option<u32>,
     size: (u32, u32),
     /// the last frame, to repaint what X lost (Expose)
@@ -72,6 +89,7 @@ struct Toplevel {
 /// grab; a click outside it dismisses it.
 struct Popup {
     surface: PopupSurface,
+    x: Option<Rc<XSide>>,
     window: Option<u32>,
     size: (u32, u32),
     pixels: Vec<u8>,
@@ -94,7 +112,15 @@ pub struct State {
     to_wayland: VecDeque<OwnedFd>,
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
-    x: XSide,
+    /// WX11's own connection (clipboard, keyboard layout)
+    x: Rc<XSide>,
+    /// each Wayland client's X connection, and its event source
+    clients: HashMap<ClientId, (Rc<XSide>, RegistrationToken)>,
+    display_name: Option<String>,
+    sandbox_display: Option<String>,
+    sandbox_warned: bool,
+    #[allow(dead_code)]
+    security_context: SecurityContextState,
     toplevels: HashMap<Id, Toplevel>,
     popups: HashMap<Id, Popup>,
     start: Instant,
@@ -103,6 +129,8 @@ pub struct State {
 #[derive(Default)]
 struct ClientState {
     compositor: CompositorClientState,
+    /// set for clients that came through a security context (a sandbox)
+    sandbox: Option<SecurityContext>,
 }
 
 impl ClientData for ClientState {
@@ -246,36 +274,44 @@ impl State {
             return; // the parent is not shown (yet)
         };
         let geometry = popup.surface.with_pending_state(|s| s.geometry);
-        let (px, py) = self.x.root_position(parent);
+        let wl_surface = popup.surface.wl_surface().clone();
+        let Some(conn) = self.conn_for(&wl_surface) else {
+            return;
+        };
+        let (px, py) = conn.root_position(parent);
         let (x, y) = (px + geometry.loc.x, py + geometry.loc.y);
         let popup = self.popups.get_mut(id).unwrap();
         let window = match popup.window {
             Some(win) => {
-                self.x.move_resize(win, x, y, w, h);
+                conn.move_resize(win, x, y, w, h);
                 win
             }
             None => {
-                let win = self.x.create_popup(x, y, w, h, alpha);
+                let win = conn.create_popup(x, y, w, h, alpha);
                 popup.window = Some(win);
+                popup.x = Some(conn.clone());
                 if popup.grabbed {
-                    self.x.grab_pointer(win);
+                    conn.grab_pointer(win);
                 }
                 win
             }
         };
         popup.size = (w, h);
         popup.pixels = pixels.to_vec();
-        self.x.put_image(window, w, h, pixels);
+        conn.put_image(window, w, h, pixels);
     }
 
     fn hide_popup(&mut self, id: &Id) {
         if let Some(popup) = self.popups.get_mut(id) {
+            let Some(conn) = popup.x.clone() else {
+                return;
+            };
             if let Some(win) = popup.window.take() {
-                self.x.destroy_window(win);
+                conn.destroy_window(win);
             }
             if popup.grabbed {
                 popup.grabbed = false;
-                self.x.ungrab_pointer();
+                conn.ungrab_pointer();
             }
         }
     }
@@ -318,9 +354,11 @@ impl State {
             let p = self.popups.get_mut(&id).unwrap();
             p.grabbed = false;
             p.surface.send_popup_done();
+            if let Some(conn) = &p.x {
+                conn.ungrab_pointer();
+            }
             back_to = self.root_toplevel(self.popups[&id].surface.wl_surface());
         }
-        self.x.ungrab_pointer();
         if back_to.is_some() {
             let keyboard = self.keyboard.clone();
             keyboard.set_focus(self, back_to, SERIAL_COUNTER.next_serial());
@@ -334,6 +372,14 @@ impl State {
             return;
         };
 
+        let wl_surface = self.toplevels[id].surface.wl_surface().clone();
+        let Some(conn) = self.conn_for(&wl_surface) else {
+            return;
+        };
+        let pid = wl_surface
+            .client()
+            .and_then(|c| c.get_credentials(&self.dh).ok())
+            .map(|c| c.pid as u32);
         let top = self.toplevels.get_mut(id).unwrap();
         let (title, app_id) = with_states(top.surface.wl_surface(), |states| {
             let d = states
@@ -350,18 +396,19 @@ impl State {
         let window = match top.window {
             Some(win) => {
                 if top.size != (w, h) {
-                    self.x.resize(win, w, h);
+                    conn.resize(win, w, h);
                 }
                 win
             }
             None => {
-                let win = self.x.create_window(w, h, &title, &app_id, alpha);
+                let win = conn.create_window(w, h, &title, &app_id, alpha, pid);
                 top.window = Some(win);
+                top.x = Some(conn.clone());
                 win
             }
         };
         top.size = (w, h);
-        self.x.put_image(window, w, h, &pixels);
+        conn.put_image(window, w, h, &pixels);
         top.pixels = pixels;
     }
 
@@ -370,24 +417,102 @@ impl State {
     fn repaint(&self, window: u32) {
         let shown = self
             .toplevel_for_window(window)
-            .map(|t| (t.size, &t.pixels))
+            .map(|t| (t.size, &t.pixels, &t.x))
             .or_else(|| {
                 self.popups
                     .values()
                     .find(|p| p.window == Some(window))
-                    .map(|p| (p.size, &p.pixels))
+                    .map(|p| (p.size, &p.pixels, &p.x))
             });
-        if let Some(((w, h), pixels)) = shown {
+        if let Some(((w, h), pixels, Some(conn))) = shown {
             if pixels.len() == (w * h * 4) as usize {
-                self.x.put_image(window, w, h, pixels);
+                conn.put_image(window, w, h, pixels);
             }
         }
     }
 
+    /// the X connection of surface's client, made on first use: on the
+    /// sandbox display for clients that came through a security context
+    fn conn_for(&mut self, surface: &WlSurface) -> Option<Rc<XSide>> {
+        let client = surface.client()?;
+        if let Some((conn, _)) = self.clients.get(&client.id()) {
+            return Some(conn.clone());
+        }
+        let sandbox = client
+            .get_data::<ClientState>()
+            .and_then(|c| c.sandbox.clone());
+        let display = match (&sandbox, &self.sandbox_display) {
+            (Some(_), Some(d)) => Some(d.clone()),
+            (Some(ctx), None) => {
+                if !self.sandbox_warned {
+                    self.sandbox_warned = true;
+                    eprintln!(
+                        "wx11: sandboxed client ({:?}) without --sandbox-display: it gets \
+                         an ordinary X connection",
+                        ctx.app_id
+                    );
+                }
+                self.display_name.clone()
+            }
+            (None, _) => self.display_name.clone(),
+        };
+        let conn = match XSide::connect(display.as_deref(), false, self.display_name.as_deref()) {
+            Ok(c) => Rc::new(c),
+            Err(e) => {
+                eprintln!("wx11: cannot connect a client to X ({display:?}): {e}");
+                return None;
+            }
+        };
+        let added = self.handle.insert_source(
+            Generic::new(conn.fd(), Interest::READ, Mode::Level),
+            |_, _, state| {
+                state.handle_x_events();
+                Ok(PostAction::Continue)
+            },
+        );
+        let token = match added {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("wx11: {e}");
+                return None;
+            }
+        };
+        self.clients.insert(client.id(), (conn.clone(), token));
+        Some(conn)
+    }
+
+    /// drop the X connections of Wayland clients that are gone (X then
+    /// destroys their windows)
+    fn drop_gone_clients(&mut self) {
+        let dh = self.dh.clone();
+        let gone: Vec<ClientId> = self
+            .clients
+            .keys()
+            .filter(|id| dh.backend_handle().get_client_data((*id).clone()).is_err())
+            .cloned()
+            .collect();
+        for id in gone {
+            if let Some((conn, token)) = self.clients.remove(&id) {
+                conn.flush();
+                // the source holds a copy of the socket: remove it, or X
+                // never sees the client go
+                self.handle.remove(token);
+            }
+        }
+    }
+
+    /// send every connection's requests; false once WX11's own is gone
+    fn flush_x(&self) -> bool {
+        for (conn, _) in self.clients.values() {
+            conn.flush();
+        }
+        self.x.flush()
+    }
+
     fn hide(&mut self, id: &Id) {
         if let Some(top) = self.toplevels.get_mut(id) {
-            if let Some(win) = top.window.take() {
-                self.x.destroy_window(win);
+            if let (Some(win), Some(conn)) = (top.window.take(), &top.x) {
+                conn.destroy_window(win);
             }
         }
     }
@@ -526,7 +651,17 @@ impl State {
     /// what the X server told us: the window manager closing or
     /// resizing a window
     fn handle_x_events(&mut self) {
-        for ev in self.x.events() {
+        let mut conns = vec![self.x.clone()];
+        conns.extend(self.clients.values().map(|(c, _)| c.clone()));
+        for conn in conns {
+            for ev in conn.events() {
+                self.handle_x_event(ev);
+            }
+        }
+    }
+
+    fn handle_x_event(&mut self, ev: x::Event) {
+        {
             match ev {
                 x::Event::Close(win) => {
                     if let Some(t) = self.toplevel_for_window(win) {
@@ -542,7 +677,7 @@ impl State {
                     let pointer = self.pointer.clone();
                     let left = self.surface_for_window(win);
                     if left.is_none() || pointer.current_focus() != left {
-                        continue;
+                        return;
                     }
                     pointer.motion(
                         self,
@@ -557,7 +692,7 @@ impl State {
                 }
                 x::Event::Button(win, button, pressed, bx, by, time) => {
                     if pressed && self.dismiss_popups_on_click(win, bx, by) {
-                        continue;
+                        return;
                     }
                     if self.surface_for_window(win).is_some() {
                         self.pointer_button(button, pressed, time)
@@ -743,6 +878,7 @@ impl XdgShellHandler for State {
                 window: None,
                 size: (0, 0),
                 pixels: Vec::new(),
+                x: None,
             },
         );
     }
@@ -785,6 +921,7 @@ impl XdgShellHandler for State {
                 window: None,
                 size: (0, 0),
                 pixels: Vec::new(),
+                x: None,
                 grabbed: false,
             },
         );
@@ -796,8 +933,8 @@ impl XdgShellHandler for State {
             return;
         };
         popup.grabbed = true;
-        if let Some(win) = popup.window {
-            self.x.grab_pointer(win);
+        if let (Some(win), Some(conn)) = (popup.window, &popup.x) {
+            conn.grab_pointer(win);
         }
         // a grabbing popup (a menu) gets the keyboard
         let keyboard = self.keyboard.clone();
@@ -840,15 +977,37 @@ delegate_shm!(State);
 delegate_xdg_shell!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
+delegate_security_context!(State);
+
+impl SecurityContextHandler for State {
+    /// a sandbox made a listener for an application: its clients are
+    /// marked, and get their X connection on --sandbox-display
+    fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
+        let added = self.handle.insert_source(source, move |stream, _, state| {
+            let data = ClientState {
+                sandbox: Some(context.clone()),
+                ..Default::default()
+            };
+            if let Err(e) = state.dh.insert_client(stream, Arc::new(data)) {
+                eprintln!("wx11: cannot add a sandboxed client: {e}");
+            }
+        });
+        if let Err(e) = added {
+            eprintln!("wx11: security context: {e}");
+        }
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
-        "usage: wx11 [--display DISPLAY] [--socket NAME]\n\
+        "usage: wx11 [--display DISPLAY] [--socket NAME] [--sandbox-display DISPLAY]\n\
          \n\
          Shows the windows of Wayland applications as X11 windows on the X\n\
          server DISPLAY (default: $DISPLAY). Listens on the Wayland socket NAME\n\
          in $XDG_RUNTIME_DIR (default: the first free wayland-N) and prints\n\
-         WAYLAND_DISPLAY=NAME once it accepts clients."
+         WAYLAND_DISPLAY=NAME once it accepts clients. Each Wayland client gets\n\
+         an X connection of its own; clients of a sandbox (wp_security_context_v1)\n\
+         connect to the sandbox display instead, e.g. an XPrism namespace socket."
     );
     std::process::exit(2);
 }
@@ -856,22 +1015,25 @@ fn usage() -> ! {
 fn main() {
     let mut display_name: Option<String> = None;
     let mut socket_name: Option<String> = None;
+    let mut sandbox_display: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--display" | "-d" => display_name = Some(args.next().unwrap_or_else(|| usage())),
             "--socket" | "-s" => socket_name = Some(args.next().unwrap_or_else(|| usage())),
+            "--sandbox-display" => sandbox_display = Some(args.next().unwrap_or_else(|| usage())),
             "--help" | "-h" => usage(),
             _ => usage(),
         }
     }
 
-    let x = match XSide::connect(display_name.as_deref()) {
-        Ok(x) => x,
+    let x = match XSide::connect(display_name.as_deref(), true, None) {
+        Ok(x) => Rc::new(x),
         Err(e) => {
             eprintln!(
                 "wx11: cannot connect to X server {}: {e}",
                 display_name
+                    .clone()
                     .or_else(|| std::env::var("DISPLAY").ok())
                     .unwrap_or_else(|| "(DISPLAY unset)".into())
             );
@@ -960,8 +1122,18 @@ fn main() {
         compositor: CompositorState::new::<State>(&dh),
         shm: ShmState::new::<State>(&dh, vec![]),
         xdg: XdgShellState::new::<State>(&dh),
+        // only clients outside a sandbox may create security contexts
+        security_context: SecurityContextState::new::<State, _>(&dh, |client| {
+            client
+                .get_data::<ClientState>()
+                .is_none_or(|c| c.sandbox.is_none())
+        }),
         dh,
         x,
+        clients: HashMap::new(),
+        display_name,
+        sandbox_display,
+        sandbox_warned: false,
         toplevels: HashMap::new(),
         popups: HashMap::new(),
         start: Instant::now(),
@@ -979,7 +1151,8 @@ fn main() {
         // events x11rb read while waiting for a reply
         state.handle_x_events();
         let _ = state.dh.flush_clients();
-        if !state.x.flush() {
+        state.drop_gone_clients();
+        if !state.flush_x() {
             eprintln!("wx11: lost the X server");
             break;
         }

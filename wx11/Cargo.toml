@@ -10,8 +10,10 @@ publish = false
 # protocol handling only: no renderer or backend, the X server is the backend
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
 x11rb = { version = "0.13", features = ["xfixes"] }   # xfixes: clipboard owner changes
+# its xauth lookup, for socket-path displays (see x.rs)
+x11rb-protocol = "0.13"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [profile.release]
 lto = "thin"

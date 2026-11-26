@@ -13,6 +13,9 @@
 // "popup configure X Y W H", "popup drawn", "popup done"; input events on
 // the popup say "popup" ("pointer enter popup X Y", "keyboard enter popup").
 //
+// --security-context APP_ID acts as a sandbox would: it registers a
+// wp_security_context_v1 listener for APP_ID, then runs through it.
+//
 // --alpha draws an argb8888 buffer; --color then takes AARRGGBB
 // (premultiplied).
 //
@@ -22,7 +25,7 @@
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]
-//                    [--copy TEXT] [--paste] [--alpha]
+//                    [--copy TEXT] [--paste] [--alpha] [--security-context APP_ID]
 
 use std::fs::File;
 use std::io::Write;
@@ -34,6 +37,9 @@ use wayland_client::protocol::{
 };
 use wayland_client::{
     delegate_noop, event_created_child, Connection, Dispatch, QueueHandle, WEnum,
+};
+use wayland_protocols::wp::security_context::v1::client::{
+    wp_security_context_manager_v1, wp_security_context_v1,
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
@@ -478,6 +484,62 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
     ]);
 }
 
+/// the first connection of a sandboxed run: only the security context
+struct Sandbox {
+    manager: Option<wp_security_context_manager_v1::WpSecurityContextManagerV1>,
+}
+
+impl Dispatch<wl_registry::WlRegistry, ()> for Sandbox {
+    fn event(
+        sb: &mut Sandbox,
+        registry: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Sandbox>,
+    ) {
+        if let wl_registry::Event::Global {
+            name, interface, ..
+        } = event
+        {
+            if interface == "wp_security_context_manager_v1" {
+                sb.manager = Some(registry.bind(name, 1, qh, ()));
+            }
+        }
+    }
+}
+
+delegate_noop!(Sandbox: ignore wp_security_context_manager_v1::WpSecurityContextManagerV1);
+delegate_noop!(Sandbox: ignore wp_security_context_v1::WpSecurityContextV1);
+
+/// register a security context listener for app_id (engine "wx11-test")
+/// and connect through it
+fn sandboxed(first: &Connection, app_id: &str) -> (Connection, std::io::PipeWriter) {
+    let mut queue = first.new_event_queue();
+    let qh = queue.handle();
+    first.display().get_registry(&qh, ());
+    let mut sb = Sandbox { manager: None };
+    queue.roundtrip(&mut sb).expect("roundtrip");
+    let Some(manager) = sb.manager.take() else {
+        eprintln!("wx11-test-client: no wp_security_context_manager_v1");
+        std::process::exit(1);
+    };
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let path = format!("{dir}/wx11-sandbox-{}", std::process::id());
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("sandbox socket");
+    let (close_r, close_w) = std::io::pipe().expect("pipe");
+    let ctx = manager.create_listener(listener.as_fd(), close_r.as_fd(), &qh, ());
+    ctx.set_sandbox_engine("wx11-test".into());
+    ctx.set_app_id(app_id.into());
+    ctx.commit();
+    queue.roundtrip(&mut sb).expect("roundtrip");
+    let stream = std::os::unix::net::UnixStream::connect(&path).expect("sandbox connect");
+    let _ = std::fs::remove_file(&path);
+    let conn = Connection::from_socket(stream).expect("sandboxed connection");
+    (conn, close_w)
+}
+
 delegate_noop!(App: ignore wl_data_offer::WlDataOffer);
 delegate_noop!(App: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
@@ -496,6 +558,7 @@ fn main() {
     let mut copy = None;
     let mut paste = false;
     let mut alpha = false;
+    let mut security_context = None;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
@@ -528,6 +591,7 @@ fn main() {
                     u32::from_str_radix(&v, 16).expect("--popup-color RRGGBB")
             }
             "--copy" => copy = Some(v),
+            "--security-context" => security_context = Some(v),
             "--paste" => {
                 paste = true;
                 continue;
@@ -541,13 +605,22 @@ fn main() {
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--alpha]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--alpha] [--security-context APP_ID]");
                 std::process::exit(2);
             }
         }
     }
 
-    let conn = Connection::connect_to_env().expect("cannot connect to the Wayland display");
+    let first = Connection::connect_to_env().expect("cannot connect to the Wayland display");
+    // a sandboxed run keeps the first connection and the context's close
+    // pipe open: the listener lives as long as they do
+    let (conn, _keep) = match &security_context {
+        Some(app) => {
+            let (conn, keep) = sandboxed(&first, app);
+            (conn, Some((first.clone(), keep)))
+        }
+        None => (first.clone(), None),
+    };
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
     conn.display().get_registry(&qh, ());

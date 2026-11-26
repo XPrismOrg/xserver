@@ -715,6 +715,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "x11rb",
+ "x11rb-protocol",
 ]
 
 [[package]]

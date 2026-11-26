@@ -496,3 +496,98 @@ def test_opaque_buffer_keeps_the_screen_depth(xserver, client):
     conn = RawX11Connection(xserver.display_num)
     assert _depth(conn, win) == 24
     assert _pixel(conn, win, 5, 5) == 0x00ff00
+
+
+def test_each_wayland_client_is_its_own_x_client(xserver, client):
+    """XPrism must see every Wayland application as a client of its own
+    (permissions, prompts, audit), not all of them as WX11"""
+    a, wa = _shown(xserver, client, "app one")
+    b, wb = _shown(xserver, client, "app two")
+    conn = RawX11Connection(xserver.display_num)
+    mask = conn._resource_id_mask
+    assert wa & ~mask != wb & ~mask, "both windows belong to one X client"
+    net_wm_pid = conn.intern_atom("_NET_WM_PID")
+    assert _cardinal(conn, wa, net_wm_pid) == a.p.pid
+    assert _cardinal(conn, wb, net_wm_pid) == b.p.pid
+
+
+def _cardinal(conn, win, atom):
+    """a 32-bit property's first value"""
+    r = _reply(conn, conn.send_request(struct.pack("<BBHIIIII", X_GET_PROPERTY, 0, 6, win, atom,
+                                                   0, 0, 1)))
+    assert r.data[1] == 32, "not a 32-bit property"
+    return struct.unpack_from("<I", r.data, 32)[0]
+
+
+def test_killed_client_takes_its_x_connection_along(xserver, client):
+    conn = RawX11Connection(xserver.display_num)
+    before = set(_children(conn))
+    c, win = _shown(xserver, client, "doomed")
+    # its X connection made the window and a selection window of its own
+    assert len(set(_children(conn)) - before) == 2
+    c.p.kill()                      # no xdg_toplevel.destroy: just gone
+    end = time.monotonic() + 5
+    while set(_children(conn)) != before and time.monotonic() < end:
+        time.sleep(0.05)
+    # both are gone: the connection was closed, not only the window
+    assert set(_children(conn)) == before
+
+
+class TestSandbox:
+    """A client that comes through a wp_security_context_v1 listener gets
+    its X connection on --sandbox-display: here an xns-listen socket, so it
+    lands in that XPrism namespace."""
+
+    @pytest.fixture
+    def xserver_args(self, tmp_path):
+        from test_xns_listen import COOKIE_PROTO, ROOT_COOKIE
+        conf = tmp_path / "ns.conf"
+        conf.write_text(f"auth {COOKIE_PROTO.decode()} {ROOT_COOKIE.hex()}\n")
+        return ["-namespace", str(conf)]
+
+    def _namespace_of(self, manager, opcode, xid):
+        from test_xns_listen import X_XNS_GET_CLIENT_INFO
+        manager.send_request(struct.pack("<BBHI", opcode, X_XNS_GET_CLIENT_INFO, 2, xid))
+        r = manager.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        ns_len, app_len = struct.unpack_from("<HH", r.data, 16)
+        off = 32 + ns_len + (-ns_len % 4)
+        return r.data[32:32 + ns_len].decode(), r.data[off:off + app_len].decode()
+
+    def test_sandboxed_client_lands_in_the_namespace(self, xserver, tmp_path):
+        from test_xns_listen import _manager, _start, _xauth_file
+        os.environ.setdefault("XSERVER_BUILDDIR", str(Path(__file__).parents[2] / "build"))
+        env = dict(os.environ, DISPLAY=f":{xserver.display_num}",
+                   XAUTHORITY=_xauth_file(tmp_path / "xauth", xserver.display_num))
+        sock = tmp_path / "sandbox.sock"
+        xns = _start(["-n", "sandbox1", "--create", "--app-id", "org.example.Boxed",
+                      str(sock)], env)
+        runtime = tempfile.mkdtemp(prefix="wx11-")
+        env["XDG_RUNTIME_DIR"] = runtime
+        env.pop("WAYLAND_DISPLAY", None)
+        procs = [Proc([str(WX11), "--sandbox-display", str(sock)], env)]
+        try:
+            line = procs[0].line()
+            assert line and line.startswith("WAYLAND_DISPLAY="), (line, procs[0].stderr())
+            env["WAYLAND_DISPLAY"] = line.split("=", 1)[1]
+            boxed = Proc([str(CLIENT), "--title", "boxed",
+                          "--security-context", "org.example.Boxed"], env)
+            free = Proc([str(CLIENT), "--title", "free"], env)
+            procs += [boxed, free]
+            boxed.wait_for("drawn 64 48")
+            free.wait_for("drawn 64 48")
+
+            manager, opcode = _manager(xserver)
+            boxed_win, free_win = _window_named(manager, "boxed"), _window_named(manager, "free")
+            if not (boxed_win and free_win):
+                procs[0].stop()
+                pytest.fail(f"windows {boxed_win} {free_win}; wx11: {procs[0].stderr()}")
+            assert self._namespace_of(manager, opcode, boxed_win) == \
+                ("sandbox1", "org.example.Boxed")
+            assert self._namespace_of(manager, opcode, free_win)[0] == "root"
+        finally:
+            for p in reversed(procs):
+                p.stop()
+            xns.terminate()
+            xns.wait(timeout=5)
+            shutil.rmtree(runtime, ignore_errors=True)

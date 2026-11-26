@@ -15,8 +15,10 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::xproto::{SelectionNotifyEvent, SELECTION_NOTIFY_EVENT};
 use x11rb::protocol::Event as XEvent;
-use x11rb::rust_connection::RustConnection;
+use x11rb::rust_connection::{DefaultStream, RustConnection};
 use x11rb::wrapper::ConnectionExt as _;
+use x11rb_protocol::parse_display::parse_display;
+use x11rb_protocol::xauth::get_auth;
 
 pub enum Event {
     /// the window manager asks to close the window (WM_DELETE_WINDOW)
@@ -77,6 +79,22 @@ pub struct KeyboardLayout {
     pub options: String,
 }
 
+/// connect to the X socket at path with the credentials of auth_display:
+/// x11rb could not tell which display's XAUTHORITY entry a bare socket
+/// path needs (the socket decides the namespace, the cookie admission)
+fn connect_path(
+    path: &str,
+    auth_display: Option<&str>,
+) -> Result<RustConnection, Box<dyn std::error::Error>> {
+    let stream = std::os::unix::net::UnixStream::connect(path)?;
+    let (stream, (family, address)) = DefaultStream::from_unix_stream(stream)?;
+    let display = parse_display(auth_display)?.display;
+    let (name, data) = get_auth(family, &address, display)?.unwrap_or_default();
+    Ok(RustConnection::connect_to_stream_with_auth_info(
+        stream, 0, name, data,
+    )?)
+}
+
 pub struct XSide {
     conn: RustConnection,
     root: u32,
@@ -92,6 +110,7 @@ pub struct XSide {
     wm_protocols: u32,
     wm_delete_window: u32,
     net_wm_name: u32,
+    net_wm_pid: u32,
     utf8_string: u32,
     xkb_rules_names: u32,
     clipboard: u32,
@@ -103,8 +122,19 @@ pub struct XSide {
 }
 
 impl XSide {
-    pub fn connect(display: Option<&str>) -> Result<XSide, Box<dyn std::error::Error>> {
-        let (conn, screen_num) = RustConnection::connect(display)?;
+    /// connect to display (a display name or a socket path); with
+    /// watch_clipboard, watch the CLIPBOARD owner (WX11's own connection).
+    /// A socket path (an XPrism namespace socket) gets the credentials of
+    /// auth_display, the display it belongs to.
+    pub fn connect(
+        display: Option<&str>,
+        watch_clipboard: bool,
+        auth_display: Option<&str>,
+    ) -> Result<XSide, Box<dyn std::error::Error>> {
+        let (conn, screen_num) = match display {
+            Some(path) if path.starts_with('/') => (connect_path(path, auth_display)?, 0),
+            _ => RustConnection::connect(display)?,
+        };
         let screen = &conn.setup().roots[screen_num];
         let (root, depth, visual) = (screen.root, screen.root_depth, screen.root_visual);
         let argb_visual = screen
@@ -120,6 +150,7 @@ impl XSide {
         let wm_protocols = atom("WM_PROTOCOLS")?;
         let wm_delete_window = atom("WM_DELETE_WINDOW")?;
         let net_wm_name = atom("_NET_WM_NAME")?;
+        let net_wm_pid = atom("_NET_WM_PID")?;
         let utf8_string = atom("UTF8_STRING")?;
         let xkb_rules_names = atom("_XKB_RULES_NAMES")?;
         let clipboard = atom("CLIPBOARD")?;
@@ -156,14 +187,16 @@ impl XSide {
             &CreateWindowAux::new(),
         )?;
         // hear about every change of the CLIPBOARD owner
-        conn.xfixes_query_version(5, 0)?.reply()?;
-        conn.xfixes_select_selection_input(
-            sel_win,
-            clipboard,
-            SelectionEventMask::SET_SELECTION_OWNER
-                | SelectionEventMask::SELECTION_WINDOW_DESTROY
-                | SelectionEventMask::SELECTION_CLIENT_CLOSE,
-        )?;
+        if watch_clipboard {
+            conn.xfixes_query_version(5, 0)?.reply()?;
+            conn.xfixes_select_selection_input(
+                sel_win,
+                clipboard,
+                SelectionEventMask::SET_SELECTION_OWNER
+                    | SelectionEventMask::SELECTION_WINDOW_DESTROY
+                    | SelectionEventMask::SELECTION_CLIENT_CLOSE,
+            )?;
+        }
         Ok(XSide {
             conn,
             root,
@@ -175,6 +208,7 @@ impl XSide {
             wm_protocols,
             wm_delete_window,
             net_wm_name,
+            net_wm_pid,
             utf8_string,
             xkb_rules_names,
             clipboard,
@@ -431,7 +465,17 @@ impl XSide {
         }
     }
 
-    pub fn create_window(&self, w: u32, h: u32, title: &str, app_id: &str, alpha: bool) -> u32 {
+    /// a top-level window; pid is the Wayland client's process
+    /// (_NET_WM_PID), if known
+    pub fn create_window(
+        &self,
+        w: u32,
+        h: u32,
+        title: &str,
+        app_id: &str,
+        alpha: bool,
+        pid: Option<u32>,
+    ) -> u32 {
         let win = self.conn.generate_id().expect("X resource id");
         let (depth, visual, aux) = self.window_kind(win, alpha);
         let _ = self.conn.create_window(
@@ -472,6 +516,15 @@ impl XSide {
                 AtomEnum::WM_CLASS,
                 AtomEnum::STRING,
                 class.as_bytes(),
+            );
+        }
+        if let Some(pid) = pid {
+            let _ = self.conn.change_property32(
+                PropMode::REPLACE,
+                win,
+                self.net_wm_pid,
+                AtomEnum::CARDINAL,
+                &[pid],
             );
         }
         self.set_title(win, title);
