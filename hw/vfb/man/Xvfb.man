@@ -57,6 +57,12 @@ This option creates screen \fIscreennum\fP and sets its width, height,
 and depth to W, H, and D respectively.  By default, only screen 0 exists
 and has the dimensions 1280x1024x24.
 .TP 4
+.B "\-origin \fIX\fP,\fIY\fP"
+Places the screen given by the last \fB\-screen\fP option at \fIX\fP,\fIY\fP
+in the space that Xinerama combines the screens into.  By default, screen 0
+is at 0,0 and every other screen is to the right of the previous one, with
+the same \fIY\fP.
+.TP 4
 .B "\-pixdepths \fIlist-of-depths\fP"
 This option specifies a list of pixmap depths that the server should
 support in addition to the depths implied by the supported screens.

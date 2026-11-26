@@ -115,6 +115,8 @@ typedef struct {
     int numCrtcs;
     vfbCrtcInfoPtr crtcs;       /* owned by this screen */
     Bool crtcSizeSet;           /* -crtcs N@WxH, else CRTCs match the screen */
+    int originX, originY;       /* position in the combined (Xinerama) space */
+    Bool originSet;             /* -origin, else right of the previous screen */
     char *pfbMemory;
     XWDColor *pXWDCmap;
     XWDFileHeader *pXWDHeader;
@@ -323,6 +325,8 @@ void
 ddxUseMsg(void)
 {
     ErrorF("-screen scrn WxHxD     set screen's width, height, depth\n");
+    ErrorF("-origin X,Y            position of the last -screen in the Xinerama\n"
+           "                       layout (default: right of the previous one)\n");
     ErrorF("-pixdepths list-of-int support given pixmap depths\n");
     ErrorF("+/-render		   turn on/off RENDER extension support"
            "(default on)\n");
@@ -401,6 +405,21 @@ ddxProcessArgument(int argc, char *argv[], int i)
 
         lastScreen = screenNum;
         return 3;
+    }
+
+    if (strcmp(argv[i], "-origin") == 0) {      /* -origin X,Y */
+        CHECK_FOR_REQUIRED_ARGUMENTS(1);
+        int end = 0;
+        if (2 != sscanf(argv[i + 1], "%d,%d%n",
+                        &currentScreen->originX, &currentScreen->originY, &end) ||
+            argv[i + 1][end] != '\0') {
+            ErrorF("Invalid origin %s\n", argv[i + 1]);
+            UseMsg();
+            FatalError("Invalid -origin argument '%s', expected X,Y\n",
+                       argv[i + 1]);
+        }
+        currentScreen->originSet = TRUE;
+        return 2;
     }
 
     if (strcmp(argv[i], "-pixdepths") == 0) {   /* -pixdepths list-of-depth */
@@ -1156,6 +1175,9 @@ static bool vfbScreenInit(ScreenPtr pScreen, int argc, char **argv, void *closur
     if (!ret)
         return FALSE;
 
+    pScreen->x = pvfb->originX;
+    pScreen->y = pvfb->originY;
+
     if (Render) {
         fbPictureInit(pScreen, 0, 0);
 #ifdef GLAMOR
@@ -1270,6 +1292,22 @@ InitOutput(int argc, char **argv)
                            c, crtc->width, crtc->height, i,
                            vfbScreens[i].width, vfbScreens[i].height);
             }
+        }
+    }
+
+    /* Without -origin, each screen sits right of the previous one, as with
+       the Xorg server and no layout. Xinerama takes the combined space
+       from these; they used to all be 0,0, so the screens overlapped. */
+    for (i = 0; i < vfbNumScreens; i++) {
+        if (vfbScreens[i].originSet)
+            continue;
+        if (i == 0) {
+            vfbScreens[i].originX = vfbScreens[i].originY = 0;
+        }
+        else {
+            vfbScreens[i].originX = vfbScreens[i - 1].originX +
+                vfbScreens[i - 1].width;
+            vfbScreens[i].originY = vfbScreens[i - 1].originY;
         }
     }
 

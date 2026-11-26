@@ -71,3 +71,48 @@ def test_crtc_larger_than_screen_is_refused():
     assert r.returncode != 0
     assert "exceeds screen 1's size 640x480" in r.stderr, r.stderr
     assert "double free" not in r.stderr and r.returncode == 1, r.stderr
+
+
+def _xinerama_heads(conn):
+    ext = conn.query_extension("XINERAMA")
+    assert ext
+    conn.send_request(struct.pack("<BBH", ext.opcode, 5, 1))   # QueryScreens
+    r = conn.recv_response(timeout=5.0)
+    assert r is not None and not isinstance(r, X11Error), r
+    n = struct.unpack_from("<I", r.data, 8)[0]
+    return [struct.unpack_from("<hhHH", r.data, 32 + 8 * k) for k in range(n)]
+
+
+@pytest.mark.parametrize(
+    "xserver_args",
+    [["+xinerama", "-screen", "0", "640x480x24", "-screen", "1", "800x600x24"]],
+    indirect=True,
+)
+def test_xinerama_screens_side_by_side(xvfb, xserver_args):
+    """Without -origin each screen is right of the previous one (they all
+    used to be at 0,0, on top of each other), and heads are listed in
+    screen order (they came out reversed)."""
+    conn = RawX11Connection(xvfb.display_num)
+    assert _xinerama_heads(conn) == [(0, 0, 640, 480), (640, 0, 800, 600)]
+    assert _root_size(conn) == (1440, 600)
+
+
+@pytest.mark.parametrize(
+    "xserver_args",
+    [["+xinerama", "-screen", "0", "640x480x24",
+      "-screen", "1", "640x480x24", "-origin", "0,480"]],
+    indirect=True,
+)
+def test_xinerama_origin(xvfb, xserver_args):
+    conn = RawX11Connection(xvfb.display_num)
+    assert _xinerama_heads(conn) == [(0, 0, 640, 480), (0, 480, 640, 480)]
+    assert _root_size(conn) == (640, 960)
+
+
+def test_bad_origin_is_refused():
+    xvfb = os.environ.get("XVFB_PATH")
+    if not xvfb:
+        pytest.skip("XVFB_PATH not set")
+    r = subprocess.run([xvfb, ":399", "-nolisten", "tcp", "-origin", "1,2,3"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode != 0 and "Invalid -origin" in r.stderr, r.stderr

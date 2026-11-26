@@ -960,7 +960,11 @@ ProcXineramaQueryScreens(ClientPtr client)
     x_rpcbuf_t rpcbuf = { .swapped = client->swapped, .err_clear = TRUE };
 
     if (PanoramiXIsEnabled()) {
-        XINERAMA_FOR_EACH_SCREEN_BACKWARD({
+        /* Heads in screen order: clients take the first one as the
+           primary monitor. 25f50e2cc reversed this loop, believing
+           FOR_NSCREENS was an alias for FOR_NSCREENS_BACKWARD; it was the
+           forward one. */
+        XINERAMA_FOR_EACH_SCREEN_FORWARD({
             /* xXineramaScreenInfo is the same as xRectangle */
             x_rpcbuf_write_rect(&rpcbuf,
                                 walkScreen->x,
