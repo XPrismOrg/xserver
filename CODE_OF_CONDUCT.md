@@ -6,12 +6,10 @@ people asking questions, and people who just read along.
 
 ## Our commitment
 
-We welcome everyone, whatever their age, body, ability or disability,
-ethnicity, nationality, caste, religion or lack of one, sex
-characteristics, gender identity and expression, sexual or romantic
-orientation, relationship structure, family situation, appearance,
-language, education, income, or level of experience. LGBTQIAP+ people
-belong here, and so does anyone using X11 for the first time.
+We welcome everyone, whatever their age, ability or disability,
+ethnicity, nationality, religion or lack of one, gender identity, sexual
+orientation, appearance, language, education, or level of experience.
+Anyone using X11 for the first time belongs here too.
 
 We commit to making participation in XPrism free of harassment and
 discrimination, and to treating each other with respect, also when we
