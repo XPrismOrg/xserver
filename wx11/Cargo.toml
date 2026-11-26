@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 # protocol handling only: no renderer or backend, the X server is the backend
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["xfixes"] }   # xfixes: clipboard owner changes
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 

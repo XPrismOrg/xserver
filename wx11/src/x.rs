@@ -5,10 +5,12 @@
 use std::os::fd::{AsFd, OwnedFd};
 
 use x11rb::connection::{Connection, RequestConnection};
+use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
     AtomEnum, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, GrabMode,
     GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, WindowClass,
 };
+use x11rb::protocol::xproto::{SelectionNotifyEvent, SELECTION_NOTIFY_EVENT};
 use x11rb::protocol::Event as XEvent;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -28,8 +30,35 @@ pub enum Event {
     Leave(u32, u32),
     /// the pointer moved to x, y in the window
     Motion(u32, f64, f64, u32),
+    /// another X client owns CLIPBOARD now (None: nobody does)
+    ClipboardOwner(Option<u32>),
+    /// an X client asks for our CLIPBOARD (we own it for a Wayland client)
+    ClipboardRequest(SelectionRequest),
+    /// the X clipboard we asked for (None: refused)
+    ClipboardData(Option<Vec<u8>>),
     /// an X pointer button went down (true) or up, at x, y in the window
     Button(u32, u8, bool, f64, f64, u32),
+}
+
+/// what an X client asked of the clipboard WX11 owns
+pub struct SelectionRequest {
+    requestor: u32,
+    selection: u32,
+    target: u32,
+    property: u32,
+    time: u32,
+}
+
+/// the kinds of clipboard data X clients ask for
+pub enum ClipboardTarget {
+    /// the list of targets
+    Targets,
+    /// text as UTF-8 (UTF8_STRING, TEXT)
+    Utf8,
+    /// text as Latin-1 (STRING)
+    Latin1,
+    /// something WX11 does not offer
+    Other,
 }
 
 /// the keyboard layout the X server uses (_XKB_RULES_NAMES), for the
@@ -54,6 +83,12 @@ pub struct XSide {
     net_wm_name: u32,
     utf8_string: u32,
     xkb_rules_names: u32,
+    clipboard: u32,
+    targets: u32,
+    text: u32,
+    wx11_selection: u32,
+    /// an InputOnly window that owns and requests selections
+    sel_win: u32,
 }
 
 impl XSide {
@@ -69,8 +104,35 @@ impl XSide {
         let net_wm_name = atom("_NET_WM_NAME")?;
         let utf8_string = atom("UTF8_STRING")?;
         let xkb_rules_names = atom("_XKB_RULES_NAMES")?;
+        let clipboard = atom("CLIPBOARD")?;
+        let targets = atom("TARGETS")?;
+        let text = atom("TEXT")?;
+        let wx11_selection = atom("WX11_SELECTION")?;
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
+        let sel_win = conn.generate_id()?;
+        conn.create_window(
+            0,
+            sel_win,
+            root,
+            -1,
+            -1,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )?;
+        // hear about every change of the CLIPBOARD owner
+        conn.xfixes_query_version(5, 0)?.reply()?;
+        conn.xfixes_select_selection_input(
+            sel_win,
+            clipboard,
+            SelectionEventMask::SET_SELECTION_OWNER
+                | SelectionEventMask::SELECTION_WINDOW_DESTROY
+                | SelectionEventMask::SELECTION_CLIENT_CLOSE,
+        )?;
         Ok(XSide {
             conn,
             root,
@@ -82,7 +144,124 @@ impl XSide {
             net_wm_name,
             utf8_string,
             xkb_rules_names,
+            clipboard,
+            targets,
+            text,
+            wx11_selection,
+            sel_win,
         })
+    }
+
+    /// own CLIPBOARD on behalf of a Wayland client
+    pub fn own_clipboard(&self) {
+        let _ = self
+            .conn
+            .set_selection_owner(self.sel_win, self.clipboard, x11rb::CURRENT_TIME);
+    }
+
+    /// give CLIPBOARD up, if we own it
+    pub fn disown_clipboard(&self) {
+        let owner = self
+            .conn
+            .get_selection_owner(self.clipboard)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| r.owner);
+        if owner == Some(self.sel_win) {
+            let _ = self
+                .conn
+                .set_selection_owner(x11rb::NONE, self.clipboard, x11rb::CURRENT_TIME);
+        }
+    }
+
+    /// ask the X owner of CLIPBOARD for UTF-8 text; the answer comes as
+    /// Event::ClipboardData
+    pub fn request_clipboard(&self) {
+        let _ = self.conn.convert_selection(
+            self.sel_win,
+            self.clipboard,
+            self.utf8_string,
+            self.wx11_selection,
+            x11rb::CURRENT_TIME,
+        );
+    }
+
+    pub fn clipboard_target(&self, req: &SelectionRequest) -> ClipboardTarget {
+        if req.target == self.targets {
+            ClipboardTarget::Targets
+        } else if req.target == self.utf8_string || req.target == self.text {
+            ClipboardTarget::Utf8
+        } else if req.target == u32::from(AtomEnum::STRING) {
+            ClipboardTarget::Latin1
+        } else {
+            ClipboardTarget::Other
+        }
+    }
+
+    /// answer a request: text (UTF-8, converted for STRING), the target
+    /// list, or None to refuse
+    pub fn answer_clipboard(&self, req: &SelectionRequest, text: Option<&[u8]>) {
+        // ICCCM: an old client may give no property; use the target
+        let property = if req.property == x11rb::NONE {
+            req.target
+        } else {
+            req.property
+        };
+        let stored = match self.clipboard_target(req) {
+            ClipboardTarget::Targets => self
+                .conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    property,
+                    AtomEnum::ATOM,
+                    &[
+                        self.targets,
+                        self.utf8_string,
+                        self.text,
+                        AtomEnum::STRING.into(),
+                    ],
+                )
+                .is_ok(),
+            ClipboardTarget::Utf8 if text.is_some() => self
+                .conn
+                .change_property8(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    property,
+                    self.utf8_string,
+                    text.unwrap(),
+                )
+                .is_ok(),
+            ClipboardTarget::Latin1 if text.is_some() => {
+                let latin1: Vec<u8> = String::from_utf8_lossy(text.unwrap())
+                    .chars()
+                    .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' })
+                    .collect();
+                self.conn
+                    .change_property8(
+                        PropMode::REPLACE,
+                        req.requestor,
+                        property,
+                        AtomEnum::STRING,
+                        &latin1,
+                    )
+                    .is_ok()
+            }
+            _ => false,
+        };
+        let event = SelectionNotifyEvent {
+            response_type: SELECTION_NOTIFY_EVENT,
+            sequence: 0,
+            time: req.time,
+            requestor: req.requestor,
+            selection: req.selection,
+            target: req.target,
+            property: if stored { property } else { x11rb::NONE },
+        };
+        let _ = self
+            .conn
+            .send_event(false, req.requestor, EventMask::NO_EVENT, event);
     }
 
     /// the keyboard layout set on the X server, empty fields if unknown
@@ -314,6 +493,40 @@ impl XSide {
         let mut out = Vec::new();
         while let Ok(Some(ev)) = self.conn.poll_for_event() {
             match ev {
+                XEvent::XfixesSelectionNotify(s) if s.selection == self.clipboard => {
+                    let owner = (s.owner != x11rb::NONE).then_some(s.owner);
+                    if owner != Some(self.sel_win) {
+                        out.push(Event::ClipboardOwner(owner));
+                    }
+                }
+                XEvent::SelectionRequest(r) if r.selection == self.clipboard => {
+                    out.push(Event::ClipboardRequest(SelectionRequest {
+                        requestor: r.requestor,
+                        selection: r.selection,
+                        target: r.target,
+                        property: r.property,
+                        time: r.time,
+                    }))
+                }
+                XEvent::SelectionNotify(n) if n.requestor == self.sel_win => {
+                    let data = (n.property != x11rb::NONE)
+                        .then(|| {
+                            self.conn
+                                .get_property(
+                                    true,
+                                    self.sel_win,
+                                    n.property,
+                                    AtomEnum::ANY,
+                                    0,
+                                    u32::MAX / 4,
+                                )
+                                .ok()
+                                .and_then(|c| c.reply().ok())
+                                .map(|r| r.value)
+                        })
+                        .flatten();
+                    out.push(Event::ClipboardData(data));
+                }
                 XEvent::ClientMessage(m)
                     if m.type_ == self.wm_protocols
                         && m.data.as_data32()[0] == self.wm_delete_window =>

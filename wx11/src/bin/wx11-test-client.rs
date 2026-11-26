@@ -13,18 +13,25 @@
 // "popup configure X Y W H", "popup drawn", "popup done"; input events on
 // the popup say "popup" ("pointer enter popup X Y", "keyboard enter popup").
 //
+// --copy TEXT puts TEXT on the clipboard once the window has the keyboard
+// ("copied"; "sent" when someone pasted it); --paste prints every clipboard
+// text it is offered ("pasted TEXT").
+//
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]
+//                    [--copy TEXT] [--paste]
 
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
-    wl_shm_pool, wl_surface,
+    wl_buffer, wl_callback, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
+    wl_data_source, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
-use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle, WEnum};
+use wayland_client::{
+    delegate_noop, event_created_child, Connection, Dispatch, QueueHandle, WEnum,
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
@@ -55,7 +62,13 @@ struct App {
         xdg_popup::XdgPopup,
     )>,
     popup_opened: bool,
+    data_manager: Option<wl_data_device_manager::WlDataDeviceManager>,
+    data_device: Option<wl_data_device::WlDataDevice>,
+    copy: Option<String>,
+    paste: bool,
 }
+
+const TEXT: &str = "text/plain;charset=utf-8";
 
 fn say(line: String) {
     let mut out = std::io::stdout();
@@ -161,6 +174,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 "wl_seat" => app.seat = Some(registry.bind(name, 5, qh, ())),
+                "wl_data_device_manager" => app.data_manager = Some(registry.bind(name, 3, qh, ())),
                 _ => {}
             }
         }
@@ -323,14 +337,25 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
         event: wl_keyboard::Event,
         _: &(),
         _: &Connection,
-        _: &QueueHandle<App>,
+        qh: &QueueHandle<App>,
     ) {
         match event {
             wl_keyboard::Event::Keymap { size, .. } if size > 0 => say("keymap".into()),
             wl_keyboard::Event::Enter { surface, .. } if app.is_popup(&surface) => {
                 say("keyboard enter popup".into())
             }
-            wl_keyboard::Event::Enter { .. } => say("keyboard enter".into()),
+            wl_keyboard::Event::Enter { serial, .. } => {
+                say("keyboard enter".into());
+                // copy once we may: with the serial of the focus
+                if let (Some(text), Some(manager), Some(device)) =
+                    (app.copy.take(), &app.data_manager, &app.data_device)
+                {
+                    let source = manager.create_data_source(qh, text);
+                    source.offer(TEXT.into());
+                    device.set_selection(Some(&source), serial);
+                    say("copied".into());
+                }
+            }
             wl_keyboard::Event::Leave { .. } => say("keyboard leave".into()),
             wl_keyboard::Event::Key { key, state, .. } => {
                 say(format!("key {key} {}", pressed(state)))
@@ -395,6 +420,57 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
     }
 }
 
+impl Dispatch<wl_data_source::WlDataSource, String> for App {
+    fn event(
+        _: &mut App,
+        _: &wl_data_source::WlDataSource,
+        event: wl_data_source::Event,
+        text: &String,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        if let wl_data_source::Event::Send { fd, .. } = event {
+            let _ = File::from(fd).write_all(text.as_bytes());
+            say("sent".into());
+        }
+    }
+}
+
+impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
+    fn event(
+        app: &mut App,
+        _: &wl_data_device::WlDataDevice,
+        event: wl_data_device::Event,
+        _: &(),
+        conn: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        let wl_data_device::Event::Selection { id: Some(offer) } = event else {
+            return;
+        };
+        if !app.paste {
+            return;
+        }
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        offer.receive(TEXT.into(), writer.as_fd());
+        drop(writer);
+        let _ = conn.flush();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut text = String::new();
+            let mut reader = reader;
+            let _ = reader.read_to_string(&mut text);
+            say(format!("pasted {text}"));
+        });
+    }
+
+    event_created_child!(App, wl_data_device::WlDataDevice, [
+        wl_data_device::EVT_DATA_OFFER_OPCODE => (wl_data_offer::WlDataOffer, ()),
+    ]);
+}
+
+delegate_noop!(App: ignore wl_data_offer::WlDataOffer);
+delegate_noop!(App: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
 delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(App: ignore wl_shm::WlShm);
@@ -408,10 +484,12 @@ fn main() {
     let mut color = 0x00ff_0000u32;
     let mut size = (64, 48);
     let mut popup_spec = None;
+    let mut copy = None;
+    let mut paste = false;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
-        let v = if a == "--grab" {
+        let v = if a == "--grab" || a == "--paste" {
             String::new()
         } else {
             args.next().unwrap_or_default()
@@ -439,12 +517,17 @@ fn main() {
                 popup_spec.as_mut().expect("--popup first").color =
                     u32::from_str_radix(&v, 16).expect("--popup-color RRGGBB")
             }
+            "--copy" => copy = Some(v),
+            "--paste" => {
+                paste = true;
+                continue;
+            }
             "--grab" => {
                 popup_spec.as_mut().expect("--popup first").grab = true;
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste]");
                 std::process::exit(2);
             }
         }
@@ -468,6 +551,10 @@ fn main() {
         popup_spec,
         popup: None,
         popup_opened: false,
+        data_manager: None,
+        data_device: None,
+        copy,
+        paste,
     };
     queue.roundtrip(&mut app).expect("roundtrip");
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {
@@ -477,6 +564,9 @@ fn main() {
     if app.shm.is_none() {
         eprintln!("wx11-test-client: the compositor lacks wl_shm");
         std::process::exit(1);
+    }
+    if let (Some(manager), Some(seat)) = (&app.data_manager, &app.seat) {
+        app.data_device = Some(manager.get_data_device(seat, &qh, ()));
     }
     let surface = compositor.create_surface(&qh, ());
     let xs = wm_base.get_xdg_surface(&surface, &qh, false);

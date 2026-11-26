@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::delegate_compositor;
+use smithay::delegate_data_device;
 use smithay::delegate_seat;
 use smithay::delegate_shm;
 use smithay::delegate_xdg_shell;
@@ -24,7 +25,7 @@ use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
+use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
@@ -37,12 +38,20 @@ use smithay::wayland::compositor::{
     with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
     SurfaceAttributes,
 };
+use smithay::wayland::selection::data_device::{
+    clear_data_device_selection, request_data_device_client_selection, set_data_device_focus,
+    set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
+    ServerDndGrabHandler,
+};
+use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceData, XdgShellHandler,
     XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{with_buffer_contents, ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
+use std::collections::VecDeque;
+use std::os::fd::OwnedFd;
 
 use x::XSide;
 
@@ -71,8 +80,14 @@ pub struct State {
     shm: ShmState,
     xdg: XdgShellState,
     seat_state: SeatState<State>,
-    #[allow(dead_code)]
     seat: Seat<State>,
+    data_device: DataDeviceState,
+    handle: LoopHandle<'static, State>,
+    /// the text type a Wayland client's clipboard offers, while it owns
+    /// the X CLIPBOARD
+    wayland_clipboard: Option<String>,
+    /// Wayland clients' pipes waiting for the X clipboard, in order
+    to_wayland: VecDeque<OwnedFd>,
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
     x: XSide,
@@ -520,6 +535,19 @@ impl State {
                         self.pointer_button(button, pressed, time)
                     }
                 }
+                x::Event::ClipboardOwner(owner) => self.x_clipboard_owner(owner),
+                x::Event::ClipboardRequest(req) => self.x_clipboard_request(req),
+                x::Event::ClipboardData(data) => {
+                    if let Some(fd) = self.to_wayland.pop_front() {
+                        if let Some(data) = data {
+                            // a thread: the client may read slowly
+                            std::thread::spawn(move || {
+                                use std::io::Write;
+                                let _ = std::fs::File::from(fd).write_all(&data);
+                            });
+                        }
+                    }
+                }
                 x::Event::Resized(win, w, h) => {
                     if let Some(t) = self.toplevel_for_window(win) {
                         if t.size != (w, h) {
@@ -543,7 +571,124 @@ impl SeatHandler for State {
     fn seat_state(&mut self) -> &mut SeatState<State> {
         &mut self.seat_state
     }
+
+    /// the client with the keyboard sees the clipboard
+    fn focus_changed(&mut self, seat: &Seat<State>, focused: Option<&WlSurface>) {
+        let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
+        set_data_device_focus(&self.dh, seat, client);
+    }
 }
+
+/// the text types WX11 can pass between the clipboards, best first
+const TEXT_TYPES: [&str; 4] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "TEXT",
+];
+
+impl State {
+    /// another X client took the clipboard (or nobody has it)
+    fn x_clipboard_owner(&mut self, owner: Option<u32>) {
+        self.wayland_clipboard = None;
+        if owner.is_some() {
+            let types = TEXT_TYPES.iter().map(|s| s.to_string()).collect();
+            set_data_device_selection(&self.dh, &self.seat, types, ());
+        } else {
+            clear_data_device_selection(&self.dh, &self.seat);
+        }
+    }
+
+    /// an X client pastes what a Wayland client copied: read it from the
+    /// Wayland client through a pipe, then answer
+    fn x_clipboard_request(&mut self, req: x::SelectionRequest) {
+        let mime = match (&self.wayland_clipboard, self.x.clipboard_target(&req)) {
+            (None, _) | (_, x::ClipboardTarget::Other) => {
+                return self.x.answer_clipboard(&req, None);
+            }
+            (_, x::ClipboardTarget::Targets) => return self.x.answer_clipboard(&req, None),
+            (Some(mime), _) => mime.clone(),
+        };
+        let Ok((reader, writer)) = std::io::pipe() else {
+            return self.x.answer_clipboard(&req, None);
+        };
+        if request_data_device_client_selection(&self.seat, mime, writer.into()).is_err() {
+            return self.x.answer_clipboard(&req, None);
+        }
+        let mut data = Vec::new();
+        let mut req = Some(req);
+        let source = Generic::new(reader, Interest::READ, Mode::Level);
+        let added = self.handle.insert_source(source, move |_, reader, state| {
+            use std::io::Read;
+            let mut chunk = [0u8; 65536];
+            // SAFETY: the reader is not replaced or dropped here
+            let n = unsafe { reader.get_mut() }.read(&mut chunk).unwrap_or(0);
+            // 16 MiB is plenty for text; more is cut off
+            if n > 0 && data.len() < 16 << 20 {
+                data.extend_from_slice(&chunk[..n]);
+                return Ok(PostAction::Continue);
+            }
+            if let Some(req) = req.take() {
+                state.x.answer_clipboard(&req, Some(&data));
+                state.x.flush();
+            }
+            Ok(PostAction::Remove)
+        });
+        if let Err(e) = added {
+            eprintln!("wx11: clipboard: {e}");
+        }
+    }
+}
+
+impl SelectionHandler for State {
+    type SelectionUserData = ();
+
+    /// a Wayland client copied (or cleared its selection)
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<State>,
+    ) {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        let mimes = source.map(|s| s.mime_types()).unwrap_or_default();
+        self.wayland_clipboard = TEXT_TYPES
+            .iter()
+            .find(|t| mimes.iter().any(|m| m == *t))
+            .map(|t| t.to_string());
+        if self.wayland_clipboard.is_some() {
+            self.x.own_clipboard();
+        } else {
+            self.x.disown_clipboard();
+        }
+    }
+
+    /// a Wayland client pastes what an X client copied
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        _mime_type: String,
+        fd: OwnedFd,
+        _seat: Seat<State>,
+        _user_data: &(),
+    ) {
+        if ty == SelectionTarget::Clipboard {
+            self.to_wayland.push_back(fd);
+            self.x.request_clipboard();
+        }
+    }
+}
+
+impl DataDeviceHandler for State {
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device
+    }
+}
+
+impl ClientDndGrabHandler for State {}
+impl ServerDndGrabHandler for State {}
 
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
@@ -663,6 +808,7 @@ delegate_compositor!(State);
 delegate_shm!(State);
 delegate_xdg_shell!(State);
 delegate_seat!(State);
+delegate_data_device!(State);
 
 fn usage() -> ! {
     eprintln!(
@@ -774,6 +920,10 @@ fn main() {
     let mut state = State {
         seat_state,
         seat,
+        data_device: DataDeviceState::new::<State>(&dh),
+        handle: event_loop.handle(),
+        wayland_clipboard: None,
+        to_wayland: VecDeque::new(),
         keyboard,
         pointer,
         compositor: CompositorState::new::<State>(&dh),

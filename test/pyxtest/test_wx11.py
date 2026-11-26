@@ -401,3 +401,63 @@ def test_grabbing_popup_gets_input_and_closes_on_click_outside(xserver, client):
         time.sleep(0.05)
     assert popup not in _children(conn)
     c.wait_for("keyboard enter")            # back to the window
+
+
+def _clipboard_text(conn, target_name):
+    """paste CLIPBOARD as target_name from an X client"""
+    from test_clipboard_grants import _received
+    win = conn.create_window()
+    clip, target = conn.intern_atom("CLIPBOARD"), conn.intern_atom(target_name)
+    prop = conn.intern_atom("WX11_TEST")
+    conn.send_request(struct.pack("<BxHIIIII", 24, 6, win, clip, target, prop, 0))
+    return _received(conn, win, prop)
+
+
+def _wait_owner(conn, timeout=5.0):
+    from test_clipboard_grants import _owner
+    clip = conn.intern_atom("CLIPBOARD")
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if _owner(conn, clip):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_wayland_copy_pastes_in_x(xserver, client):
+    c, win = _shown(xserver, client, "copier", "--copy", "hello from wayland ✓")
+    Input(xserver).focus(win)
+    c.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_owner(conn), "WX11 did not take CLIPBOARD"
+    assert _clipboard_text(conn, "UTF8_STRING") == "hello from wayland ✓".encode()
+    c.wait_for("sent")
+    # STRING is Latin-1: ✓ is not in it
+    assert _clipboard_text(conn, "STRING") == b"hello from wayland ?"
+
+
+def test_x_copy_pastes_in_wayland(xserver, client):
+    from test_clipboard_grants import _answer, _set_owner
+    owner = RawX11Connection(xserver.display_num)
+    owner_win = owner.create_window()
+    _set_owner(owner, owner_win, owner.intern_atom("CLIPBOARD"))
+    c, win = _shown(xserver, client, "paster", "--paste")
+    Input(xserver).focus(win)           # the focused client sees the clipboard
+    assert _answer(owner, "hello from X ✓".encode()), "WX11 did not ask the X owner"
+    c.wait_for("pasted hello from X ✓")
+
+
+def test_x_copy_after_wayland_copy_takes_over(xserver, client):
+    from test_clipboard_grants import _answer, _set_owner
+    a, wa = _shown(xserver, client, "first copier", "--copy", "old")
+    inp = Input(xserver)
+    inp.focus(wa)
+    a.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_owner(conn)
+    owner_win = conn.create_window()
+    _set_owner(conn, owner_win, conn.intern_atom("CLIPBOARD"))   # an X client copies
+    b, wb = _shown(xserver, client, "second paster", "--paste")
+    inp.focus(wb)
+    assert _answer(conn, b"new"), "WX11 kept offering the old Wayland text"
+    b.wait_for("pasted new")

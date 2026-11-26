@@ -31,6 +31,9 @@ Options: `--display DISPLAY` (default `$DISPLAY`), `--socket NAME` (in
 - popups (menus, tooltips) as override-redirect windows placed by their
   positioner; a grabbing popup gets the keyboard and an X pointer grab,
   and a click outside it closes it
+- the clipboard (text) both ways: a Wayland copy owns X's CLIPBOARD
+  (UTF8_STRING, TEXT, STRING as Latin-1, TARGETS), and the X clipboard is
+  offered to the Wayland client with the keyboard
 
 Buffers are copied into the window with `PutImage` for now.
 
@@ -41,7 +44,8 @@ Buffers are copied into the window with `PutImage` for now.
 - touch, and one `wl_seat` per XPrism seat (XInput2)
 - subsurfaces, alpha (ARGB visual), keeping popups on screen (positioner
   constraints)
-- clipboard and drag and drop, bridged to X selections and XDND
+- the PRIMARY selection, clipboard types other than text, large X
+  transfers (INCR), and drag and drop (XDND)
 - a security context per Wayland client (AD-2)
 
 ## Tests
