@@ -46,8 +46,8 @@ and [utils/xns-listen](utils/xns-listen/README.md).
 
 XPrism defines twelve permissions, such as `capture.screen`,
 `input.inject` and `clipboard.read`, each checked at the point where the
-protocol performs the action. They are granted per namespace, can be limited per launcher
-socket, and can be changed at runtime. By default the server only logs
+protocol performs the action. They are granted per namespace, can be
+limited per launcher socket, and can be changed at runtime. By default the server only logs
 what would be denied. See [doc/capabilities.md](doc/capabilities.md).
 
 ### Server-side compositing (experimental)
@@ -55,7 +55,8 @@ what would be denied. See [doc/capabilities.md](doc/capabilities.md).
 With `-compositor on`, the server composites windows itself. ARGB
 windows and window opacity work without an external compositor, and
 fullscreen windows bypass composition. The window manager can set
-per-window opacity and transforms through the XPRISM-SCENE extension.
+per-window opacity, transforms, rounded corners and shadows through the
+XPRISM-SCENE extension.
 External compositors such as picom still work. See
 [doc/compositor.md](doc/compositor.md) and
 [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md).

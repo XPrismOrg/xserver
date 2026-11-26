@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * XPRISM-SCENE protocol, version 0.1 (wire format).
+ * XPRISM-SCENE protocol, version 0.2 (wire format).
  *
  * The window manager describes how the server's scene compositor shows
  * each top-level window; the server does the pixels (AD-1). See
@@ -13,17 +13,26 @@
 
 #define XPRISM_SCENE_NAME           "XPRISM-SCENE"
 #define XPRISM_SCENE_MAJOR          0
-#define XPRISM_SCENE_MINOR          1
+#define XPRISM_SCENE_MINOR          2
 
 #define X_XpSceneQueryVersion       0
 #define X_XpSceneSetNodeAttributes  1
 #define X_XpSceneGetNodeAttributes  2
 #define X_XpSceneClearNodeAttributes 3
+#define X_XpSceneSetNodeDecoration  4   /* 0.2 */
+#define X_XpSceneGetNodeDecoration  5   /* 0.2 */
 
 /* attribute mask bits */
 #define XpSceneNodeOpacity          (1u << 0)
 #define XpSceneNodeTransform        (1u << 1)
-#define XpSceneNodeAll              (XpSceneNodeOpacity | XpSceneNodeTransform)
+#define XpSceneNodeCornerRadius     (1u << 2)   /* 0.2 */
+#define XpSceneNodeShadow           (1u << 3)   /* 0.2 */
+#define XpSceneNodeAttributes       (XpSceneNodeOpacity | XpSceneNodeTransform)
+#define XpSceneNodeDecoration       (XpSceneNodeCornerRadius | XpSceneNodeShadow)
+#define XpSceneNodeAll              (XpSceneNodeAttributes | XpSceneNodeDecoration)
+
+#define XpSceneMaxCornerRadius      1024
+#define XpSceneMaxShadowBlur        128
 
 typedef struct {
     CARD8 reqType;
@@ -89,5 +98,46 @@ typedef struct {
     CARD32 mask;
 } xXpSceneClearNodeAttributesReq;
 #define sz_xXpSceneClearNodeAttributesReq 12
+
+/*
+ * 0.2. cornerRadius in pixels; shadow: offset, blur radius in pixels and
+ * a non-premultiplied ARGB colour (0x80000000 = half-transparent black).
+ */
+typedef struct {
+    CARD8 reqType;
+    CARD8 sceneReqType;
+    CARD16 length;
+    CARD32 window;
+    CARD32 mask;                /* XpSceneNodeCornerRadius | XpSceneNodeShadow */
+    CARD16 cornerRadius;
+    CARD16 shadowBlur;
+    INT16 shadowDx;
+    INT16 shadowDy;
+    CARD32 shadowColor;
+} xXpSceneSetNodeDecorationReq;
+#define sz_xXpSceneSetNodeDecorationReq 24
+
+typedef struct {
+    CARD8 reqType;
+    CARD8 sceneReqType;
+    CARD16 length;
+    CARD32 window;
+} xXpSceneGetNodeDecorationReq;
+#define sz_xXpSceneGetNodeDecorationReq 8
+
+typedef struct {
+    BYTE type;                  /* X_Reply */
+    BYTE pad1;
+    CARD16 sequenceNumber;
+    CARD32 length;              /* 0 */
+    CARD32 mask;                /* decorations that are set */
+    CARD16 cornerRadius;
+    CARD16 shadowBlur;
+    INT16 shadowDx;
+    INT16 shadowDy;
+    CARD32 shadowColor;
+    CARD32 pad2, pad3;
+} xXpSceneGetNodeDecorationReply;
+#define sz_xXpSceneGetNodeDecorationReply 32
 
 #endif /* XPRISM_SCENE_PROTO_H */

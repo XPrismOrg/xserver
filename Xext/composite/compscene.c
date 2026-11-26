@@ -55,6 +55,11 @@ typedef struct {
     CARD32 opacity;             /* 0xffffffff = opaque */
     bool transformed;
     PictTransform xform;        /* window -> shown (XPRISM-SCENE) */
+    CARD16 radius;              /* corner radius, 0 = square */
+    bool shadow;                /* shadow drawn (never for transformed) */
+    BoxRec shadowBox;           /* screen coords, if shadow */
+    CARD16 shadowBlur;
+    CARD32 shadowColor;
 } SceneNodeRec;
 
 /* What the window manager set through XPRISM-SCENE (window private,
@@ -65,6 +70,17 @@ typedef struct {
     PictTransform xform;        /* as sent: window -> shown */
     PictTransform inverse;      /* shown -> window, for Render */
     ClientPtr owner;            /* the WM that set it; cleared when it goes */
+    /* 0.2 decoration */
+    CARD16 radius;
+    CARD16 shadowBlur;
+    INT16 shadowDx, shadowDy;
+    CARD32 shadowColor;         /* ARGB, not premultiplied */
+    /* cached alpha masks, rebuilt when their key changes */
+    PicturePtr cornerMask;
+    int cmW, cmH, cmRadius;
+    CARD8 cmAlpha;
+    PicturePtr shadowMask;
+    int smW, smH, smRadius, smBlur;
 } SceneAttrsRec, *SceneAttrsPtr;
 
 typedef struct {
@@ -196,6 +212,176 @@ sceneTransformBounds(const PictTransform *t, int w, int h, BoxPtr box)
     return true;
 }
 
+/* ---- decoration masks (0.2) -------------------------------------------- */
+
+/* An A8 picture with the given contents (rows padded to 4 bytes, as
+   PutImage expects for ZPixmap at depth 8). */
+static PicturePtr
+sceneAlphaPicture(ScreenPtr pScreen, int w, int h, uint8_t *data)
+{
+    PictFormatPtr format = PictureMatchFormat(pScreen, 8, PICT_a8);
+    if (!format || w <= 0 || h <= 0)
+        return NULL;
+    PixmapPtr pPixmap = (*pScreen->CreatePixmap) (pScreen, w, h, 8, 0);
+    if (!pPixmap)
+        return NULL;
+    GCPtr pGC = GetScratchGC(8, pScreen);
+    if (!pGC) {
+        dixDestroyPixmap(pPixmap, 0);
+        return NULL;
+    }
+    ValidateGC(&pPixmap->drawable, pGC);
+    (*pGC->ops->PutImage) (&pPixmap->drawable, pGC, 8, 0, 0, w, h, 0,
+                           ZPixmap, (char *) data);
+    FreeScratchGC(pGC);
+    int error;
+    PicturePtr pPicture = CreatePicture(0, &pPixmap->drawable, format, 0, NULL,
+                                        serverClient, &error);
+    dixDestroyPixmap(pPixmap, 0);  /* the picture holds a reference */
+    return pPicture;
+}
+
+/* Coverage of pixel (x, y) by a w x h rectangle with corner radius r,
+   placed at (ox, oy) in a larger buffer. Antialiased at the corners. */
+static double
+sceneRoundRectCoverage(int x, int y, int ox, int oy, int w, int h, int r)
+{
+    double px = x - ox + 0.5, py = y - oy + 0.5;
+
+    if (px < 0 || py < 0 || px > w || py > h)
+        return 0;
+    double cx = px < r ? r : (px > w - r ? w - r : px);
+    double cy = py < r ? r : (py > h - r ? h - r : py);
+    if (cx == px || cy == py)
+        return 1;               /* not in a corner square */
+    double d = sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
+    double c = r - d + 0.5;
+    return c <= 0 ? 0 : (c >= 1 ? 1 : c);
+}
+
+static int
+sceneStride(int w)
+{
+    return (w + 3) & ~3;
+}
+
+static PicturePtr
+sceneCornerMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h, CARD8 alpha)
+{
+    int r = min(attrs->radius, min(w, h) / 2);
+
+    if (attrs->cornerMask && attrs->cmW == w && attrs->cmH == h &&
+        attrs->cmRadius == r && attrs->cmAlpha == alpha)
+        return attrs->cornerMask;
+    if (attrs->cornerMask)
+        FreePicture(attrs->cornerMask, 0);
+    attrs->cornerMask = NULL;
+
+    int stride = sceneStride(w);
+    uint8_t *buf = calloc((size_t) stride, h);
+    if (!buf)
+        return NULL;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            buf[y * stride + x] =
+                (uint8_t) lround(alpha * sceneRoundRectCoverage(x, y, 0, 0, w, h, r));
+    attrs->cornerMask = sceneAlphaPicture(pScreen, w, h, buf);
+    free(buf);
+    attrs->cmW = w;
+    attrs->cmH = h;
+    attrs->cmRadius = r;
+    attrs->cmAlpha = alpha;
+    return attrs->cornerMask;
+}
+
+/* One box-blur pass over n samples, step apart, using a running sum.
+   Samples outside the buffer count as 0. */
+static void
+sceneBlurLine(uint8_t *p, int n, int step, int radius, uint8_t *tmp)
+{
+    int div = 2 * radius + 1;
+    uint32_t sum = 0;
+
+    for (int i = 0; i < n; i++)
+        tmp[i] = p[i * step];
+    for (int i = 0; i <= radius && i < n; i++)
+        sum += tmp[i];
+    for (int i = 0; i < n; i++) {
+        p[i * step] = sum / div;
+        if (i + radius + 1 < n)
+            sum += tmp[i + radius + 1];
+        if (i - radius >= 0)
+            sum -= tmp[i - radius];
+    }
+}
+
+/* Three passes of a box blur approximate a Gaussian; linear in the
+   number of pixels whatever the radius. */
+static void
+sceneBoxBlur(uint8_t *buf, int w, int h, int stride, int radius)
+{
+    if (radius < 1)
+        return;
+    uint8_t *tmp = malloc(max(w, h));
+    if (!tmp)
+        return;
+    for (int pass = 0; pass < 3; pass++) {
+        for (int y = 0; y < h; y++)
+            sceneBlurLine(buf + y * stride, w, 1, radius, tmp);
+        for (int x = 0; x < w; x++)
+            sceneBlurLine(buf + x, h, stride, radius, tmp);
+    }
+    free(tmp);
+}
+
+static PicturePtr
+sceneShadowMask(ScreenPtr pScreen, SceneAttrsPtr attrs, int w, int h)
+{
+    int r = min(attrs->radius, min(w, h) / 2);
+    int b = attrs->shadowBlur;
+
+    if (attrs->shadowMask && attrs->smW == w && attrs->smH == h &&
+        attrs->smRadius == r && attrs->smBlur == b)
+        return attrs->shadowMask;
+    if (attrs->shadowMask)
+        FreePicture(attrs->shadowMask, 0);
+    attrs->shadowMask = NULL;
+
+    int sw = w + 2 * b, sh = h + 2 * b, stride = sceneStride(sw);
+    uint8_t *buf = calloc((size_t) stride, sh);
+    if (!buf)
+        return NULL;
+    for (int y = 0; y < sh; y++)
+        for (int x = 0; x < sw; x++)
+            buf[y * stride + x] =
+                (uint8_t) lround(255 * sceneRoundRectCoverage(x, y, b, b, w, h, r));
+    sceneBoxBlur(buf, sw, sh, stride, (b + 1) / 2);
+    attrs->shadowMask = sceneAlphaPicture(pScreen, sw, sh, buf);
+    free(buf);
+    attrs->smW = w;
+    attrs->smH = h;
+    attrs->smRadius = r;
+    attrs->smBlur = b;
+    return attrs->shadowMask;
+}
+
+/* Forget everything a window manager set, including cached masks. */
+static void
+sceneResetAttrs(SceneAttrsPtr attrs)
+{
+    if (attrs->cornerMask)
+        FreePicture(attrs->cornerMask, 0);
+    if (attrs->shadowMask)
+        FreePicture(attrs->shadowMask, 0);
+    memset(attrs, 0, sizeof(*attrs));
+}
+
+static void
+sceneWindowDestroy(CallbackListPtr *pcbl, ScreenPtr pScreen, WindowPtr pWin)
+{
+    sceneResetAttrs(sceneAttrs(pWin));
+}
+
 /* ---- scene snapshot ------------------------------------------------- */
 
 static CARD32
@@ -297,6 +483,26 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             }
         }
 
+        if (attrs->mask & XpSceneNodeCornerRadius)
+            node->radius = attrs->radius;
+        if ((attrs->mask & XpSceneNodeShadow) && !node->transformed) {
+            int bw = wBorderWidth(pWin), b = attrs->shadowBlur;
+            int x = pWin->drawable.x - bw + attrs->shadowDx - b;
+            int y = pWin->drawable.y - bw + attrs->shadowDy - b;
+            node->shadow = true;
+            node->shadowBlur = attrs->shadowBlur;
+            node->shadowColor = attrs->shadowColor;
+            node->shadowBox = (BoxRec) {
+                .x1 = max(x, -32767), .y1 = max(y, -32767),
+                .x2 = min(x + pWin->drawable.width + 2 * bw + 2 * b, 32767),
+                .y2 = min(y + pWin->drawable.height + 2 * bw + 2 * b, 32767),
+            };
+            node->box.x1 = min(node->box.x1, node->shadowBox.x1);
+            node->box.y1 = min(node->box.y1, node->shadowBox.y1);
+            node->box.x2 = max(node->box.x2, node->shadowBox.x2);
+            node->box.y2 = max(node->box.y2, node->shadowBox.y2);
+        }
+
         /* content drawn into the window since the last frame */
         DamagePtr pWinDamage = sceneWindowDamage(pWin);
         if (pWinDamage) {
@@ -329,7 +535,11 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
         if (old->opacity != nodes[i].opacity ||
             memcmp(&old->box, &nodes[i].box, sizeof(BoxRec)) ||
             old->transformed != nodes[i].transformed ||
-            memcmp(&old->xform, &nodes[i].xform, sizeof(PictTransform))) {
+            memcmp(&old->xform, &nodes[i].xform, sizeof(PictTransform)) ||
+            old->radius != nodes[i].radius || old->shadow != nodes[i].shadow ||
+            old->shadowBlur != nodes[i].shadowBlur ||
+            /* a shadow has the window's size, so box covers its position */
+            old->shadowColor != nodes[i].shadowColor) {
             sceneUnionBox(pDamage, &old->box);
             sceneUnionBox(pDamage, &nodes[i].box);
             continue;           /* fully damaged already */
@@ -384,6 +594,47 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 /* ---- painting -------------------------------------------------------- */
 
 static void
+scenePaintShadow(ScreenPtr pScreen, PicturePtr pDst, WindowPtr pWin,
+                 SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pDamage)
+{
+    WindowPtr pRoot = pScreen->root;
+    int bw = wBorderWidth(pWin), error;
+    PicturePtr pMask = sceneShadowMask(pScreen, attrs,
+                                       pWin->drawable.width + 2 * bw,
+                                       pWin->drawable.height + 2 * bw);
+    if (!pMask)
+        return;
+
+    RegionRec clip, box;
+    RegionInit(&box, (BoxPtr) &node->shadowBox, 1);
+    RegionNull(&clip);
+    RegionIntersect(&clip, pDamage, &box);
+    if (RegionNotEmpty(&clip)) {
+        CARD32 c = node->shadowColor;
+        CARD16 a = (c >> 24) * 0x101;
+        /* Render colours are premultiplied */
+        xRenderColor color = {
+            .red = ((c >> 16) & 0xff) * a / 0xff,
+            .green = ((c >> 8) & 0xff) * a / 0xff,
+            .blue = (c & 0xff) * a / 0xff,
+            .alpha = a,
+        };
+        PicturePtr pSrc = CreateSolidPicture(0, &color, &error);
+        if (pSrc) {
+            RegionTranslate(&clip, -pRoot->drawable.x, -pRoot->drawable.y);
+            SetPictureClipRegion(pDst, 0, 0, &clip);
+            const BoxRec *b = &node->shadowBox;
+            CompositePicture(PictOpOver, pSrc, pMask, pDst, 0, 0, 0, 0,
+                             b->x1 - pRoot->drawable.x, b->y1 - pRoot->drawable.y,
+                             b->x2 - b->x1, b->y2 - b->y1);
+            FreePicture(pSrc, 0);
+        }
+    }
+    RegionUninit(&clip);
+    RegionUninit(&box);
+}
+
+static void
 scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
            int n, RegionPtr pDamage)
 {
@@ -413,6 +664,10 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
 
     for (int i = 0; i < n; i++) {
         WindowPtr pWin = wins[i];
+        SceneAttrsPtr attrs = sceneAttrs(pWin);
+
+        if (nodes[i].shadow)
+            scenePaintShadow(pScreen, pDst, pWin, attrs, &nodes[i], pDamage);
 
         if (nodes[i].transformed) {
             RegionRec shown;
@@ -433,9 +688,22 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
             continue;
 
         PicturePtr pMask = NULL;
-        if (nodes[i].opacity != 0xffffffff) {
+        bool ownMask = false;
+        if (nodes[i].radius) {
+            /* cached; owned by attrs */
+            pMask = sceneCornerMask(pScreen, attrs, pPixmap->drawable.width,
+                                    pPixmap->drawable.height,
+                                    nodes[i].opacity >> 24);
+            if (pMask && nodes[i].transformed) {
+                SetPictureTransform(pMask, &attrs->inverse);
+                SetPictureFilter(pMask, (char *) "bilinear", 8, NULL, 0);
+            } else if (pMask) {
+                SetPictureTransform(pMask, NULL);
+            }
+        } else if (nodes[i].opacity != 0xffffffff) {
             xRenderColor alpha = { .alpha = nodes[i].opacity >> 16 };
             pMask = CreateSolidPicture(0, &alpha, &error);
+            ownMask = true;
         }
 
         RegionTranslate(&clip, -pRoot->drawable.x, -pRoot->drawable.y);
@@ -447,7 +715,7 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
             const BoxRec *b = &nodes[i].box;
             CompositePicture(PictOpOver, pSrc, pMask, pDst,
                              b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
-                             0, 0,
+                             b->x1 - pPixmap->screen_x, b->y1 - pPixmap->screen_y,
                              b->x1 - pRoot->drawable.x, b->y1 - pRoot->drawable.y,
                              b->x2 - b->x1, b->y2 - b->y1);
         } else {
@@ -457,7 +725,7 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
                              pPixmap->screen_y - pRoot->drawable.y,
                              pPixmap->drawable.width, pPixmap->drawable.height);
         }
-        if (pMask)
+        if (pMask && ownMask)
             FreePicture(pMask, 0);
         FreePicture(pSrc, 0);
     }
@@ -511,7 +779,7 @@ sceneCanScanOut(WindowPtr pWin)
     WindowPtr pRoot = pWin->drawable.pScreen->root;
     SceneAttrsPtr attrs = sceneAttrs(pWin);
 
-    if (attrs->mask & XpSceneNodeTransform)
+    if (attrs->mask & (XpSceneNodeTransform | XpSceneNodeDecoration))
         return false;
     CARD32 opacity = (attrs->mask & XpSceneNodeOpacity) ?
         attrs->opacity : sceneWindowOpacity(pWin);
@@ -721,7 +989,7 @@ ProcXpSceneSetNodeAttributes(ClientPtr client)
         for (int i = 0; i < 9; i++)
             swapl(&stuff->transform[i]);
 
-    if (stuff->mask & ~XpSceneNodeAll) {
+    if (stuff->mask & ~XpSceneNodeAttributes) {
         client->errorValue = stuff->mask;
         return BadValue;
     }
@@ -770,7 +1038,7 @@ ProcXpSceneGetNodeAttributes(ClientPtr client)
 
     SceneAttrsPtr attrs = sceneAttrs(pWin);
     xXpSceneGetNodeAttributesReply reply = {
-        .mask = attrs->mask,
+        .mask = attrs->mask & XpSceneNodeAttributes,
         .opacity = (attrs->mask & XpSceneNodeOpacity) ? attrs->opacity : 0xffffffff,
     };
     for (int i = 0; i < 9; i++)
@@ -806,8 +1074,88 @@ ProcXpSceneClearNodeAttributes(ClientPtr client)
     SceneAttrsPtr attrs = sceneAttrs(pWin);
     attrs->mask &= ~stuff->mask;
     if (!attrs->mask)
-        attrs->owner = NULL;
+        sceneResetAttrs(attrs);
     return Success;         /* the next frame's diff sees the change */
+}
+
+static int
+ProcXpSceneSetNodeDecoration(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneSetNodeDecorationReq);
+    X_REQUEST_FIELD_CARD32(window);
+    X_REQUEST_FIELD_CARD32(mask);
+    X_REQUEST_FIELD_CARD16(cornerRadius);
+    X_REQUEST_FIELD_CARD16(shadowBlur);
+    X_REQUEST_FIELD_CARD16(shadowDx);
+    X_REQUEST_FIELD_CARD16(shadowDy);
+    X_REQUEST_FIELD_CARD32(shadowColor);
+
+    if (stuff->mask & ~XpSceneNodeDecoration) {
+        client->errorValue = stuff->mask;
+        return BadValue;
+    }
+    if ((stuff->mask & XpSceneNodeCornerRadius) &&
+        stuff->cornerRadius > XpSceneMaxCornerRadius) {
+        client->errorValue = stuff->cornerRadius;
+        return BadValue;
+    }
+    if ((stuff->mask & XpSceneNodeShadow) &&
+        stuff->shadowBlur > XpSceneMaxShadowBlur) {
+        client->errorValue = stuff->shadowBlur;
+        return BadValue;
+    }
+
+    WindowPtr pWin;
+    int rc = sceneLookupNode(client, stuff->window, &pWin);
+    if (rc != Success)
+        return rc;
+
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    if (stuff->mask & XpSceneNodeCornerRadius)
+        attrs->radius = stuff->cornerRadius;
+    if (stuff->mask & XpSceneNodeShadow) {
+        attrs->shadowBlur = stuff->shadowBlur;
+        attrs->shadowDx = stuff->shadowDx;
+        attrs->shadowDy = stuff->shadowDy;
+        attrs->shadowColor = stuff->shadowColor;
+    }
+    attrs->mask |= stuff->mask;
+    if (attrs->mask)
+        attrs->owner = client;
+    return Success;
+}
+
+static int
+ProcXpSceneGetNodeDecoration(ClientPtr client)
+{
+    X_REQUEST_HEAD_STRUCT(xXpSceneGetNodeDecorationReq);
+    X_REQUEST_FIELD_CARD32(window);
+
+    WindowPtr pWin;
+    int rc = sceneLookupNode(client, stuff->window, &pWin);
+    if (rc != Success)
+        return rc;
+
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+    bool radius = attrs->mask & XpSceneNodeCornerRadius;
+    bool shadow = attrs->mask & XpSceneNodeShadow;
+    xXpSceneGetNodeDecorationReply reply = {
+        .mask = attrs->mask & XpSceneNodeDecoration,
+        .cornerRadius = radius ? attrs->radius : 0,
+        .shadowBlur = shadow ? attrs->shadowBlur : 0,
+        .shadowDx = shadow ? attrs->shadowDx : 0,
+        .shadowDy = shadow ? attrs->shadowDy : 0,
+        .shadowColor = shadow ? attrs->shadowColor : 0,
+    };
+    if (client->swapped) {
+        swapl(&reply.mask);
+        swaps(&reply.cornerRadius);
+        swaps(&reply.shadowBlur);
+        swaps(&reply.shadowDx);
+        swaps(&reply.shadowDy);
+        swapl(&reply.shadowColor);
+    }
+    return X_SEND_REPLY_SIMPLE(client, reply);
 }
 
 static int
@@ -824,6 +1172,10 @@ ProcXpSceneDispatch(ClientPtr client)
         return ProcXpSceneGetNodeAttributes(client);
     case X_XpSceneClearNodeAttributes:
         return ProcXpSceneClearNodeAttributes(client);
+    case X_XpSceneSetNodeDecoration:
+        return ProcXpSceneSetNodeDecoration(client);
+    case X_XpSceneGetNodeDecoration:
+        return ProcXpSceneGetNodeDecoration(client);
     default:
         return BadRequest;
     }
@@ -846,7 +1198,7 @@ sceneClientStateCallback(CallbackListPtr *list, void *closure, void *data)
         for (WindowPtr pWin = pRoot->firstChild; pWin; pWin = pWin->nextSib) {
             SceneAttrsPtr attrs = sceneAttrs(pWin);
             if (attrs->owner == gone)
-                memset(attrs, 0, sizeof(*attrs));
+                sceneResetAttrs(attrs);
         }
     }
 }
@@ -895,6 +1247,7 @@ compSceneScreenInit(ScreenPtr pScreen)
         return false;
     dixSetPrivate(&pScreen->devPrivates, &sceneScreenKeyRec, ss);
     dixScreenHookClose(pScreen, sceneCloseScreen);
+    dixScreenHookWindowDestroy(pScreen, sceneWindowDestroy);
 
     atomOpacity = MakeAtom("_NET_WM_WINDOW_OPACITY",
                            strlen("_NET_WM_WINDOW_OPACITY"), TRUE);

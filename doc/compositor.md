@@ -36,7 +36,10 @@ root window, the compositor updates each screen in three steps:
    them. Window opacity is applied as a constant alpha mask; it is taken
    from XPRISM-SCENE if the window manager set it there, otherwise from
    the `_NET_WM_WINDOW_OPACITY` property. Transforms set through
-   XPRISM-SCENE are applied with bilinear filtering.
+   XPRISM-SCENE are applied with bilinear filtering. Rounded corners are
+   applied as an antialiased alpha mask, and a window's shadow is drawn
+   just before the window. Both masks are computed once per window and
+   size, and reused until either changes.
 
 All drawing goes through Render, so it is GPU-accelerated wherever the
 driver accelerates Render (glamor) and done in software otherwise. Opaque
@@ -50,7 +53,7 @@ of the following hold:
 - it is the topmost viewable window;
 - it covers the whole screen and has no shape;
 - it is opaque: no alpha channel and full opacity;
-- it has no transform.
+- it has no transform, rounded corners or shadow.
 
 The compositor then removes the redirection from that window. Nothing is
 copied per frame, and on hardware Present can page-flip the window's
@@ -98,7 +101,12 @@ Taking over requires the `compositor.legacy` capability, see
   nitrogen) work. Programs that draw directly onto the root window are
   overwritten wherever the compositor repaints, which is also the case
   with external compositors.
-- The window manager can currently set only opacity and transforms.
-  Transforms affect only the display; input is still delivered according
-  to the window's actual geometry.
+- The window manager can currently set opacity, transforms, rounded
+  corners and shadows. Transforms affect only the display; input is still
+  delivered according to the window's actual geometry, and transformed
+  windows have no shadow.
+- Shadow and corner masks are computed on the CPU whenever a decorated
+  window changes size. For a 1200x950 window with the largest blur this
+  takes about 40 ms, so interactively resizing large windows with
+  shadows is not yet smooth. Other redraws reuse the masks.
 - Xinerama has not been tested with the compositor enabled.

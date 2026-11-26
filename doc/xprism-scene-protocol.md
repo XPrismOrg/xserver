@@ -1,4 +1,4 @@
-# XPRISM-SCENE extension, version 0.1
+# XPRISM-SCENE extension, version 0.2
 
 The XPRISM-SCENE extension lets the window manager control how the
 [built-in compositor](compositor.md) presents each top-level window. The
@@ -6,9 +6,9 @@ window manager specifies the result and the server draws it, so the
 window manager does not need access to the contents of other clients'
 windows.
 
-Version 0.1 defines two attributes per window: opacity and a transform.
-Later versions are expected to add shadows, blur regions, rounded corners
-and animation timing.
+Version 0.1 defines two attributes per window, opacity and a transform.
+Version 0.2 adds two decorations, rounded corners and a drop shadow.
+Later versions are expected to add blur regions and animation timing.
 
 The wire format is defined in `Xext/composite/xprismsceneproto.h`.
 
@@ -50,9 +50,22 @@ is still delivered according to the window's actual geometry. Transforms
 are intended for animations; windows should be moved and resized with
 `ConfigureWindow`.
 
-Attributes remain in effect until they are cleared or the window is
-destroyed. When the window manager that set them disconnects, the server
-clears them.
+## Decorations (0.2)
+
+| Mask bit | Decoration | Description |
+|---|---|---|
+| `1 << 2` | corner radius | The window's corners are rounded with this radius, in pixels, up to 1024. The radius is limited to half the window's shorter side. Corners are antialiased, and the rounding is applied together with the window's opacity and transform. |
+| `1 << 3` | shadow | A shadow with the window's outer size and rounded corners is drawn below the window, moved by `dx`, `dy` and blurred with a radius of `blur` pixels, up to 128. The colour is ARGB without premultiplication, so `0x80000000` is half-transparent black. Shadows are not drawn for transformed windows. |
+
+The shadow is drawn over the windows below, and the window is drawn over
+its own shadow. A window with a decoration is always composited, even if
+it covers the whole screen.
+
+## Lifetime
+
+Attributes and decorations remain in effect until they are cleared or
+the window is destroyed. When the window manager that set them
+disconnects, the server clears them.
 
 ## Requests
 
@@ -66,7 +79,7 @@ majorVersion: CARD32
 minorVersion: CARD32
   =>
 majorVersion: CARD32    (0)
-minorVersion: CARD32    (1)
+minorVersion: CARD32    (2)
 ```
 
 The client sends the highest version it supports; the server replies
@@ -84,7 +97,9 @@ transform: INT32[9]     used if mask includes transform
 Sets the attributes selected by `mask`; other attributes are unchanged.
 The change takes effect with the next frame.
 
-Errors: `BadValue` (undefined bits in `mask`), `BadWindow`, `BadMatch`
+`mask` may only contain attribute bits (`1 << 0`, `1 << 1`).
+
+Errors: `BadValue` (other bits in `mask`), `BadWindow`, `BadMatch`
 (not a top-level window, or an unusable transform), `BadAccess` (the
 client is not the window manager).
 
@@ -104,7 +119,45 @@ Errors: as for `SetNodeAttributes`.
 
 ```
 window: WINDOW
-mask:   CARD32          attributes to clear
+mask:   CARD32          attributes and decorations to clear
 ```
 
-Errors: as for `SetNodeAttributes`.
+Clears both attributes and, since 0.2, decorations.
+
+Errors: as for `SetNodeAttributes`, except that `mask` may contain any
+defined bit.
+
+### SetNodeDecoration (4, since 0.2)
+
+```
+window:       WINDOW
+mask:         CARD32    decorations to set
+cornerRadius: CARD16    used if mask includes corner radius
+shadowBlur:   CARD16    used if mask includes shadow
+shadowDx:     INT16
+shadowDy:     INT16
+shadowColor:  CARD32
+```
+
+Sets the decorations selected by `mask`, which may only contain
+decoration bits (`1 << 2`, `1 << 3`); other decorations are unchanged.
+
+Errors: `BadValue` (other bits in `mask`, a radius over 1024 or a blur
+over 128), `BadWindow`, `BadMatch` (not a top-level window),
+`BadAccess` (the client is not the window manager).
+
+### GetNodeDecoration (5, since 0.2)
+
+```
+window: WINDOW
+  =>
+mask:         CARD32    decorations that are set
+cornerRadius: CARD16    0 if not set
+shadowBlur:   CARD16    the shadow fields are 0 if no shadow is set
+shadowDx:     INT16
+shadowDy:     INT16
+shadowColor:  CARD32
+```
+
+Errors: `BadWindow`, `BadMatch`, `BadAccess`, as for
+`SetNodeDecoration`.
