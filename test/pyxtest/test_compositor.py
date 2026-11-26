@@ -481,10 +481,15 @@ class TestLegacyCompositor:
         x.map(w)
         assert x.sync() == []
         legacy.c.close()
-        for _ in range(50):                 # the server notices the exit
-            if x.pixel(150, 150) == RED:
+        # The server notices the exit, and the compositor takes the screen
+        # back on its next frame. Until then the window draws straight to
+        # the screen and already shows red; root drawing done in between is
+        # repainted over (doc/compositor.md), so wait for the takeover.
+        for _ in range(100):
+            if x.pixel(150, 150) == RED and _is_composited(x, w):
                 break
             time.sleep(0.05)
+        assert _is_composited(x, w)
         assert x.pixel(150, 150) == RED
         x.fill(x.root, GREEN, 50, 50, 300, 300)
         assert x.pixel(150, 150) == RED
