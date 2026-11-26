@@ -66,6 +66,7 @@ if pytest.found()
         'test_font.py',
         'test_glamor.py',
         'test_glx.py',
+        'test_kms.py',
         'test_namespace.py',
         'test_namespace_listener.py',
         'test_present.py',

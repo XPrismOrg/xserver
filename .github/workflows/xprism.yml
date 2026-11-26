@@ -59,6 +59,21 @@ jobs:
                 key: ${{ runner.name }}-x11-deps-${{ hashFiles('.github/scripts/ubuntu/install-prereq.sh') }}
                 restore-keys: ${{ runner.name }}-x11-deps-
 
+            # A virtual KMS device on a seat of its own for test_kms.py,
+            # which drives it with the modesetting driver. If the runner's
+            # kernel has no vkms, those tests are skipped.
+            - name: virtual display device (vkms)
+              continue-on-error: true
+              run: |
+                sudo mkdir -p /run/udev/rules.d
+                echo 'SUBSYSTEM=="drm", DEVPATH=="*/vkms/*", ENV{ID_SEAT}="seat-vkms"' | sudo tee /run/udev/rules.d/99-vkms.rules
+                sudo udevadm control --reload
+                sudo modprobe vkms || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vkms; }
+                sudo udevadm settle
+                sudo chmod 0666 /dev/dri/card*
+                ls -l /dev/dri
+                for c in /sys/class/drm/card[0-9]; do udevadm info "$c" | grep -E "DEVPATH|ID_SEAT"; done
+
             - name: build and test
               run: .github/scripts/ubuntu/run-xserver-build-and-test.sh
 

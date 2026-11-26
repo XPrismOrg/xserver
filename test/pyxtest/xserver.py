@@ -290,7 +290,9 @@ class XServerProcess:
         # Entries are (build_subdir, module_subdir, glob_pattern).
         module_dirs = [
             ("drivers/modesetting", "drivers", "*_drv.so"),
+            ("drivers/video/modesetting", "drivers", "*_drv.so"),
             ("drivers/inputtest", "input", "*_drv.so"),
+            ("drivers/input/inputtest", "input", "*_drv.so"),
             ("dixmods", "extensions", "libglx.so"),
         ]
         for build_sub, mod_sub, pattern in module_dirs:

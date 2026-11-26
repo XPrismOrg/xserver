@@ -473,7 +473,7 @@ plane_add_prop(drmModeAtomicReq *req, drmmode_crtc_private_ptr drmmode_crtc,
     drmmode_prop_info_ptr info = &drmmode_crtc->props_plane[prop];
     int ret;
 
-    if (!info)
+    if (!info->prop_id)
         return -1;
 
     ret = drmModeAtomicAddProperty(req, drmmode_crtc->plane_id,
@@ -515,7 +515,7 @@ crtc_add_prop(drmModeAtomicReq *req, drmmode_crtc_private_ptr drmmode_crtc,
     drmmode_prop_info_ptr info = &drmmode_crtc->props[prop];
     int ret;
 
-    if (!info)
+    if (!info->prop_id)
         return -1;
 
     ret = drmModeAtomicAddProperty(req, drmmode_crtc->mode_crtc->crtc_id,
@@ -530,7 +530,7 @@ connector_add_prop(drmModeAtomicReq *req, drmmode_output_private_ptr drmmode_out
     drmmode_prop_info_ptr info = &drmmode_output->props_connector[prop];
     int ret;
 
-    if (!info)
+    if (!info->prop_id)
         return -1;
 
     ret = drmModeAtomicAddProperty(req, drmmode_output->output_id,
@@ -568,6 +568,38 @@ drm_mode_ensure_blob(xf86CrtcPtr crtc, const drmModeModeInfo* mode_info)
     drmmode_crtc->current_mode = mode;
     xorg_list_add(&mode->entry, &drmmode_crtc->mode_list);
 
+    return ret;
+}
+
+/*
+ * Turn a CRTC off. Its primary plane is detached in the same commit: the
+ * kernel rejects a plane that stays bound to a CRTC without a mode, so
+ * leaving it would make this and later commits that disable the CRTC
+ * fail (for instance turning an output off after a DPMS cycle).
+ */
+static int
+crtc_add_off_props(drmModeAtomicReq *req, xf86CrtcPtr crtc)
+{
+    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
+    int ret = 0;
+
+    ret |= crtc_add_prop(req, drmmode_crtc, DRMMODE_CRTC_ACTIVE, 0);
+    ret |= crtc_add_prop(req, drmmode_crtc, DRMMODE_CRTC_MODE_ID, 0);
+    ret |= plane_add_prop(req, drmmode_crtc, DRMMODE_PLANE_FB_ID, 0);
+    ret |= plane_add_prop(req, drmmode_crtc, DRMMODE_PLANE_CRTC_ID, 0);
+    return ret;
+}
+
+static int
+drmmode_atomic_commit(ScrnInfoPtr scrn, drmModeAtomicReq *req,
+                      uint32_t flags, const char *what)
+{
+    modesettingPtr ms = modesettingPTR(scrn);
+    int ret = drmModeAtomicCommit(ms->fd, req, flags, NULL);
+
+    if (ret != 0 && !(flags & DRM_MODE_ATOMIC_TEST_ONLY))
+        xf86DrvMsg(scrn->scrnIndex, X_WARNING,
+                   "atomic commit (%s) failed: %s\n", what, strerror(errno));
     return ret;
 }
 
@@ -617,10 +649,7 @@ crtc_add_dpms_props(drmModeAtomicReq *req, xf86CrtcPtr crtc,
                              DRMMODE_CRTC_MODE_ID,
                              drmmode_crtc->current_mode->blob_id);
     } else {
-        ret |= crtc_add_prop(req, drmmode_crtc,
-                             DRMMODE_CRTC_ACTIVE, 0);
-        ret |= crtc_add_prop(req, drmmode_crtc,
-                             DRMMODE_CRTC_MODE_ID, 0);
+        ret |= crtc_add_off_props(req, crtc);
     }
 
     if (active)
@@ -729,7 +758,8 @@ drmmode_set_dpms(ScrnInfoPtr scrn, int dpms, int flags)
 
         ret |= crtc_add_dpms_props(req, crtc, dpms, &active);
 
-        if (dpms == DPMSModeOn && active && drmmode_crtc->need_modeset) {
+        /* turning a CRTC off detached its plane: attach it again */
+        if (dpms == DPMSModeOn && active) {
             uint32_t fb_id;
             int x, y;
 
@@ -741,8 +771,22 @@ drmmode_set_dpms(ScrnInfoPtr scrn, int dpms, int flags)
     }
 
     if (ret == 0)
-        drmModeAtomicCommit(ms->fd, req, mode_flags, NULL);
+        ret = drmmode_atomic_commit(scrn, req, mode_flags, "DPMS");
     drmModeAtomicFree(req);
+
+    /* The commit routed each connector of a CRTC that is on to it, and
+       detached the others: record that, so that turning an output or
+       CRTC off later builds a complete commit. */
+    if (ret == 0) {
+        for (i = 0; i < xf86_config->num_output; i++) {
+            xf86OutputPtr output = xf86_config->output[i];
+            drmmode_output_private_ptr drmmode_output = output->driver_private;
+
+            drmmode_output->current_crtc =
+                (dpms == DPMSModeOn && output->crtc && output->crtc->enabled) ?
+                output->crtc : NULL;
+        }
+    }
 
     ms->pending_modeset = TRUE;
     xf86DPMSSet(scrn, dpms, flags);
@@ -766,11 +810,28 @@ drmmode_output_disable(xf86OutputPtr output)
 
     ret |= connector_add_prop(req, drmmode_output,
                               DRMMODE_CONNECTOR_CRTC_ID, 0);
-    if (crtc)
-        ret |= crtc_add_dpms_props(req, crtc, DPMSModeOff, NULL);
+    if (crtc) {
+        /* another output may still show this CRTC (clone mode) */
+        xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(output->scrn);
+        Bool shared = FALSE;
+
+        for (int i = 0; i < xf86_config->num_output; i++) {
+            xf86OutputPtr other = xf86_config->output[i];
+            drmmode_output_private_ptr other_priv = other->driver_private;
+
+            if (other != output && other_priv &&
+                other_priv->current_crtc == crtc && other->crtc == crtc)
+                shared = TRUE;
+        }
+        if (!shared)
+            ret |= crtc_add_off_props(req, crtc);
+    }
 
     if (ret == 0)
-        ret = drmModeAtomicCommit(ms->fd, req, flags, NULL);
+        ret = drmmode_atomic_commit(output->scrn, req, flags, "output off");
+    /* turning the output on again needs a mode set */
+    if (ret == 0 && crtc)
+        ((drmmode_crtc_private_ptr) crtc->driver_private)->need_modeset = TRUE;
 
     if (ret == 0)
         drmmode_output->current_crtc = NULL;
@@ -783,7 +844,6 @@ static int
 drmmode_crtc_disable(xf86CrtcPtr crtc)
 {
     modesettingPtr ms = modesettingPTR(crtc->scrn);
-    drmmode_crtc_private_ptr drmmode_crtc = crtc->driver_private;
     drmModeAtomicReq *req = drmModeAtomicAlloc();
     uint32_t flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
     int ret = 0;
@@ -793,13 +853,29 @@ drmmode_crtc_disable(xf86CrtcPtr crtc)
     if (!req)
         return 1;
 
-    ret |= crtc_add_prop(req, drmmode_crtc,
-                         DRMMODE_CRTC_ACTIVE, 0);
-    ret |= crtc_add_prop(req, drmmode_crtc,
-                         DRMMODE_CRTC_MODE_ID, 0);
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(crtc->scrn);
+    for (int i = 0; i < xf86_config->num_output; i++) {
+        drmmode_output_private_ptr drmmode_output =
+            xf86_config->output[i]->driver_private;
+
+        if (drmmode_output && drmmode_output->current_crtc == crtc)
+            ret |= connector_add_prop(req, drmmode_output,
+                                      DRMMODE_CONNECTOR_CRTC_ID, 0);
+    }
+    ret |= crtc_add_off_props(req, crtc);
 
     if (ret == 0)
-        ret = drmModeAtomicCommit(ms->fd, req, flags, NULL);
+        ret = drmmode_atomic_commit(crtc->scrn, req, flags, "CRTC off");
+    if (ret == 0) {
+        ((drmmode_crtc_private_ptr) crtc->driver_private)->need_modeset = TRUE;
+        for (int i = 0; i < xf86_config->num_output; i++) {
+            drmmode_output_private_ptr drmmode_output =
+                xf86_config->output[i]->driver_private;
+
+            if (drmmode_output && drmmode_output->current_crtc == crtc)
+                drmmode_output->current_crtc = NULL;
+        }
+    }
 
     drmModeAtomicFree(req);
     return ret;
@@ -876,7 +952,6 @@ drmmode_crtc_set_mode(xf86CrtcPtr crtc, Bool test_only)
         /* Orphaned CRTCs need to be disabled right now in atomic mode */
         for (i = 0; i < xf86_config->num_crtc; i++) {
             xf86CrtcPtr other_crtc = xf86_config->crtc[i];
-            drmmode_crtc_private_ptr other_drmmode_crtc = other_crtc->driver_private;
             int lost_outputs = 0;
             int remaining_outputs = 0;
             int j;
@@ -896,19 +971,15 @@ drmmode_crtc_set_mode(xf86CrtcPtr crtc, Bool test_only)
                 }
             }
 
-            if (lost_outputs > 0 && remaining_outputs == 0) {
-                ret |= crtc_add_prop(req, other_drmmode_crtc,
-                                     DRMMODE_CRTC_ACTIVE, 0);
-                ret |= crtc_add_prop(req, other_drmmode_crtc,
-                                     DRMMODE_CRTC_MODE_ID, 0);
-            }
+            if (lost_outputs > 0 && remaining_outputs == 0)
+                ret |= crtc_add_off_props(req, other_crtc);
         }
 
         if (test_only)
             flags |= DRM_MODE_ATOMIC_TEST_ONLY;
 
         if (ret == 0)
-            ret = drmModeAtomicCommit(ms->fd, req, flags, NULL);
+            ret = drmmode_atomic_commit(crtc->scrn, req, flags, "mode set");
 
         if (ret == 0 && !test_only) {
             for (i = 0; i < xf86_config->num_output; i++) {
