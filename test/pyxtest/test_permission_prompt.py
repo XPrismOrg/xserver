@@ -7,7 +7,11 @@
 # The confined clients are in one namespace, where Xnamespace's own rules
 # allow inspecting each other's windows; only the capability decides.
 
+import os
 import struct
+import subprocess
+import time
+from pathlib import Path
 
 import pytest
 from test_capability import (BAD_ACCESS, ROOT_COOKIE, SANDBOX_COOKIE, X_GET_INPUT_FOCUS,
@@ -236,3 +240,92 @@ class TestAudit:
         spy = _connect(xserver, SANDBOX_COOKIE)
         assert _outcome(spy, _inspect(spy, wid)) == "reply"
         assert agent.prompts(timeout=0.3) == []
+
+
+# ---- utils/xprism-permission-agent ----------------------------------
+
+def _agent_tool():
+    builddir = os.environ.get("XSERVER_BUILDDIR")
+    path = Path(builddir or "", "utils/xprism-permission-agent/xprism-permission-agent")
+    if not builddir or not path.exists():
+        pytest.skip("xprism-permission-agent not built")
+    return str(path)
+
+
+@pytest.fixture
+def agent_tool(xserver, tmp_path):
+    """start(ask) runs the agent with that ask command"""
+    from test_xns_listen import _xauth_file
+    env = dict(os.environ, DISPLAY=f":{xserver.display_num}",
+               XAUTHORITY=_xauth_file(tmp_path / "xauth", xserver.display_num))
+    procs = []
+
+    def start(ask, check_ready=True):
+        p = subprocess.Popen([_agent_tool(), "--verbose", "--ask", ask], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        procs.append(p)
+        if check_ready:
+            line = p.stdout.readline()
+            if line.strip() != "ready":
+                p.kill()
+                pytest.fail(f"agent did not get ready: {line!r} {p.communicate(timeout=5)[1]}")
+        return p
+
+    yield start
+    for p in procs:
+        p.terminate()
+        p.wait(timeout=5)
+
+
+class TestAgentTool:
+    def test_allow_always(self, xserver, agent_tool, tmp_path):
+        seen = tmp_path / "seen"
+        agent_tool(f'printf "%s|%s|%s|%s" "$XPRISM_CAPABILITY" "$XPRISM_NAMESPACE" '
+                   f'"$XPRISM_PROMPT" "$XPRISM_PID" > {seen}; exit 2')
+        owner, wid = _other_window(xserver)
+        spy = _connect(xserver, SANDBOX_COOKIE)
+        assert _outcome(spy, _inspect(spy, wid)) == "reply"
+        cap, ns, prompt, pid = seen.read_text().split("|")
+        assert (cap, ns) == ("window.inspect", "sandbox")
+        assert "in sandbox wants to read details of other applications' windows" in prompt
+        assert pid == str(os.getpid())
+        seen.unlink()
+        assert _outcome(spy, _inspect(spy, wid)) == "reply"
+        assert not seen.exists()                    # not asked again
+
+    @pytest.mark.parametrize("ask", ["exit 1", "exit 3", "exit 7", "kill -9 $$"])
+    def test_deny(self, xserver, agent_tool, ask):
+        agent_tool(ask)
+        owner, wid = _other_window(xserver)
+        spy = _connect(xserver, SANDBOX_COOKIE)
+        assert _outcome(spy, _inspect(spy, wid)) == BAD_ACCESS
+
+    def test_prompts_in_parallel(self, xserver, agent_tool, tmp_path):
+        """A dialog left open does not hold up another client's prompt."""
+        gate = tmp_path / "gate"
+        agent_tool(f'if [ "$XPRISM_PID" = "" ]; then exit 1; fi; '
+                   f'if [ ! -e {gate} ]; then touch {gate}; sleep 30; fi; exit 0')
+        owner, wid = _other_window(xserver)
+        first, second = _connect(xserver, SANDBOX_COOKIE), _connect(xserver, SANDBOX_COOKIE)
+        held = _inspect(first, wid)
+        for _ in range(50):
+            if gate.exists():
+                break
+            time.sleep(0.1)
+        assert gate.exists()
+        assert _outcome(second, _inspect(second, wid)) == "reply"
+        assert _outcome(first, held, timeout=0.3) is None
+
+    def test_one_agent(self, xserver, agent_tool):
+        agent_tool("exit 0")
+        p = agent_tool("exit 0", check_ready=False)
+        assert p.wait(timeout=10) == 1
+        assert "another permission agent is running" in p.stderr.read()
+
+    def test_needs_the_session_authorization(self, xserver, tmp_path):
+        env = dict(os.environ, DISPLAY=f":{xserver.display_num}",
+                   XAUTHORITY=str(tmp_path / "missing"))
+        r = subprocess.run([_agent_tool(), "--ask", "exit 0"], env=env, capture_output=True,
+                           text=True, timeout=10)
+        assert r.returncode == 1
+        assert "X-NAMESPACE" in r.stderr or "cannot connect" in r.stderr, r.stderr

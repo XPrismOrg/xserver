@@ -711,6 +711,7 @@ subdir('abi')
 
 if build_namespace
     subdir('utils/xns-listen')
+    subdir('utils/xprism-permission-agent')
 endif
 
 if (get_option('tests') and host_machine.system() != 'windows' and build_xserver)

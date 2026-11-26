@@ -42,6 +42,9 @@ answer (see [Xnamespace-protocol.md](Xnamespace-protocol.md), 6.14 to
 6.16). Without an agent, or without an answer within 60 seconds, the
 request is refused as before. The server log shows each prompt and its
 answer.
+[utils/xprism-permission-agent](../utils/xprism-permission-agent/README.md)
+is such an agent: it shows a dialog (kdialog, zenity, or any command) for
+each prompt.
 
 ## Which clients hold which capabilities
 

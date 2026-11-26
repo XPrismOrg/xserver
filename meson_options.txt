@@ -93,7 +93,7 @@ option('xselinux', type: 'combo', choices: ['true', 'false', 'auto'], value: 'au
 option('namespace', type: 'boolean', value: true,
        description: 'Container/namespace extension')
 option('xns_listen', type: 'feature', value: 'auto',
-       description: 'xns-listen tool (needs xcb; only with -Dnamespace=true)')
+       description: 'xns-listen and xprism-permission-agent tools (need xcb; only with -Dnamespace=true)')
 option('xinerama', type: 'boolean', value: true,
        description: 'Xinerama extension')
 option('xv', type: 'boolean', value: true,
