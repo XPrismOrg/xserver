@@ -131,9 +131,10 @@ Taking over requires the `compositor.legacy` capability, see
   overwritten wherever the compositor repaints, which is also the case
   with external compositors.
 - The window manager can currently set opacity, transforms, rounded
-  corners, shadows and background blur. Transforms affect only the
-  display; input is still delivered according to the window's actual
-  geometry, and transformed windows have no shadow or blur.
+  corners, shadows and background blur. Input follows transforms
+  (pointer hits and event coordinates), but `TranslateCoordinates`,
+  pointer confinement and `WarpPointer` relative to a window use its
+  actual geometry. Transformed windows have no shadow or blur.
 - Background blur costs about 1 to 16 ms to repaint a whole 600x400
   window in software, depending on the radius (small radii cost most),
   and well under 1 ms for small updates. With glamor the blur runs on

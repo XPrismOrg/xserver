@@ -5,6 +5,8 @@
 #ifndef _XSERVER_DIX_WINDOW_PRIV_H
 #define _XSERVER_DIX_WINDOW_PRIV_H
 
+#include <math.h>
+
 #include <X11/X.h>
 
 #include "include/dix.h"
@@ -87,6 +89,34 @@ Bool dixWindowIsRoot(Window window);
  * Called by ProcCreateWindow() as well as PanoramiXCreateWindow()
  */
 int DoCreateWindowReq(ClientPtr client, xCreateWindowReq *stuff, XID *xids);
+
+/*
+ * Where a window is displayed can differ from where it is: a compositor
+ * may show a top-level window transformed (XPRISM-SCENE). Input must then
+ * follow what is shown.
+ *
+ * WindowMapRootPoint() turns a point of the screen, as the user sees and
+ * points at it, into root coordinates in pWin's untransformed space: the
+ * point that the window's geometry, shapes and event coordinates refer
+ * to. Without a transform it leaves the point as it is. For a pixel, pass
+ * its center (x + 0.5) and take the floor of the result.
+ *
+ * A compositor sets WindowPointMapHook; it gets the top-level window and
+ * the point, and maps the point in place.
+ */
+typedef void (*WindowPointMapProcPtr)(WindowPtr top, double *x, double *y);
+extern WindowPointMapProcPtr WindowPointMapHook;
+
+void WindowMapRootPoint(WindowPtr pWin, double *x, double *y);
+
+/* the pixel a mapped point falls in */
+static inline int
+WindowPointToPixel(double v)
+{
+    double f = floor(v);
+
+    return (int) f;
+}
 
 void PrintPassiveGrabs(void);
 void PrintWindowTree(void);

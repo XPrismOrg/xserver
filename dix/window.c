@@ -3678,6 +3678,20 @@ WindowGetVisual(WindowPtr pWin)
     return 0;
 }
 
+WindowPointMapProcPtr WindowPointMapHook;
+
+void
+WindowMapRootPoint(WindowPtr pWin, double *x, double *y)
+{
+    WindowPtr top = pWin;
+
+    if (!WindowPointMapHook || !pWin->parent)
+        return;
+    while (top->parent->parent)
+        top = top->parent;
+    WindowPointMapHook(top, x, y);
+}
+
 /*
  * @brief check whether a window (ID) is a screen root window
  *

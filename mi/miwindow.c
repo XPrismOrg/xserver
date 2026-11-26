@@ -46,6 +46,7 @@ SOFTWARE.
 ******************************************************************/
 #include <dix-config.h>
 
+#include <math.h>
 #include <stdbool.h>
 #include <X11/X.h>
 #include <X11/extensions/shapeconst.h>
@@ -749,9 +750,19 @@ miSpriteTrace(SpritePtr pSprite, int x, int y)
 {
     WindowPtr pWin;
     BoxRec box;
+    int px = x, py = y;         /* the point as shown; (x, y) is mapped */
 
     pWin = DeepestSpriteWin(pSprite)->firstChild;
     while (pWin) {
+        /* Each top-level window is hit where it is shown, which a
+           compositor's transform can move: test it, and its children,
+           with the point mapped into its own space. */
+        if (pWin->parent && !pWin->parent->parent) {
+            double mx = px + 0.5, my = py + 0.5;   /* the pixel's center */
+            WindowMapRootPoint(pWin, &mx, &my);
+            x = WindowPointToPixel(mx);
+            y = WindowPointToPixel(my);
+        }
         if ((pWin->mapped) &&
             (x >= pWin->drawable.x - wBorderWidth(pWin)) &&
             (x < pWin->drawable.x + (int) pWin->drawable.width +

@@ -103,6 +103,8 @@ Equipment Corporation.
 
 #include <dix-config.h>
 
+#include <math.h>
+
 #include <stdbool.h>
 #include <assert.h>
 #include <X11/X.h>
@@ -2608,8 +2610,11 @@ FixUpXI2DeviceEventFromWindow(SpritePtr pSprite, int evtype,
     }
 
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
-        event->event_x = event->root_x - double_to_fp1616(pWin->drawable.x);
-        event->event_y = event->root_y - double_to_fp1616(pWin->drawable.y);
+        double wx = fp1616_to_double(event->root_x), wy = fp1616_to_double(event->root_y);
+
+        WindowMapRootPoint(pWin, &wx, &wy);
+        event->event_x = double_to_fp1616(wx - pWin->drawable.x);
+        event->event_y = double_to_fp1616(wy - pWin->drawable.y);
         event->child = child;
     }
     else {
@@ -2632,8 +2637,11 @@ FixUpXI2PinchEventFromWindow(SpritePtr pSprite, xXIGesturePinchEvent *event,
     event->event = pWin->drawable.id;
 
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
-        event->event_x = event->root_x - double_to_fp1616(pWin->drawable.x);
-        event->event_y = event->root_y - double_to_fp1616(pWin->drawable.y);
+        double wx = fp1616_to_double(event->root_x), wy = fp1616_to_double(event->root_y);
+
+        WindowMapRootPoint(pWin, &wx, &wy);
+        event->event_x = double_to_fp1616(wx - pWin->drawable.x);
+        event->event_y = double_to_fp1616(wy - pWin->drawable.y);
         event->child = child;
     }
     else {
@@ -2651,8 +2659,11 @@ FixUpXI2SwipeEventFromWindow(SpritePtr pSprite, xXIGestureSwipeEvent *event,
     event->event = pWin->drawable.id;
 
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
-        event->event_x = event->root_x - double_to_fp1616(pWin->drawable.x);
-        event->event_y = event->root_y - double_to_fp1616(pWin->drawable.y);
+        double wx = fp1616_to_double(event->root_x), wy = fp1616_to_double(event->root_y);
+
+        WindowMapRootPoint(pWin, &wx, &wy);
+        event->event_x = double_to_fp1616(wx - pWin->drawable.x);
+        event->event_y = double_to_fp1616(wy - pWin->drawable.y);
         event->child = child;
     }
     else {
@@ -2721,8 +2732,11 @@ FixUpEventFromWindow(SpritePtr pSprite,
         if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
             XE_KBPTR.sameScreen = xTrue;
             XE_KBPTR.child = child;
-            XE_KBPTR.eventX = XE_KBPTR.rootX - pWin->drawable.x;
-            XE_KBPTR.eventY = XE_KBPTR.rootY - pWin->drawable.y;
+            double wx = XE_KBPTR.rootX + 0.5, wy = XE_KBPTR.rootY + 0.5;
+
+            WindowMapRootPoint(pWin, &wx, &wy);
+            XE_KBPTR.eventX = WindowPointToPixel(wx) - pWin->drawable.x;
+            XE_KBPTR.eventY = WindowPointToPixel(wy) - pWin->drawable.y;
         }
         else {
             XE_KBPTR.sameScreen = xFalse;
@@ -5361,8 +5375,11 @@ ProcQueryPointer(ClientPtr client)
     };
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
         reply.sameScreen = xTrue;
-        reply.winX = pSprite->hot.x - pWin->drawable.x;
-        reply.winY = pSprite->hot.y - pWin->drawable.y;
+        double wx = pSprite->hot.x + 0.5, wy = pSprite->hot.y + 0.5;
+
+        WindowMapRootPoint(pWin, &wx, &wy);
+        reply.winX = WindowPointToPixel(wx) - pWin->drawable.x;
+        reply.winY = WindowPointToPixel(wy) - pWin->drawable.y;
         for (WindowPtr t = pSprite->win; t; t = t->parent)
             if (t->parent == pWin) {
                 reply.child = t->drawable.id;

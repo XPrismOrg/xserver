@@ -511,6 +511,43 @@ sceneSettingsWindow(WindowPtr pWin)
 }
 
 /* The settings, not the cached masks: those belong to one screen. */
+/*
+ * WindowPointMapHook: input follows what is shown. A point of the screen
+ * over a transformed top-level window is mapped back through the
+ * window's inverse transform into its untransformed space, where its
+ * geometry, shapes and event coordinates are. Only while this compositor
+ * draws the screen: otherwise the transform is not shown.
+ */
+static void
+sceneMapPoint(WindowPtr top, double *x, double *y)
+{
+    SceneScreenPtr ss = sceneScreen(top->drawable.pScreen);
+    SceneAttrsPtr attrs;
+
+    if (!ss || !ss->active || !top->viewable)
+        return;
+    attrs = sceneAttrs(sceneSettingsWindow(top));
+    if (!attrs || !(attrs->mask & XpSceneNodeTransform))
+        return;
+
+    const PictTransform *m = &attrs->inverse;
+    int bw = wBorderWidth(top);
+    double ox = top->drawable.x - bw, oy = top->drawable.y - bw;
+    double lx = *x - ox, ly = *y - oy;
+    double wx = fx(m->matrix[0][0]) * lx + fx(m->matrix[0][1]) * ly + fx(m->matrix[0][2]);
+    double wy = fx(m->matrix[1][0]) * lx + fx(m->matrix[1][1]) * ly + fx(m->matrix[1][2]);
+    double w = fx(m->matrix[2][0]) * lx + fx(m->matrix[2][1]) * ly + fx(m->matrix[2][2]);
+
+    if (w <= 0) {
+        /* beyond the horizon of a perspective transform: nowhere on the
+           window */
+        *x = *y = -65536;
+        return;
+    }
+    *x = ox + wx / w;
+    *y = oy + wy / w;
+}
+
 static void
 sceneCopySettings(SceneAttrsPtr to, const SceneAttrsRec *from)
 {
@@ -1932,6 +1969,7 @@ compSceneScreenInit(ScreenPtr pScreen)
         return false;
     dixSetPrivate(&pScreen->devPrivates, &sceneScreenKeyRec, ss);
     dixScreenHookClose(pScreen, sceneCloseScreen);
+    WindowPointMapHook = sceneMapPoint;
     dixScreenHookWindowDestroy(pScreen, sceneWindowDestroy);
 
     atomOpacity = MakeAtom("_NET_WM_WINDOW_OPACITY",

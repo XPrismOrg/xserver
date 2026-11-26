@@ -138,7 +138,7 @@ class TestAbsent:
 
 
 def test_query_version(xvfb):
-    assert Scene(xvfb).version() == (0, 3)
+    assert Scene(xvfb).version() == (0, 4)
 
 
 def test_only_the_window_manager_may_describe_the_scene(xvfb):
@@ -238,7 +238,7 @@ def test_bad_requests(xvfb):
 def test_swapped_client(xvfb):
     x, w = _red_over_blue(xvfb)
     wm = Scene(xvfb, swapped=True)
-    assert wm.version() == (0, 3)
+    assert wm.version() == (0, 4)
     assert wm.become_wm(x) == []
     assert wm.set(w, OPACITY, 0x80000000) == []
     assert _near(x.pixel(150, 150), 0x80007F)

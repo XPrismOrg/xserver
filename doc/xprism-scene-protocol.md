@@ -1,4 +1,4 @@
-# XPRISM-SCENE extension, version 0.3
+# XPRISM-SCENE extension, version 0.4
 
 The XPRISM-SCENE extension lets the window manager control how the
 [built-in compositor](compositor.md) presents each top-level window. The
@@ -8,8 +8,8 @@ windows.
 
 Version 0.1 defines two attributes per window, opacity and a transform.
 Version 0.2 adds two decorations, rounded corners and a drop shadow, and
-version 0.3 a third, background blur. Later versions are expected to add
-animation timing.
+version 0.3 a third, background blur. From version 0.4, input follows
+transforms. Later versions are expected to add animation timing.
 
 The wire format is defined in `Xext/composite/xprismsceneproto.h`.
 
@@ -46,10 +46,20 @@ Examples, where `1.0` is `0x10000`:
 | Scale to half size around the top-left corner | `[0.5 0 0; 0 0.5 0; 0 0 1]` |
 | Scale to half size around the centre of a `w` by `h` window | `[0.5 0 w/4; 0 0.5 h/4; 0 0 1]` |
 
-In version 0.1, transforms affect only how a window is displayed. Input
-is still delivered according to the window's actual geometry. Transforms
-are intended for animations; windows should be moved and resized with
-`ConfigureWindow`.
+From version 0.4, input follows what is shown: the pointer hits a
+transformed window, and its children, where they are displayed, and
+the coordinates in events and `QueryPointer` replies are in the
+window's own untransformed space, as if the user pointed at the window
+itself. Root coordinates are not transformed. This applies while the
+built-in compositor draws the screen; when an external compositor takes
+over, transforms are not shown and input follows the windows' geometry
+again. (In 0.1 to 0.3, transforms affected only the display.)
+
+Transforms are intended for animations and effects such as scaled
+previews; windows should still be moved and resized with
+`ConfigureWindow`, which is where `TranslateCoordinates`, grabs that
+confine the pointer, and `WarpPointer` relative to a window still find
+them.
 
 ## Decorations (0.2, 0.3)
 
@@ -84,7 +94,7 @@ majorVersion: CARD32
 minorVersion: CARD32
   =>
 majorVersion: CARD32    (0)
-minorVersion: CARD32    (3)
+minorVersion: CARD32    (4)
 ```
 
 The client sends the highest version it supports; the server replies

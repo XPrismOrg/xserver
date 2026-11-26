@@ -13,7 +13,7 @@
 
 #define XPRISM_SCENE_NAME           "XPRISM-SCENE"
 #define XPRISM_SCENE_MAJOR          0
-#define XPRISM_SCENE_MINOR          3
+#define XPRISM_SCENE_MINOR          4
 
 #define X_XpSceneQueryVersion       0
 #define X_XpSceneSetNodeAttributes  1

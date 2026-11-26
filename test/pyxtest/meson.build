@@ -56,6 +56,7 @@ if pytest.found()
      'test_randr_access.py',
      'test_compositor.py',
      'test_scene_protocol.py',
+     'test_scene_input.py',
         'test_explicit_sync.py',
         'test_fb.py',
         'test_font.py',

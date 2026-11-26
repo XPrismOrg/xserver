@@ -41,6 +41,7 @@
 #include "dix/eventconvert.h"
 #include "dix/exevents_priv.h"
 #include "dix/input_priv.h"
+#include "dix/window_priv.h"
 #include "dix/inpututils_priv.h"
 #include "dix/request_priv.h"
 #include "dix/rpcbuf_priv.h"
@@ -155,8 +156,11 @@ ProcXIQueryPointer(ClientPtr client)
 
     if (pSprite->hot.pScreen == pWin->drawable.pScreen) {
         reply.same_screen = xTrue;
-        reply.win_x = double_to_fp1616(pSprite->hot.x - pWin->drawable.x);
-        reply.win_y = double_to_fp1616(pSprite->hot.y - pWin->drawable.y);
+        double wx = pSprite->hot.x, wy = pSprite->hot.y;
+
+        WindowMapRootPoint(pWin, &wx, &wy);
+        reply.win_x = double_to_fp1616(wx - pWin->drawable.x);
+        reply.win_y = double_to_fp1616(wy - pWin->drawable.y);
         for (t = pSprite->win; t; t = t->parent)
             if (t->parent == pWin) {
                 reply.child = t->drawable.id;
