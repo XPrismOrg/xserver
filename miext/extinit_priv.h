@@ -18,6 +18,7 @@ void DRI2ExtensionInit(void);
 extern _X_EXPORT Bool noDamageExtension;
 
 extern Bool noDbeExtension;
+extern Bool sceneCompositorEnabled;   /* -compositor, XPrism (Xext/composite/compscene.c) */
 extern Bool noDPMSExtension;
 extern Bool noGlxExtension;
 extern Bool noMITShmExtension;

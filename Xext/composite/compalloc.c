@@ -350,6 +350,13 @@ compUnredirectWindow(ClientPtr pClient, WindowPtr pWin, int update)
 int
 compRedirectSubwindows(ClientPtr pClient, WindowPtr pWin, int update)
 {
+    /*
+     * A legacy compositor taking over a root window: the XPrism scene
+     * compositor steps aside instead of making this fail below.
+     */
+    if (update == CompositeRedirectManual)
+        compSceneYield(pClient, pWin);
+
     CompSubwindowsPtr csw = GetCompSubwindows(pWin);
 
     /*
@@ -446,6 +453,7 @@ compFreeClientSubwindows(WindowPtr pWin, XID id)
                 if (pWin->mapped)
                     (*pWin->drawable.pScreen->ClearToBackground) (pWin, 0, 0, 0,
                                                                   0, TRUE);
+                compSceneResume(pClient, pWin);
             }
 
             /*

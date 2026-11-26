@@ -272,6 +272,8 @@ UseMsg(void)
            "                       would be denied (default), or deny\n"
            "                       (experimental)\n");
     ErrorF("c #                    key-click volume (0-100)\n");
+    ErrorF("-compositor on|off     server-side scene compositor (default off,\n"
+           "                       experimental)\n");
     ErrorF("-cc int                default color visual class\n");
     ErrorF("-nocursor              disable the cursor\n");
     ErrorF("-core                  generate core dump on fatal error\n");
@@ -486,6 +488,16 @@ ProcessCommandLine(int argc, char *argv[])
                 xpCapMode = XP_CAP_MODE_AUDIT;
             else if (strcmp(argv[i], "enforce") == 0)
                 xpCapMode = XP_CAP_MODE_ENFORCE;
+            else
+                UseMsg();
+        }
+        else if (strcmp(argv[i], "-compositor") == 0) {
+            if (++i >= argc)
+                UseMsg();
+            else if (strcmp(argv[i], "on") == 0)
+                sceneCompositorEnabled = TRUE;
+            else if (strcmp(argv[i], "off") == 0)
+                sceneCompositorEnabled = FALSE;
             else
                 UseMsg();
         }

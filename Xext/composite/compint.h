@@ -209,6 +209,14 @@ void
 void compMarkAncestors(WindowPtr pWin);
 
 /*
+ * compscene.c: XPrism scene compositor
+ */
+
+bool compSceneScreenInit(ScreenPtr pScreen);
+void compSceneYield(ClientPtr pClient, WindowPtr pWin);
+void compSceneResume(ClientPtr pClient, WindowPtr pWin);
+
+/*
  * compoverlay.c
  */
 

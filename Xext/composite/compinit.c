@@ -387,5 +387,5 @@ bool compScreenInit(ScreenPtr pScreen)
 
     RegisterRealChildHeadProc(CompositeRealChildHead);
 
-    return TRUE;
+    return compSceneScreenInit(pScreen);
 }

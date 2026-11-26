@@ -3,6 +3,7 @@ srcs_composite = [
     'compext.c',
     'compinit.c',
     'compoverlay.c',
+    'compscene.c',
     'compwindow.c',
 ]
 

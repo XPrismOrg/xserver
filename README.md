@@ -74,6 +74,7 @@ the continuation of the X.Org Server.
 | **Capabilities** | Eleven fine-grained permissions (`capture.screen`, `input.inject`, `clipboard.read`, …), checked where the protocol actually does the thing. Granted per namespace, capped per launcher socket, changeable at runtime. | [`doc/capabilities.md`](doc/capabilities.md) |
 | **Audit mode** | By default nothing is denied: every request that *would* need a missing capability is logged, so policies can be tested against real applications first. | [`doc/capabilities.md`](doc/capabilities.md#modes) |
 | **Clipboard grants** | A confined app granted `clipboard.read` / `clipboard.write` can paste from and copy to the desktop's clipboard — and nothing more. | [`doc/capabilities.md`](doc/capabilities.md#clipboard-and-xnamespace) |
+| **Scene compositor** *(experimental)* | `-compositor on`: the server composites every window itself. Translucent windows and window opacity work without picom; external compositors still work and take over when they start. | [`doc/compositor.md`](doc/compositor.md) |
 | **Platform Abstraction Layer** | All OS-specific behaviour goes through one interface with per-OS backends; a test keeps new OS `#ifdef`s from spreading. | [`doc/pal.md`](doc/pal.md) |
 | **Everything from XLibre** | TearFree and atomic modesetting, NVIDIA driver support, seatd/logind, Xvfb, Xephyr, Xfbdev. | [XLibre](https://github.com/X11Libre/xserver) |
 
@@ -111,7 +112,7 @@ prompt protocol.
 |---|---|---|
 | **I. Foundation** | Codebase audit, security hooks, launcher-assigned identity, capability model in audit mode, Platform Abstraction Layer, CI on Linux, FreeBSD and OpenBSD | **In progress** — nearly complete |
 | **II. Display & scheduling** | Atomic KMS, per-output scheduling and vblank, hotplug, VRR, multi-GPU | Planned |
-| **III. Rendering & compositing** | Server-side GPU compositor with the window manager in control, explicit sync, direct scanout | Planned |
+| **III. Rendering & compositing** | Server-side GPU compositor with the window manager in control, explicit sync, direct scanout | **Started** — scene compositor (experimental) |
 | **IV. Color & HDR** | Per-output color management, wide gamut, HDR | Planned |
 | **V. Security enforcement & input** | Enforcement on by default, permission prompts, virtual seats, app-scoped input | Planned |
 | **VI. WX11** | Run Wayland applications as X11 windows, built on Smithay | Planned |
@@ -192,6 +193,7 @@ complete bubblewrap example.
 | [`doc/Xnamespace.md`](doc/Xnamespace.md) | Namespaces and their configuration |
 | [`doc/Xnamespace-protocol.md`](doc/Xnamespace-protocol.md) | The X-NAMESPACE protocol, including XPrism's listener and grant requests |
 | [`utils/xns-listen/README.md`](utils/xns-listen/README.md) | The launcher helper |
+| [`doc/compositor.md`](doc/compositor.md) | The server-side scene compositor and legacy compositor mode |
 | [`doc/pal.md`](doc/pal.md) | The Platform Abstraction Layer and per-OS backends |
 | [`CODE_OVERVIEW.md`](CODE_OVERVIEW.md) | A map of the server's source tree |
 
