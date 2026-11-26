@@ -176,7 +176,7 @@ form](https://github.com/XPrismOrg/xserver/security/advisories/new).
 ## License
 
 XPrism is distributed under the MIT/X11 license, as are the X.Org Server
-and XLibre. See [COPYING](COPYING) for the full terms and copyright
+and XLibre. XPrism's own work is Copyright © 2026 Nexoniarz and XPrismOrg. See [COPYING](COPYING) for the full terms and copyright
 notices.
 
 X Window System is a trademark of The Open Group.
