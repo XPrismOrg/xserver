@@ -2,6 +2,7 @@
 /* Copyright (C) 2026 Enrico Weigelt, metux IT consult <info@metux.net> */
 #include <dix-config.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <X11/Xdefs.h>
@@ -177,6 +178,23 @@ static void parseLine(char *line, struct Xnamespace **walk_ns)
         else {
             free(curr->injectInto);
             curr->injectInto = strdup(token);
+        }
+        return;
+    }
+
+    /* "allow-extension NV-CONTROL ...": unreviewed extensions */
+    if (strcmp(token, "allow-extension") == 0)
+    {
+        while ((token = strtok(NULL, " \t")) != NULL)
+        {
+            const char *old = curr->allowExtensions ? curr->allowExtensions : " ";
+            size_t len = strlen(old) + strlen(token) + 2;
+            char *list = malloc(len);
+            if (!list)
+                return;
+            snprintf(list, len, "%s%s ", old, token);
+            free(curr->allowExtensions);
+            curr->allowExtensions = list;
         }
         return;
     }
@@ -535,6 +553,7 @@ void XnsDestroyNamespace(struct Xnamespace *ns)
 
     xorg_list_del(&ns->entry);
     free(ns->injectInto);
+    free(ns->allowExtensions);
     free((void *) ns->name);
     free(ns);
 }

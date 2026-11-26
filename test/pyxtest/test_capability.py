@@ -349,6 +349,84 @@ class TestNoPolicy:
         assert "no namespace configuration" in log[0]
 
 
+X_SET_SCREEN_SAVER, X_FORCE_SCREEN_SAVER = 107, 115
+
+
+def _set_screen_saver(conn, timeout):
+    return _errors_of(conn, struct.pack("<BxHhhBBxx", X_SET_SCREEN_SAVER, 3, timeout, 0, 0, 0))
+
+
+class TestDisplayWide:
+    """What changes the display for the whole session needs
+    display.configure: the screen saver's settings (screen lockers go by
+    them), DPMS, VidMode, RandR."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_screen_saver(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        assert _set_screen_saver(conn, 0) == [BAD_ACCESS]
+        # video players keep the screen on by resetting the timer
+        assert _errors_of(conn, struct.pack("<BBH", X_FORCE_SCREEN_SAVER, 0, 1)) == []
+        assert _set_screen_saver(_connect(xserver, ROOT_COOKIE), 600) == []
+
+
+def _extensions(conn):
+    seq = conn.send_request(struct.pack("<BxH", 99, 1))        # ListExtensions
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            break
+    names, data, off = set(), r.data[32:], 0
+    for _ in range(r.data[1]):
+        names.add(data[off + 1:off + 1 + data[off]].decode())
+        off += 1 + data[off]
+    return names
+
+
+class TestExtensions:
+    """Confined clients see the extensions reviewed for confinement;
+    others (driver extensions, new ones) only if their namespace allows
+    them."""
+
+    REVIEWED = {"BIG-REQUESTS", "Composite", "DAMAGE", "DOUBLE-BUFFER", "DRI2", "GLX",
+                "Generic Event Extension", "MIT-SHM", "Present", "RANDR", "RENDER", "SYNC",
+                "X-Resource", "XC-MISC", "XFIXES", "XINERAMA", "XInputExtension",
+                "XKEYBOARD", "XPRISM-COLOR", "XPRISM-SCENE"}
+
+    @pytest.fixture
+    def xserver_args(self, tmp_path):
+        conf = tmp_path / "ns.conf"
+        conf.write_text(
+            f"auth {COOKIE_PROTO.decode()} {ROOT_COOKIE.hex()}\n"
+            f"namespace sandbox root\n"
+            f"  auth {COOKIE_PROTO.decode()} {SANDBOX_COOKIE.hex()}\n"
+            f"  allow xinput\n"
+            f"  allow-extension XVideo NO-SUCH-EXTENSION\n"
+            f"namespace granted root\n"
+            f"  auth {COOKIE_PROTO.decode()} {GRANTED_COOKIE.hex()}\n"
+            f"  allow xinput\n"
+        )
+        return ["-namespace", str(conf), "-capmode", "enforce"]
+
+    def test_confined(self, xserver):
+        seen = _extensions(_connect(xserver, GRANTED_COOKIE))
+        assert seen <= self.REVIEWED, seen - self.REVIEWED
+        assert {"Composite", "RANDR", "RENDER", "XPRISM-COLOR"} <= seen
+
+    def test_allow_extension_does_not_reopen_the_blacklist(self, xserver):
+        seen = _extensions(_connect(xserver, SANDBOX_COOKIE))
+        assert "XVideo" not in seen
+        assert seen <= self.REVIEWED
+
+    def test_unconfined(self, xserver):
+        seen = _extensions(_connect(xserver, ROOT_COOKIE))
+        assert {"XTEST", "RECORD", "X-NAMESPACE", "XVideo"} <= seen
+
+
 XKB_USE_EXTENSION, XKB_SELECT_EVENTS, XKB_GET_STATE = 0, 1, 4
 XKB_STATE_NOTIFY_MASK = 1 << 2
 XKB_USE_CORE_KBD = 0x100

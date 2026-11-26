@@ -45,6 +45,19 @@ void hookExtDispatch(CallbackListPtr *pcbl, void *unused, void *calldata)
         case EXTENSION_MAJOR_XRESOURCE:
             goto pass;
 
+        /* reviewed, see hookExtAccess() */
+        case EXTENSION_MAJOR_COMPOSITE:
+        case EXTENSION_MAJOR_DPMS:
+        case EXTENSION_MAJOR_DRI2:
+        case EXTENSION_MAJOR_DRI3:
+        case EXTENSION_MAJOR_GLX:
+        case EXTENSION_MAJOR_RANDR:
+        case EXTENSION_MAJOR_RENDER:
+        case EXTENSION_MAJOR_SHM:
+        case EXTENSION_MAJOR_XINERAMA:
+        case EXTENSION_MAJOR_XF86_VIDMODE:
+            goto pass;
+
         /* allow several operations */
         case EXTENSION_MAJOR_XKEYBOARD:
             if (subj->ns->allowXKeyboard)
@@ -113,8 +126,10 @@ void hookExtDispatch(CallbackListPtr *pcbl, void *unused, void *calldata)
             goto reject;
     }
 
-    XNS_HOOK_LOG("unhandled extension call: %s\n", param->ext->name);
-    return;
+    if (XnsAllowsExtension(subj->ns, param->ext->name))
+        goto pass;
+    XNS_HOOK_LOG("unreviewed extension call: %s\n", param->ext->name);
+    goto reject;
 
 reject:
     XNS_HOOK_LOG("rejecting extension call: %s\n", param->ext->name);

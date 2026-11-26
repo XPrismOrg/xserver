@@ -63,6 +63,31 @@ XnsInjectScope(ClientPtr injector, ClientPtr target)
     return t && t->ns && strcmp(t->ns->name, priv->ns->injectInto) == 0;
 }
 
+/* Extensions without a fixed major opcode that were reviewed for
+   confinement: XPrism's own (XPRISM-COLOR goes by window access,
+   XPRISM-SCENE is the window manager's only), and NV-GLX, which carries
+   NVIDIA's OpenGL. NV-CONTROL, which changes GPU settings, is not. */
+static const char *const reviewed_extensions[] = {
+    "XPRISM-COLOR", "XPRISM-SCENE", "NV-GLX",
+};
+
+/* Extensions not reviewed (driver extensions, new ones) are hidden from
+   confined clients unless their namespace allows them. */
+Bool
+XnsAllowsExtension(struct Xnamespace *ns, const char *name)
+{
+    for (size_t i = 0; i < sizeof(reviewed_extensions) / sizeof(reviewed_extensions[0]); i++)
+        if (strcmp(name, reviewed_extensions[i]) == 0)
+            return TRUE;
+    if (!ns->allowExtensions)
+        return FALSE;
+    size_t n = strlen(name);
+    for (const char *p = ns->allowExtensions; (p = strstr(p, name)) != NULL; p++)
+        if (p[-1] == ' ' && p[n] == ' ')
+            return TRUE;
+    return FALSE;
+}
+
 /* XTest is for namespaces that may inject */
 Bool
 XnsMayInject(struct Xnamespace *ns)

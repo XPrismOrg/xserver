@@ -41,6 +41,21 @@ void hookExtAccess(CallbackListPtr *pcbl, void *unused, void *calldata)
         case EXTENSION_MAJOR_XRESOURCE:
             goto pass;
 
+        /* reviewed: their requests reach other clients' resources only
+           through the resource hooks, and the capability checks gate
+           what changes the display (doc/capabilities.md, "Extensions") */
+        case EXTENSION_MAJOR_COMPOSITE:
+        case EXTENSION_MAJOR_DPMS:
+        case EXTENSION_MAJOR_DRI2:
+        case EXTENSION_MAJOR_DRI3:
+        case EXTENSION_MAJOR_GLX:
+        case EXTENSION_MAJOR_RANDR:
+        case EXTENSION_MAJOR_RENDER:
+        case EXTENSION_MAJOR_SHM:
+        case EXTENSION_MAJOR_XINERAMA:
+        case EXTENSION_MAJOR_XF86_VIDMODE:
+            goto pass;
+
         /* really blacklisted */
         case EXTENSION_MAJOR_MIT_SCREEN_SAVER:
         case EXTENSION_MAJOR_RECORD:
@@ -68,8 +83,12 @@ void hookExtAccess(CallbackListPtr *pcbl, void *unused, void *calldata)
             goto reject;
     }
 
-    XNS_HOOK_LOG("unhandled extension query: %s (%d)\n", param->ext->name, param->ext->index);
-    return;
+    /* not reviewed (DGA, driver extensions, new ones): hidden unless the
+       namespace allows it */
+    if (XnsAllowsExtension(subj->ns, param->ext->name))
+        goto pass;
+    XNS_HOOK_LOG("hiding unreviewed extension: %s (%d)\n", param->ext->name, param->ext->index);
+    goto reject;
 
 reject:
     param->status = BadAccess;

@@ -225,6 +225,38 @@ These are not refused or logged: toolkits read the state all the time.
 In audit mode clients see the full state. `XIQueryPointer` is allowed
 to confined clients now, as core `QueryPointer` was already.
 
+## Extensions
+
+Every extension built into XPrism has been reviewed for confined clients
+(Phase V). Those not listed here, such as driver extensions or new ones,
+are hidden from confined clients unless their namespace names them with
+`allow-extension NAME ...`. That keyword can't reopen the hidden ones in
+the first group of the table.
+
+| Extension | Confined clients | Why |
+|---|---|---|
+| RECORD, MIT-SCREEN-SAVER, SECURITY, XVideo | Hidden | Recording all input; the screen saver's window; the old trust model; overlays read by others |
+| XTEST | Hidden, unless `input.inject` or an inject scope | Injected input; see Scoped automation |
+| SHAPE, XInputExtension, XKEYBOARD | By the namespace's `allow` flags; XKB and XI's reads always | Xnamespace's own rules; the keyboard state is the focused client's |
+| X-NAMESPACE | Hidden | Namespace management, for unconfined clients only |
+| Composite, Damage, Render, MIT-SHM, Present, DRI2, DRI3, GLX, DOUBLE-BUFFER, Sync, XFIXES | Visible | They reach other clients' windows only through the resource hooks; copies with inferiors need `capture.window` |
+| RANDR | Visible; changes need `display.configure` | |
+| DPMS | Visible; `SetTimeouts`, `Enable`, `Disable`, `ForceLevel` need `display.configure` | Turning the monitors off, or blanking off |
+| XFree86-VidModeExtension | Visible; mode, viewport and gamma changes need `display.configure` | |
+| XINERAMA, X-Resource, XC-MISC, BIG-REQUESTS, Generic Event | Visible | Reads only, or per-client |
+| XPRISM-COLOR | Visible | Describing windows goes by window access |
+| XPRISM-SCENE | Visible | Usable by the window manager only |
+| NV-GLX | Visible | NVIDIA's OpenGL. NV-CONTROL, which changes GPU settings, is not allowed by default. |
+| XFree86-DGA, XFree86-DRI, XVideo-MotionCompensation, SELinux | Hidden (not reviewed) | Direct framebuffer access; obsolete; tied to XVideo; label changes |
+
+Core requests with session-wide effects were reviewed too.
+`SetScreenSaver` needs `display.configure`, because screen lockers go by
+its timeout. `ForceScreenSaver` stays free, since video players reset the
+timer with it. Xnamespace already refuses confined clients `GrabServer`,
+`KillClient` on other clients' resources, `WarpPointer`, the keyboard and
+pointer controls and mappings, `SetFontPath`, `ChangeHosts`,
+`SetAccessControl`, `InstallColormap`, and Composite's overlay window.
+
 ## Known gaps
 
 - The pointer buttons held down are visible to every client through

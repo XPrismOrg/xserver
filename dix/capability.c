@@ -34,7 +34,9 @@
  *                        (Letting a grant open it to them is still to do.)
  *   display.configure    extension dispatch: the RandR requests that change
  *                        the configuration (all in one place; RandR's own
- *                        lookups also use write access since 4e749a551)
+ *                        lookups also use write access since 4e749a551),
+ *                        DPMS and VidMode writes; SetScreenSaver
+ *                        (cap_screensaver)
  *   compositor.legacy    Composite: Manual redirection of a root window's
  *                        subwindows (compRedirectSubwindows), i.e. taking
  *                        the screen over from the scene compositor. A
@@ -66,8 +68,11 @@
 #include <X11/extensions/XI2proto.h>
 #include <X11/extensions/randrproto.h>
 #include <X11/extensions/xtestproto.h>
+#include <X11/extensions/dpmsproto.h>
+#include <X11/extensions/xf86vmproto.h>
 
 #include "dix/capability_priv.h"
+#include "dix/screensaver_priv.h"
 #include "dix/devices_priv.h"
 #include "dix/input_priv.h"
 #include "dix/dix_priv.h"
@@ -804,7 +809,44 @@ cap_ext_dispatch(CallbackListPtr *pcbl, void *unused, void *calldata)
         if (randr_request_configures(client->minorOp))
             apply(&rec->status, XpCapCheck(client, XP_CAP_DISPLAY_CONFIGURE, 0));
         break;
+    case EXTENSION_MAJOR_DPMS:
+        /* the monitors' power: turning them off, or never */
+        switch (client->minorOp) {
+        case X_DPMSSetTimeouts:
+        case X_DPMSEnable:
+        case X_DPMSDisable:
+        case X_DPMSForceLevel:
+            apply(&rec->status, XpCapCheck(client, XP_CAP_DISPLAY_CONFIGURE, 0));
+        }
+        break;
+    case EXTENSION_MAJOR_XF86_VIDMODE:
+        /* video modes, viewport and gamma of every output */
+        switch (client->minorOp) {
+        case X_XF86VidModeModModeLine:
+        case X_XF86VidModeSwitchMode:
+        case X_XF86VidModeLockModeSwitch:
+        case X_XF86VidModeAddModeLine:
+        case X_XF86VidModeDeleteModeLine:
+        case X_XF86VidModeSwitchToMode:
+        case X_XF86VidModeSetViewPort:
+        case X_XF86VidModeSetGamma:
+        case X_XF86VidModeSetGammaRamp:
+            apply(&rec->status, XpCapCheck(client, XP_CAP_DISPLAY_CONFIGURE, 0));
+        }
+        break;
     }
+}
+
+/* SetScreenSaver: blanking off, or its timeout, for the whole session
+   (and the screen lockers going by it). ForceScreenSaver is free: video
+   players reset the timer, and blanking now is harmless. */
+static void
+cap_screensaver(CallbackListPtr *pcbl, void *unused, void *calldata)
+{
+    ScreenSaverAccessCallbackParam *rec = calldata;
+
+    if (rec->access_mode & DixSetAttrAccess)
+        apply(&rec->status, XpCapCheck(rec->client, XP_CAP_DISPLAY_CONFIGURE, 0));
 }
 
 static void
@@ -909,6 +951,7 @@ XpCapInit(void)
           AddCallback(&ExtensionDispatchCallback, cap_ext_dispatch, NULL) &&
           AddCallback(&DeviceAccessCallback, cap_device, NULL) &&
           AddCallback(&ClientStateCallback, cap_client_state, NULL) &&
-          AddCallback(&DeviceEventCallback, cap_device_event, NULL)))
+          AddCallback(&DeviceEventCallback, cap_device_event, NULL) &&
+          AddCallback(&ScreenSaverAccessCallback, cap_screensaver, NULL)))
         FatalError("capability: cannot register checks\n");
 }

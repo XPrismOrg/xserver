@@ -23,6 +23,12 @@ namespace editor root
   auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad90c1
   grant clipboard.read clipboard.write
 
+# an extension that has not been reviewed for confinement (a driver's,
+# here NVIDIA's settings) is hidden from confined clients unless named
+namespace nvidia-settings root
+  auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad90c3
+  allow-extension NV-CONTROL
+
 # scoped automation: a test runner or assistant that may click and type
 # into the editor's windows, and nobody else's, with a pointer and
 # keyboard of its own
