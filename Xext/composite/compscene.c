@@ -809,6 +809,8 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 
     /* colour descriptions or the output's colour space changed: the root
        background's conversion with them */
+    if (compColorCrtcsChanged(pScreen))
+        ss->fullDamage = true;  /* CRTCs showing other spaces moved */
     if (ss->colorSerial != compColorSerial()) {
         ss->colorSerial = compColorSerial();
         ss->bgTileSrc = NULL;
@@ -1550,6 +1552,8 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
         FreePicture(pLinPict, 0);
     } else {
         sceneRenderLayers(pScreen, &screen, wins, nodes, n, pDamage, 0);
+        compColorEncodeCrtcs(pScreen, pDst, pRoot->drawable.x, pRoot->drawable.y,
+                             pDamage);
     }
     if (pLin)
         dixDestroyPixmap(pLin, 0);

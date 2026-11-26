@@ -74,6 +74,13 @@ SDR white is shown at 203 cd/m\(S2 and \fIpeak\fP is the display's peak
 luminance in cd/m\(S2, 203 to 10000, by default 1000. A depth\-30 screen
 gives HDR outputs their precision. By default, outputs are sRGB.
 .TP 4
+.B "\-crtccolorspace \fIcrtc\fP:\fIprimaries\fP[,\fItransfer\fP[,\fIpeak\fP]]"
+Sets the colour space that one CRTC of the screen given by the last
+\fB\-screen\fP option shows, as \fB\-colorspace\fP does for the
+whole screen, so that the screen's monitors differ. CRTCs are numbered
+from 0 and must have been given with \fB\-crtcs\fP before. Only the
+first CRTC is on at start; clients turn on the others through RandR.
+.TP 4
 .B "\-pixdepths \fIlist-of-depths\fP"
 This option specifies a list of pixmap depths that the server should
 support in addition to the depths implied by the supported screens.

@@ -49,8 +49,17 @@ As built (step 4), with one colour space per screen, that linear light
 has the output's primaries, and gamut and tone mapping happen when each
 window is converted into it, so that blending (which only mixes colours
 the output can show) needs none and the encoding of each frame is the
-transfer function alone. With an output per CRTC (step 5), the
-compositor would work in BT.2020 and map for each output when encoding.
+transfer function alone.
+
+Where a screen's monitors show different spaces (one per CRTC,
+`CompositeSetCrtcColorSpace`, Xvfb `-crtccolorspace`), the compositor
+composes for the widest of them: the primaries with the largest gamut,
+and if any is HDR, PQ up to the brightest peak. What each CRTC shows is
+then converted for its own space: in linear light, straight from the
+blended light when each frame is encoded (gamut and tone mapping for
+that CRTC), otherwise from the composed pixels. What no CRTC shows is
+in the screen's own space. Full-screen windows are then never shown
+directly.
 
 For outputs that are all SDR sRGB and windows that are all sRGB, the
 compositor keeps composing exactly as now, so the pixels are identical

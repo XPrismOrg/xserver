@@ -99,8 +99,9 @@ extern _X_EXPORT void CompositeSetFloatPixmap(ScreenPtr pScreen,
 /*
  * XPrism: the colour space the screen's output shows (doc/color.md).
  * Without one, sRGB. The built-in compositor composes for it. Output
- * transfer functions: sRGB, gamma 2.2, linear or PQ (HDR); for PQ,
- * maxLum is the display's peak and refWhite where SDR white is shown.
+ * transfer functions: sRGB, gamma 2.2, linear, PQ or HLG (HDR); for
+ * those, maxLum is the display's peak and refWhite where SDR white is
+ * shown.
  */
 typedef struct {
     float xy[8];                /* CIE xy of red, green, blue and white */
@@ -110,6 +111,15 @@ typedef struct {
 
 extern _X_EXPORT void CompositeSetOutputColorSpace(ScreenPtr pScreen,
                                                    const CompositeColorSpaceRec *space);
+
+/*
+ * XPrism: the colour space one CRTC's monitor shows, where the screen's
+ * monitors differ; NULL: the screen's. The compositor composes for the
+ * widest of them and converts what each CRTC shows for its own.
+ */
+struct _rrCrtc;
+extern _X_EXPORT void CompositeSetCrtcColorSpace(ScreenPtr pScreen, struct _rrCrtc *crtc,
+                                                 const CompositeColorSpaceRec *space);
 
 /*
  * XPrism: for what is drawn over the composed screen, such as the

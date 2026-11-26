@@ -103,6 +103,8 @@ typedef struct {
     int x;
     int y;
     int numOutputs;
+    Bool colorSet;              /* -crtccolorspace, else the screen's */
+    CompositeColorSpaceRec color;
 } vfbCrtcInfo, *vfbCrtcInfoPtr;
 
 typedef struct {
@@ -397,6 +399,8 @@ ddxUseMsg(void)
            "                       primaries srgb, p3 or bt2020; transfer srgb,\n"
            "                       gamma22, linear, pq or hlg; peak N cd/m^2\n"
            "                       (pq, hlg)\n");
+    ErrorF("-crtccolorspace C:P[,T[,N]] colour space CRTC C (from 0, after\n"
+           "                       -crtcs) of the last -screen shows, as -colorspace\n");
     ErrorF("-pixdepths list-of-int support given pixmap depths\n");
     ErrorF("+/-render		   turn on/off RENDER extension support"
            "(default on)\n");
@@ -499,6 +503,20 @@ ddxProcessArgument(int argc, char *argv[], int i)
             FatalError("Invalid -colorspace argument '%s'\n", argv[i + 1]);
         }
         currentScreen->colorSet = TRUE;
+        return 2;
+    }
+
+    if (strcmp(argv[i], "-crtccolorspace") == 0) {      /* -crtccolorspace C:P[,T[,N]] */
+        CHECK_FOR_REQUIRED_ARGUMENTS(1);
+        char *end;
+        long c = strtol(argv[i + 1], &end, 10);
+        if (end == argv[i + 1] || *end != ':' || c < 0 || c >= currentScreen->numCrtcs ||
+            !vfbParseColorSpace(end + 1, &currentScreen->crtcs[c].color)) {
+            UseMsg();
+            FatalError("Invalid -crtccolorspace argument '%s' (after -crtcs)\n",
+                       argv[i + 1]);
+        }
+        currentScreen->crtcs[c].colorSet = TRUE;
         return 2;
     }
 
@@ -1159,6 +1177,8 @@ vfbRandRInit(ScreenPtr pScreen)
         crtc = RRCrtcCreate(pScreen, pvci);
         if (!crtc)
             return FALSE;
+        if (pvci->colorSet)
+            CompositeSetCrtcColorSpace(pScreen, crtc, &pvci->color);
 
         /* Set gamma to avoid xrandr complaints */
         RRCrtcGammaSetSize(crtc, 256);

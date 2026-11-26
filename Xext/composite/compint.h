@@ -250,6 +250,15 @@ PicturePtr compColorLinearSolid(ScreenPtr pScreen, PictFormatPtr format, CARD32 
                                 double alpha);
 void compColorEncodeLinear(ScreenPtr pScreen, PixmapPtr pLin, int ox, int oy,
                            PicturePtr pDst, int dx, int dy, RegionPtr pRegion);
+/* CRTCs whose monitors show other colour spaces than the one composed
+   for: convert what they show of pRegion (screen coordinates), composed
+   in pDst (the root window, origin dx, dy). Composing in linear light,
+   compColorEncodeLinear does that. */
+void compColorEncodeCrtcs(ScreenPtr pScreen, PicturePtr pDst, int dx, int dy,
+                          RegionPtr pRegion);
+/* whether the CRTCs' colour spaces or where they are changed since the
+   last call: everything must be composed again */
+bool compColorCrtcsChanged(ScreenPtr pScreen);
 
 /*
  * compoverlay.c

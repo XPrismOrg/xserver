@@ -110,8 +110,37 @@ colorIsHDR(const XpColorSpace *cs)
     return cs->transfer == XpColorTransferPQ || cs->transfer == XpColorTransferHLG;
 }
 
+/*
+ * The screen's output colour space (CompositeSetOutputColorSpace), and
+ * CRTCs' own (CompositeSetCrtcColorSpace). The compositor composes for
+ * one space per screen, outputSet/outputSpace: the screen's, or where
+ * CRTCs differ, the widest of them, and what each CRTC shows is then
+ * converted for its own (compColorEncodeCrtcs).
+ */
+#define COLOR_MAX_CRTCS 16
+
+typedef struct {
+    RRCrtcPtr crtc;
+    XpColorSpace cs;
+} ColorCrtcRec;
+
+static XpColorSpace screenSpace[MAXSCREENS];
+static bool screenSet[MAXSCREENS];         /* else sRGB */
+static ColorCrtcRec crtcSpaces[MAXSCREENS][COLOR_MAX_CRTCS];
 static XpColorSpace outputSpace[MAXSCREENS];
 static bool outputSet[MAXSCREENS];         /* else sRGB */
+
+/* what compColorEncodeCrtcs converted, to notice changes */
+typedef struct {
+    RRCrtcPtr crtc;
+    BoxRec box;
+    const XpColorSpace *cs;
+} ColorCrtcShownRec;
+
+static ColorCrtcShownRec crtcShown[MAXSCREENS][COLOR_MAX_CRTCS + 1];
+static int crtcShownCount[MAXSCREENS];
+
+static int colorOtherCrtcs(ScreenPtr pScreen, ColorCrtcShownRec *out);
 
 static const XpColorSpace *
 colorOutput(ScreenPtr pScreen)
@@ -119,14 +148,91 @@ colorOutput(ScreenPtr pScreen)
     return outputSet[pScreen->myNum] ? &outputSpace[pScreen->myNum] : &xpColorSpaceSRGB;
 }
 
-void
-CompositeSetOutputColorSpace(ScreenPtr pScreen, const CompositeColorSpaceRec *space)
+static const XpColorSpace *
+colorScreenSpace(ScreenPtr pScreen)
 {
-    int s = pScreen->myNum;
+    return screenSet[pScreen->myNum] ? &screenSpace[pScreen->myNum] : &xpColorSpaceSRGB;
+}
+
+/* What crtc's monitor shows */
+static const XpColorSpace *
+colorCrtcSpace(ScreenPtr pScreen, RRCrtcPtr crtc)
+{
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++)
+        if (crtcSpaces[pScreen->myNum][i].crtc == crtc)
+            return &crtcSpaces[pScreen->myNum][i].cs;
+    return colorScreenSpace(pScreen);
+}
+
+static bool
+colorSameSpace(const XpColorSpace *a, const XpColorSpace *b)
+{
+    return a->transfer == b->transfer &&
+        !memcmp(&a->primaries, &b->primaries, sizeof(XpColorPrimaries)) &&
+        a->refWhite == b->refWhite && a->minLum == b->minLum && a->maxLum == b->maxLum;
+}
+
+/* The area of the primaries' triangle in xy */
+static double
+colorGamutArea(const XpColorPrimaries *p)
+{
+    return fabs((p->g.x - p->r.x) * (p->b.y - p->r.y) -
+                (p->b.x - p->r.x) * (p->g.y - p->r.y)) / 2;
+}
+
+/* The space to compose for: the screen's and its CRTCs', if they are
+   all the same; else the widest primaries among them, and if any is
+   HDR, PQ up to the brightest peak, so that each CRTC's conversion
+   from it loses nothing that the CRTC can show. */
+static void
+colorUpdateOutput(int s)
+{
+    const XpColorSpace *spaces[COLOR_MAX_CRTCS + 1];
+    int n = 0;
+
+    spaces[n++] = screenSet[s] ? &screenSpace[s] : &xpColorSpaceSRGB;
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++)
+        if (crtcSpaces[s][i].crtc)
+            spaces[n++] = &crtcSpaces[s][i].cs;
+
+    const XpColorSpace *widest = spaces[0];
+    bool same = true, hdr = false;
+    double minLum = spaces[0]->minLum, maxLum = 0;
+    for (int i = 0; i < n; i++) {
+        same = same && colorSameSpace(spaces[i], spaces[0]);
+        if (colorGamutArea(&spaces[i]->primaries) > colorGamutArea(&widest->primaries))
+            widest = spaces[i];
+        if (colorIsHDR(spaces[i])) {
+            hdr = true;
+            maxLum = fmax(maxLum, spaces[i]->maxLum);
+        }
+        minLum = fmin(minLum, spaces[i]->minLum);
+    }
+    XpColorSpace cs = *(same ? spaces[0] : widest);
+    if (!same && hdr) {
+        cs.transfer = XpColorTransferPQ;
+        cs.refWhite = 203;
+        cs.minLum = minLum;
+        cs.maxLum = maxLum;
+    }
+    outputSpace[s] = cs;
+    outputSet[s] = !colorIsSRGB(&cs);
+    colorSerial++;
+    if (!colorSerial)
+        colorSerial = 1;
+}
+
+/* A space as the DDX gives it: 1, or 0 for sRGB (also NULL), -1 if it
+   cannot be shown */
+static int
+colorFromRec(const CompositeColorSpaceRec *space, XpColorSpace *out)
+{
     XpColorSpace cs = { 0 };
     XpColorMatrix unused;
 
-    if (space) {
+    if (!space)
+        return 0;
+    {
         XpColorXY *xy[4] = { &cs.primaries.r, &cs.primaries.g, &cs.primaries.b,
                              &cs.primaries.white };
         /* in millionths, as the protocol has them: named primaries then
@@ -139,22 +245,64 @@ CompositeSetOutputColorSpace(ScreenPtr pScreen, const CompositeColorSpaceRec *sp
         cs.minLum = space->minLum;
         cs.maxLum = space->maxLum;
     }
-    if (!space || colorIsSRGB(&cs)) {
-        outputSet[s] = false;
-    } else if (space->transfer < XpColorTransferSRGB ||
-               space->transfer > XpColorTransferHLG ||
-               !(cs.refWhite > 0) || cs.maxLum < cs.refWhite ||
-               !xpColorRGBToXYZ(&cs.primaries, unused)) {
+    if (colorIsSRGB(&cs))
+        return 0;
+    if (space->transfer < XpColorTransferSRGB ||
+        space->transfer > XpColorTransferHLG ||
+        !(cs.refWhite > 0) || cs.maxLum < cs.refWhite ||
+        !xpColorRGBToXYZ(&cs.primaries, unused))
+        return -1;
+    *out = cs;
+    return 1;
+}
+
+void
+CompositeSetOutputColorSpace(ScreenPtr pScreen, const CompositeColorSpaceRec *space)
+{
+    int s = pScreen->myNum;
+    XpColorSpace cs;
+    int rc = colorFromRec(space, &cs);
+
+    if (rc < 0)
         LogMessageVerb(X_WARNING, 1, "compositor: screen %d: unsupported output "
                        "colour space, using sRGB\n", s);
-        outputSet[s] = false;
-    } else {
-        outputSpace[s] = cs;
-        outputSet[s] = true;
+    screenSet[s] = rc > 0;
+    if (rc > 0)
+        screenSpace[s] = cs;
+    colorUpdateOutput(s);
+}
+
+void
+CompositeSetCrtcColorSpace(ScreenPtr pScreen, RRCrtcPtr crtc,
+                           const CompositeColorSpaceRec *space)
+{
+    int s = pScreen->myNum, slot = -1;
+    XpColorSpace cs = xpColorSpaceSRGB;
+    int rc = space ? colorFromRec(space, &cs) : 0;
+
+    if (rc < 0) {
+        LogMessageVerb(X_WARNING, 1, "compositor: screen %d: unsupported CRTC "
+                       "colour space, using the screen's\n", s);
+        space = NULL;
     }
-    colorSerial++;
-    if (!colorSerial)
-        colorSerial = 1;
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        if (crtcSpaces[s][i].crtc == crtc) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 && !crtcSpaces[s][i].crtc)
+            slot = i;
+    }
+    if (slot < 0) {
+        LogMessageVerb(X_WARNING, 1, "compositor: screen %d: too many CRTCs "
+                       "with colour spaces of their own\n", s);
+        return;
+    }
+    if (space)
+        crtcSpaces[s][slot] = (ColorCrtcRec) { .crtc = crtc, .cs = cs };
+    else if (crtcSpaces[s][slot].crtc == crtc)
+        crtcSpaces[s][slot].crtc = NULL;
+    colorUpdateOutput(s);
 }
 
 bool
@@ -305,7 +453,10 @@ static bool
 colorTonePeaks(const XpColorSpace *cs, const XpColorSpace *out,
                double *srcMax, double *dstMax)
 {
-    if (cs->transfer != XpColorTransferPQ && cs->transfer != XpColorTransferHLG)
+    /* HDR content, or linear light with values above reference white
+       (composed for an HDR output, shown on a dimmer one) */
+    if (cs->transfer != XpColorTransferPQ && cs->transfer != XpColorTransferHLG &&
+        !(cs->transfer == XpColorTransferLinear && cs->maxLum > cs->refWhite))
         return false;
     *srcMax = cs->maxLum;
     *dstMax = out->maxLum / out->refWhite * cs->refWhite;
@@ -537,8 +688,9 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
 
     if (!n)
         return;
-    if (mode == COLOR_FROM_LINEAR)
-        cs = &lin;
+    bool fromOwnLinear = mode == COLOR_FROM_LINEAR && !cs;
+    if (fromOwnLinear)
+        cs = &lin;              /* else another output's linear light */
     if (!cs && mode == COLOR_ENCODED && src->drawable.depth == dst->drawable.depth) {
         GCPtr pGC = GetScratchGC(dst->drawable.depth, pScreen);
         if (!pGC)
@@ -566,7 +718,7 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
            the window is shown directly: not brought within the peak. So
            the encoding of the blended light does not clamp to it either
            (the rest is within it). */
-        if (mode == COLOR_FROM_LINEAR ||
+        if (fromOwnLinear ||
             (mode == COLOR_TO_LINEAR && colorShownAsIs(cs, out)))
             /* HLG's signal ends at the display's peak */
             params.outPeak = (float) (out->transfer == XpColorTransferPQ ?
@@ -622,11 +774,15 @@ compColorState(WindowPtr top)
         colorSerial : 0;
 }
 
-/* Whether top-level window top's pixels are what the output shows. */
+/* Whether top-level window top's pixels are what the output shows:
+   not where CRTCs show other spaces than the one composed for. */
 bool
 compColorShownAsIs(WindowPtr top)
 {
-    return !colorNeedsConversion(top);
+    ColorCrtcShownRec crtcs[COLOR_MAX_CRTCS + 1];
+
+    return !colorNeedsConversion(top) &&
+        !colorOtherCrtcs(top->drawable.pScreen, crtcs);
 }
 
 void
@@ -858,10 +1014,29 @@ compColorEncodeLinear(ScreenPtr pScreen, PixmapPtr pLin, int ox, int oy,
     PixmapPtr pEnc = (*pScreen->CreatePixmap) (pScreen, w, h, format->depth, 0);
     if (!pEnc)
         return;
-    RegionTranslate(pRegion, -ox, -oy);
+    /* CRTCs showing other spaces: from the linear light composed for,
+       straight to theirs */
+    RegionRec rest, part;
+    RegionNull(&rest);
+    RegionNull(&part);
+    RegionCopy(&rest, pRegion);
+    XpColorSpace lin = colorLinearOf(colorOutput(pScreen));
+    ColorCrtcShownRec crtcs[COLOR_MAX_CRTCS + 1];
+    int n = colorOtherCrtcs(pScreen, crtcs);
+    for (int i = 0; i < n; i++) {
+        RegionReset(&part, &crtcs[i].box);
+        RegionIntersect(&part, &part, &rest);
+        RegionSubtract(&rest, &rest, &part);
+        RegionTranslate(&part, -ox, -oy);
+        colorConvertRegion(pLin, compColorFloatFormat(pScreen), pEnc, format,
+                           colorSameSpace(crtcs[i].cs, colorOutput(pScreen)) ? NULL : &lin,
+                           crtcs[i].cs, &part, COLOR_FROM_LINEAR);
+    }
+    RegionTranslate(&rest, -ox, -oy);
     colorConvertRegion(pLin, compColorFloatFormat(pScreen), pEnc, format, NULL,
-                       colorOutput(pScreen), pRegion, COLOR_FROM_LINEAR);
-    RegionTranslate(pRegion, ox, oy);
+                       colorOutput(pScreen), &rest, COLOR_FROM_LINEAR);
+    RegionUninit(&rest);
+    RegionUninit(&part);
     PicturePtr pSrc = CreatePicture(0, &pEnc->drawable, format, 0, NULL,
                                     serverClient, &error);
     if (pSrc) {
@@ -894,7 +1069,124 @@ compColorWindowDestroy(WindowPtr pWin)
 void
 compColorCloseScreen(ScreenPtr pScreen)
 {
-    outputSet[pScreen->myNum] = false;
+    int s = pScreen->myNum;
+
+    outputSet[s] = screenSet[s] = false;
+    memset(crtcSpaces[s], 0, sizeof(crtcSpaces[s]));
+    crtcShownCount[s] = 0;
+}
+
+/* ---- CRTCs showing other colour spaces ----------------------------------- */
+
+/* Where what is composed is shown in which space: each lit CRTC, then
+   the whole screen, in the screen's space, for what no CRTC shows (an
+   earlier entry takes precedence where they overlap). Empty if all of
+   them show the space composed for. */
+static int
+colorOtherCrtcs(ScreenPtr pScreen, ColorCrtcShownRec *out)
+{
+    int n = 0, s = pScreen->myNum;
+    bool any = screenSet[s] && !colorSameSpace(&screenSpace[s], colorOutput(pScreen));
+
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++)
+        any = any || crtcSpaces[s][i].crtc != NULL;
+    if (!any)
+        return 0;
+    any = false;
+    rrScrPrivPtr pScrPriv = dixPrivateKeyRegistered(rrPrivKey) ? rrGetScrPriv(pScreen) : NULL;
+    for (int i = 0; pScrPriv && i < pScrPriv->numCrtcs && n < COLOR_MAX_CRTCS; i++) {
+        RRCrtcPtr crtc = pScrPriv->crtcs[i];
+        int w, h;
+        if (!crtc->mode || !crtc->numOutputs)
+            continue;
+        const XpColorSpace *cs = colorCrtcSpace(pScreen, crtc);
+        any = any || !colorSameSpace(cs, colorOutput(pScreen));
+        RRCrtcGetScanoutSize(crtc, &w, &h);
+        out[n++] = (ColorCrtcShownRec) {
+            .crtc = crtc, .cs = cs,
+            .box = { crtc->x, crtc->y, crtc->x + w, crtc->y + h },
+        };
+    }
+    const XpColorSpace *cs = colorScreenSpace(pScreen);
+    any = any || !colorSameSpace(cs, colorOutput(pScreen));
+    out[n++] = (ColorCrtcShownRec) {
+        .cs = cs,
+        .box = { 0, 0, pScreen->width, pScreen->height },
+    };
+    return any ? n : 0;
+}
+
+bool
+compColorCrtcsChanged(ScreenPtr pScreen)
+{
+    int s = pScreen->myNum;
+    ColorCrtcShownRec now[COLOR_MAX_CRTCS + 1];
+    int n = colorOtherCrtcs(pScreen, now);
+    bool changed = n != crtcShownCount[s] ||
+        memcmp(now, crtcShown[s], n * sizeof(*now));
+
+    memcpy(crtcShown[s], now, n * sizeof(*now));
+    crtcShownCount[s] = n;
+    return changed;
+}
+
+void
+compColorEncodeCrtcs(ScreenPtr pScreen, PicturePtr pDst, int dx, int dy,
+                     RegionPtr pRegion)
+{
+    ColorCrtcShownRec crtcs[COLOR_MAX_CRTCS + 1];
+    int n = colorOtherCrtcs(pScreen, crtcs), error;
+    PixmapPtr pScreenPixmap = (*pScreen->GetScreenPixmap) (pScreen);
+    PictFormatPtr format = pDst->pFormat;
+    RegionRec rest, part;
+
+    if (!n || compColorLinear(pScreen))
+        return;
+    RegionNull(&rest);
+    RegionNull(&part);
+    RegionCopy(&rest, pRegion);
+    for (int i = 0; i < n; i++) {
+        RegionReset(&part, &crtcs[i].box);
+        RegionIntersect(&part, &part, &rest);
+        RegionSubtract(&rest, &rest, &part);
+        if (!RegionNotEmpty(&part) || colorSameSpace(crtcs[i].cs, colorOutput(pScreen)))
+            continue;
+        /* the part's extents, copied out of the screen pixmap, converted
+           into a second pixmap and drawn back through Render */
+        const BoxRec ext = *RegionExtents(&part), *e = &ext;   /* part moves */
+        int w = e->x2 - e->x1, h = e->y2 - e->y1;
+        int sx = e->x1 - pScreenPixmap->screen_x, sy = e->y1 - pScreenPixmap->screen_y;
+        PixmapPtr pIn = (*pScreen->CreatePixmap) (pScreen, w, h, format->depth, 0);
+        PixmapPtr pOut = (*pScreen->CreatePixmap) (pScreen, w, h, format->depth, 0);
+        GCPtr pGC = pIn ? GetScratchGC(format->depth, pScreen) : NULL;
+        if (pGC) {
+            ValidateGC(&pIn->drawable, pGC);
+            (*pGC->ops->CopyArea) (&pScreenPixmap->drawable, &pIn->drawable, pGC,
+                                   sx, sy, w, h, 0, 0);
+            FreeScratchGC(pGC);
+        }
+        if (pGC && pOut) {
+            RegionTranslate(&part, -e->x1, -e->y1);
+            colorConvertRegion(pIn, format, pOut, format, colorOutput(pScreen),
+                               crtcs[i].cs, &part, COLOR_ENCODED);
+            RegionTranslate(&part, e->x1 - dx, e->y1 - dy);
+            PicturePtr pSrc = CreatePicture(0, &pOut->drawable, format, 0, NULL,
+                                            serverClient, &error);
+            if (pSrc) {
+                SetPictureClipRegion(pDst, 0, 0, &part);
+                CompositePicture(PictOpSrc, pSrc, NULL, pDst, 0, 0, 0, 0,
+                                 e->x1 - dx, e->y1 - dy, w, h);
+                SetPictureClipRegion(pDst, 0, 0, NULL);
+                FreePicture(pSrc, 0);
+            }
+        }
+        if (pIn)
+            dixDestroyPixmap(pIn, 0);
+        if (pOut)
+            dixDestroyPixmap(pOut, 0);
+    }
+    RegionUninit(&rest);
+    RegionUninit(&part);
 }
 
 bool
@@ -1113,12 +1405,17 @@ ProcXpColorGetOutputColorSpace(ClientPtr client)
         return rc;
     }
 
-    const XpColorSpace *cs = colorOutput(output->pScreen);
+    /* what its CRTC's monitor shows; off, what the only CRTC it can
+       have would show, else the screen's */
+    RRCrtcPtr crtc = output->crtc ? output->crtc :
+        output->numCrtcs == 1 ? output->crtcs[0] : NULL;
+    const XpColorSpace *cs = crtc ?
+        colorCrtcSpace(output->pScreen, crtc) : colorScreenSpace(output->pScreen);
     CARD8 primaries = XpColorPrimariesCustom;
     for (CARD8 p = XpColorPrimariesSRGB; p <= XpColorPrimariesLast; p++)
         if (!memcmp(&cs->primaries, namedPrimaries[p], sizeof(XpColorPrimaries)))
             primaries = p;
-    xXpColorGetOutputColorSpaceReply reply = { .set = cs != &xpColorSpaceSRGB };
+    xXpColorGetOutputColorSpaceReply reply = { .set = !colorIsSRGB(cs) };
     colorToDesc(cs, primaries, &reply.desc);
     if (client->swapped)
         colorSwapDesc(&reply.desc);

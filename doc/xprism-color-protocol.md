@@ -246,7 +246,9 @@ Errors: RandR's for an unknown output
 ```
 
 Returns what the compositor shows on the output, in the form of
-`GetWindowColorSpace`; `set` is False for sRGB. Applications can use it
+`GetWindowColorSpace`; `set` is False for sRGB. Each CRTC can show its
+own space; an output gets its CRTC's (when it is off, that of the only
+CRTC it can use, or else the screen's). Applications can use it
 to choose what to render, for example HDR only where an output can
 show it. An event when it changes will come with the modesetting
 driver, where outputs change at run time; on Xvfb they do not.
@@ -282,7 +284,9 @@ encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
 - Windows of depths other than 24, 30 and 32 (16-bit visuals) are not
   converted, as before; composing in linear light, their pixels are
   taken as linear.
-- One colour space per screen: on the modesetting driver, screens with
-  several monitors will need one per CRTC.
+- Where CRTCs show different spaces, the software cursor is in the
+  space composed for, and windows are not shown directly. Without glamor,
+  composition is then in 10-bit PQ (if any CRTC is HDR), and saturated
+  colours on SDR CRTCs come back slightly off near black.
 - Hardware cursors (modesetting) will need the same conversion as the
   software cursor, which is converted (step 5).
