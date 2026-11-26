@@ -676,13 +676,12 @@ compColorSerial(void)
     return colorSerial;
 }
 
-/* A copy of src (sRGB, in format) as the output shows it, or NULL;
-   composing in linear light, a floating point pixmap in linear light. */
-PixmapPtr
-compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format)
+/* A copy of src (sRGB, in format) as the output shows it, or, linear, a
+   floating point pixmap in its linear light; NULL if it cannot. */
+static PixmapPtr
+colorCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format, bool linear)
 {
     const XpColorSpace *out = colorOutput(pScreen);
-    bool linear = compColorLinear(pScreen);
     PixmapPtr dst;
 
     if (src->drawable.bitsPerPixel != 32)
@@ -702,6 +701,32 @@ compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format)
                        out, &r, linear ? COLOR_TO_LINEAR : COLOR_ENCODED);
     RegionUninit(&r);
     return dst;
+}
+
+/* A copy of src (sRGB, in format) as the output shows it, or NULL;
+   composing in linear light, a floating point pixmap in linear light. */
+PixmapPtr
+compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format)
+{
+    return colorCopy(pScreen, src, format, compColorLinear(pScreen));
+}
+
+CARD32
+CompositeOutputPixel(ScreenPtr pScreen, CARD32 pixel)
+{
+    if (!outputSet[pScreen->myNum] || !pScreen->root)
+        return pixel;
+    return compColorConvertPixel(pScreen, PictureWindowFormat(pScreen->root), pixel);
+}
+
+PixmapPtr
+CompositeOutputPixmap(ScreenPtr pScreen, PixmapPtr argb)
+{
+    PictFormatPtr format = PictureMatchFormat(pScreen, 32, PICT_a8r8g8b8);
+
+    if (!outputSet[pScreen->myNum] || !format || argb->drawable.depth != 32)
+        return NULL;
+    return colorCopy(pScreen, argb, format, false);
 }
 
 /* An sRGB colour (8-bit, for the root background and shadows) as the

@@ -56,6 +56,7 @@ in this Software without prior written authorization from The Open Group.
 #include   "dixfontstr.h"
 #include   "inputstr.h"
 #include   "damage.h"
+#include   "compositeext.h"
 
 typedef struct {
     CursorPtr pCursor;
@@ -87,6 +88,9 @@ typedef struct {
     ScreenBlockHandlerProcPtr BlockHandler;
 
     xColorItem colors[2];
+    /* colors' pixels as the output shows them (XPrism: colour spaces) */
+    Pixel shown[2], shownFrom[2];
+    bool shownSet[2];
     ColormapPtr pInstalledMap;
     ColormapPtr pColormap;
     VisualPtr pVisual;
@@ -822,10 +826,18 @@ miSpriteRestoreCursor(DeviceIntPtr pDev, ScreenPtr pScreen)
     SPRITE_DEBUG(("RestoreCursor %d\n", pDev->id));
     if (pCursorInfo->checkPixels)
         miSpriteFindColors(pCursorInfo, pScreen);
+    for (int k = 0; k < 2; k++) {
+        Pixel p = pScreenPriv->colors[k].pixel;
+        if (!pScreenPriv->shownSet[k] || pScreenPriv->shownFrom[k] != p) {
+            pScreenPriv->shown[k] = CompositeOutputPixel(pScreen, p);
+            pScreenPriv->shownFrom[k] = p;
+            pScreenPriv->shownSet[k] = true;
+        }
+    }
     if (miDCPutUpCursor(pDev, pScreen,
                         pCursor, x, y,
-                        pScreenPriv->colors[SOURCE_COLOR].pixel,
-                        pScreenPriv->colors[MASK_COLOR].pixel)) {
+                        pScreenPriv->shown[SOURCE_COLOR],
+                        pScreenPriv->shown[MASK_COLOR])) {
         miSpriteIsUp(pCursorInfo);
         pCursorInfo->pScreen = pScreen;
     }

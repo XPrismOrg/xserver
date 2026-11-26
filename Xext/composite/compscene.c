@@ -110,8 +110,11 @@ typedef struct {
     PixUnion bg;
     /* fullscreen window shown directly (unredirected), or None */
     XID direct;
-    /* the root background's tile as the output shows it (XPRISM-COLOR) */
+    /* the root background's tile as the output shows it (XPRISM-COLOR);
+       drawing into the tile makes the copy stale */
     PixmapPtr bgTileSrc, bgTile;
+    DamagePtr bgTileDamage;
+    bool bgTileStale;
     unsigned colorSerial;
     /* report drawing onto the root window, before and after it happens */
     DamagePtr rootDamage;
@@ -801,6 +804,11 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
         ss->fullDamage = true;
     }
 
+    /* drawn into the root's tile: its converted copy is stale, paint it
+       again (on sRGB outputs that shows when the root is next painted) */
+    if (ss->bgTileStale)
+        ss->fullDamage = true;
+
     /* root background (xsetroot, wallpaper setters) */
     if (pRoot->backgroundState != ss->bgState ||
         memcmp(&pRoot->background, &ss->bg, sizeof(PixUnion))) {
@@ -816,6 +824,54 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 }
 
 /* ---- painting -------------------------------------------------------- */
+
+static void
+sceneTileDamaged(DamagePtr pDamage, RegionPtr pRegion, void *closure)
+{
+    ((SceneScreenPtr) closure)->bgTileStale = true;
+}
+
+static void
+sceneTileDamageDestroy(DamagePtr pDamage, void *closure)
+{
+    SceneScreenPtr ss = closure;
+
+    if (ss->bgTileDamage == pDamage)
+        ss->bgTileDamage = NULL;
+}
+
+static void
+sceneUntrackTile(SceneScreenPtr ss)
+{
+    DamagePtr d = ss->bgTileDamage;
+
+    ss->bgTileDamage = NULL;
+    if (d) {
+        DamageUnregister(d);
+        DamageDestroy(d);
+    }
+}
+
+/* The root's tile as the output shows it, converted again when it was
+   drawn into; NULL if it cannot. */
+static PixmapPtr
+sceneConvertedTile(ScreenPtr pScreen, SceneScreenPtr ss, PixmapPtr pTile)
+{
+    if (ss->bgTileSrc == pTile && !ss->bgTileStale)
+        return ss->bgTile;
+    sceneUntrackTile(ss);
+    if (ss->bgTile)
+        dixDestroyPixmap(ss->bgTile, 0);
+    ss->bgTile = compColorConvertedCopy(pScreen, pTile,
+                                        PictureWindowFormat(pScreen->root));
+    ss->bgTileSrc = pTile;
+    ss->bgTileStale = false;
+    ss->bgTileDamage = DamageCreate(sceneTileDamaged, sceneTileDamageDestroy,
+                                    DamageReportRawRegion, FALSE, pScreen, ss);
+    if (ss->bgTileDamage)
+        DamageRegister(&pTile->drawable, ss->bgTileDamage);
+    return ss->bgTile;
+}
 
 /*
  * Where layers are painted: the screen, or a scratch picture covering part
@@ -887,14 +943,7 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
         SceneScreenPtr ss = sceneScreen(pScreen);
         /* on outputs other than sRGB, a converted copy */
         if (!compColorOutputIsSRGB(pScreen)) {
-            if (ss->bgTileSrc != pTile) {
-                if (ss->bgTile)
-                    dixDestroyPixmap(ss->bgTile, 0);
-                ss->bgTile = compColorConvertedCopy(pScreen, pTile,
-                                                    PictureWindowFormat(pRoot));
-                ss->bgTileSrc = pTile;
-            }
-            if (ss->bgTile) {
+            if (sceneConvertedTile(pScreen, ss, pTile)) {
                 pTile = ss->bgTile;
             } else if (t->linear) {
                 FreeScratchGC(pGC);     /* not of the buffer's depth */
@@ -1620,8 +1669,10 @@ sceneActivate(ScreenPtr pScreen, SceneScreenPtr ss)
                                   DamageReportRawRegion, TRUE, pScreen, pScreen);
     if (ss->rootDamage)
         DamageRegister(&pScreen->root->drawable, ss->rootDamage);
+    /* not internal: the software cursor (misprite draws with
+       DamageDrawInternal) is not drawing over the windows */
     ss->rootDrawnDamage = DamageCreate(sceneRootDrawnReport, sceneRootDamageDestroy,
-                                       DamageReportRawRegion, TRUE, pScreen,
+                                       DamageReportRawRegion, FALSE, pScreen,
                                        pScreen);
     if (ss->rootDrawnDamage) {
         DamageSetReportAfterOp(ss->rootDrawnDamage, TRUE);
@@ -2180,6 +2231,7 @@ sceneCloseScreen(CallbackListPtr *pcbl, ScreenPtr pScreen, void *unused)
     compColorCloseScreen(pScreen);
     if (!ss)
         return;
+    sceneUntrackTile(ss);
     if (ss->bgTile)
         dixDestroyPixmap(ss->bgTile, 0);
     free(ss->nodes);

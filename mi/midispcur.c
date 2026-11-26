@@ -51,6 +51,7 @@ in this Software without prior written authorization from The Open Group.
 #include   "gcstruct.h"
 #include   "picturestr.h"
 #include "inputstr.h"
+#include "compositeext.h"
 
 /* per-screen private data */
 static DevPrivateKeyRec miDCScreenKeyRec;
@@ -218,6 +219,12 @@ miDCRealize(ScreenPtr pScreen, CursorPtr pCursor)
                                pCursor->bits->height,
                                0, ZPixmap, (char *) pCursor->bits->argb);
         FreeScratchGC(pGC);
+        /* the cursor's pixels are sRGB: as the output shows them */
+        PixmapPtr pShown = CompositeOutputPixmap(pScreen, pPixmap);
+        if (pShown) {
+            dixDestroyPixmap(pPixmap, 0);
+            pPixmap = pShown;
+        }
         pPicture = CreatePicture(0, &pPixmap->drawable,
                                  pFormat, 0, 0, serverClient, &error);
         dixDestroyPixmap(pPixmap, 0);

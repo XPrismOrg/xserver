@@ -109,4 +109,14 @@ typedef struct {
 extern _X_EXPORT void CompositeSetOutputColorSpace(ScreenPtr pScreen,
                                                    const CompositeColorSpaceRec *space);
 
+/*
+ * XPrism: for what is drawn over the composed screen, such as the
+ * software cursor. CompositeOutputPixel: an sRGB pixel of the root
+ * window's format as the output shows it (the pixel itself on sRGB
+ * outputs). CompositeOutputPixmap: a copy of a depth-32 a8r8g8b8 sRGB
+ * pixmap as the output shows it, or NULL on sRGB outputs.
+ */
+extern _X_EXPORT CARD32 CompositeOutputPixel(ScreenPtr pScreen, CARD32 pixel);
+extern _X_EXPORT PixmapPtr CompositeOutputPixmap(ScreenPtr pScreen, PixmapPtr argb);
+
 #endif                          /* _COMPOSITEEXT_H_ */

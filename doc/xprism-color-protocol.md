@@ -117,8 +117,9 @@ cost nothing.
   becomes the most saturated sRGB red of the same hue, not sRGB's pure
   red with its channels clipped).
 
-The root window's background and the shadows of XPRISM-SCENE are sRGB
-and are converted the same way.
+The root window's background (also after drawing into its tile), the
+shadows of XPRISM-SCENE and the software cursor (core and ARGB cursors)
+are sRGB and are converted the same way.
 
 A full-screen window is shown directly (without composition) only when
 it is shown as it is: its colour space is the output's, and for PQ, its
@@ -277,7 +278,5 @@ encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
   several monitors will need one per CRTC.
 - Outputs with the HLG transfer function are not supported (content
   with it is).
-- The software cursor (Xvfb, and drivers without a hardware cursor) is
-  drawn in the output's encoding unconverted.
-- The root background's tile is converted when it is set; drawing into
-  the tile pixmap afterwards is not shown.
+- Hardware cursors (modesetting) will need the same conversion as the
+  software cursor, which is converted (step 5).

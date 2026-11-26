@@ -203,6 +203,21 @@ class TestP3Output:
         want = as8(shown(rgb8(GREY), XY[SRGB], srgb_decode, XY[P3], srgb_encode))
         assert near8(x.pixel(10, 10), want), hex(x.pixel(10, 10))
 
+    def test_drawing_into_root_tile(self, xvfb):
+        """Drawing into the tile shows when the root is next painted, as
+        on sRGB outputs."""
+        x = Color(xvfb)
+        pix = x.c.alloc_id()
+        x.req(53, 24, struct.pack("<IIHH", pix, x.root, 16, 16))   # CreatePixmap
+        x.fill(pix, ORANGE, 0, 0, 16, 16)
+        x.req(2, 0, struct.pack("<III", x.root, 0x1, pix))         # CWBackPixmap
+        x.req(61, 0, struct.pack("<IhhHH", x.root, 0, 0, 0, 0))     # ClearArea
+        x.pixel(10, 10)
+        x.fill(pix, GREY, 0, 0, 16, 16)
+        x.req(61, 0, struct.pack("<IhhHH", x.root, 0, 0, 0, 0))
+        want = as8(shown(rgb8(GREY), XY[SRGB], srgb_decode, XY[P3], srgb_encode))
+        assert near8(x.pixel(10, 10), want), hex(x.pixel(10, 10))
+
     def test_shadow_colour(self, xvfb):
         x = Color(xvfb)
         w = _window(x, GREY)

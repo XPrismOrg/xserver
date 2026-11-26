@@ -129,6 +129,7 @@ Taking over requires the `compositor.legacy` capability, see
 | `test/pyxtest/test_color.py` | XPRISM-COLOR tests |
 | `test/pyxtest/test_color_output.py` | Output colour spaces |
 | `test/pyxtest/test_color_linear.py` | Composition in linear light (GPU) |
+| `test/pyxtest/test_color_cursor.py` | The software cursor on colour-managed outputs |
 | `test/compcolor.c` | Unit tests of the colour library |
 
 ## Limitations
