@@ -56,9 +56,10 @@ contexts themselves.
 - popups (menus, tooltips) as override-redirect windows placed by their
   positioner; a grabbing popup gets the keyboard and an X pointer grab,
   and a click outside it closes it
-- the clipboard (text) both ways: a Wayland copy owns X's CLIPBOARD
-  (UTF8_STRING, TEXT, STRING as Latin-1, TARGETS), and the X clipboard is
-  offered to the Wayland client with the keyboard
+- the clipboard and the primary selection (text) both ways: a Wayland
+  copy or selection owns X's CLIPBOARD or PRIMARY (UTF8_STRING, TEXT,
+  STRING as Latin-1, TARGETS), and X's are offered to the Wayland client
+  with the keyboard (`wl_data_device`, `zwp_primary_selection_v1`)
 - transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
   compositing manager (or XPrism's compositor) blends
 - windows X lost while covered (no compositor) are repainted on Expose
@@ -71,8 +72,8 @@ Buffers are copied into the window with `PutImage` for now.
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
 - subsurfaces, keeping popups on screen (positioner constraints)
-- the PRIMARY selection, clipboard types other than text, large X
-  transfers (INCR), and drag and drop (XDND)
+- clipboard types other than text, large X transfers (INCR), and drag
+  and drop (XDND)
 - one namespace per sandboxed application (today all sandboxed clients
   share `--sandbox-display`)
 

@@ -21,11 +21,13 @@
 //
 // --copy TEXT puts TEXT on the clipboard once the window has the keyboard
 // ("copied"; "sent" when someone pasted it); --paste prints every clipboard
-// text it is offered ("pasted TEXT").
+// text it is offered ("pasted TEXT"). With --primary both use the primary
+// selection (zwp_primary_selection_v1) instead of the clipboard.
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]
-//                    [--copy TEXT] [--paste] [--alpha] [--security-context APP_ID]
+//                    [--copy TEXT] [--paste] [--primary] [--alpha]
+//                    [--security-context APP_ID]
 
 use std::fs::File;
 use std::io::Write;
@@ -37,6 +39,10 @@ use wayland_client::protocol::{
 };
 use wayland_client::{
     delegate_noop, event_created_child, Connection, Dispatch, QueueHandle, WEnum,
+};
+use wayland_protocols::wp::primary_selection::zv1::client::{
+    zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
+    zwp_primary_selection_offer_v1, zwp_primary_selection_source_v1,
 };
 use wayland_protocols::wp::security_context::v1::client::{
     wp_security_context_manager_v1, wp_security_context_v1,
@@ -76,6 +82,10 @@ struct App {
     copy: Option<String>,
     paste: bool,
     alpha: bool,
+    primary: bool,
+    primary_manager:
+        Option<zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1>,
+    primary_device: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
 }
 
 const TEXT: &str = "text/plain;charset=utf-8";
@@ -190,6 +200,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 "wl_seat" => app.seat = Some(registry.bind(name, 5, qh, ())),
                 "wl_data_device_manager" => app.data_manager = Some(registry.bind(name, 3, qh, ())),
+                "zwp_primary_selection_device_manager_v1" => {
+                    app.primary_manager = Some(registry.bind(name, 1, qh, ()))
+                }
                 _ => {}
             }
         }
@@ -362,7 +375,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
             wl_keyboard::Event::Enter { serial, .. } => {
                 say("keyboard enter".into());
                 // copy once we may: with the serial of the focus
-                if let (Some(text), Some(manager), Some(device)) =
+                if app.primary {
+                    if let (Some(text), Some(manager), Some(device)) =
+                        (app.copy.take(), &app.primary_manager, &app.primary_device)
+                    {
+                        let source = manager.create_source(qh, text);
+                        source.offer(TEXT.into());
+                        device.set_selection(Some(&source), serial);
+                        say("copied".into());
+                    }
+                } else if let (Some(text), Some(manager), Some(device)) =
                     (app.copy.take(), &app.data_manager, &app.data_device)
                 {
                     let source = manager.create_data_source(qh, text);
@@ -463,20 +485,14 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
         let wl_data_device::Event::Selection { id: Some(offer) } = event else {
             return;
         };
-        if !app.paste {
+        if !app.paste || app.primary {
             return;
         }
         let (reader, writer) = std::io::pipe().expect("pipe");
         offer.receive(TEXT.into(), writer.as_fd());
         drop(writer);
         let _ = conn.flush();
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let mut text = String::new();
-            let mut reader = reader;
-            let _ = reader.read_to_string(&mut text);
-            say(format!("pasted {text}"));
-        });
+        print_pasted(reader);
     }
 
     event_created_child!(App, wl_data_device::WlDataDevice, [
@@ -540,6 +556,64 @@ fn sandboxed(first: &Connection, app_id: &str) -> (Connection, std::io::PipeWrit
     (conn, close_w)
 }
 
+/// read what the pipe brings and say "pasted TEXT" (in a thread: the
+/// compositor writes it while we go on)
+fn print_pasted(reader: std::io::PipeReader) {
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut text = String::new();
+        let mut reader = reader;
+        let _ = reader.read_to_string(&mut text);
+        say(format!("pasted {text}"));
+    });
+}
+
+impl Dispatch<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1, ()> for App {
+    fn event(
+        app: &mut App,
+        _: &zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
+        event: zwp_primary_selection_device_v1::Event,
+        _: &(),
+        conn: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        let zwp_primary_selection_device_v1::Event::Selection { id: Some(offer) } = event else {
+            return;
+        };
+        if !app.paste || !app.primary {
+            return;
+        }
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        offer.receive(TEXT.into(), writer.as_fd());
+        drop(writer);
+        let _ = conn.flush();
+        print_pasted(reader);
+    }
+
+    event_created_child!(App, zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1, [
+        zwp_primary_selection_device_v1::EVT_DATA_OFFER_OPCODE =>
+            (zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1, ()),
+    ]);
+}
+
+impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, String> for App {
+    fn event(
+        _: &mut App,
+        _: &zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
+        event: zwp_primary_selection_source_v1::Event,
+        text: &String,
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        if let zwp_primary_selection_source_v1::Event::Send { fd, .. } = event {
+            let _ = File::from(fd).write_all(text.as_bytes());
+            say("sent".into());
+        }
+    }
+}
+
+delegate_noop!(App: ignore zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1);
+delegate_noop!(App: ignore zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1);
 delegate_noop!(App: ignore wl_data_offer::WlDataOffer);
 delegate_noop!(App: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
@@ -559,10 +633,11 @@ fn main() {
     let mut paste = false;
     let mut alpha = false;
     let mut security_context = None;
+    let mut primary = false;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
-        let v = if a == "--grab" || a == "--paste" || a == "--alpha" {
+        let v = if ["--grab", "--paste", "--alpha", "--primary"].contains(&a.as_str()) {
             String::new()
         } else {
             args.next().unwrap_or_default()
@@ -600,12 +675,16 @@ fn main() {
                 alpha = true;
                 continue;
             }
+            "--primary" => {
+                primary = true;
+                continue;
+            }
             "--grab" => {
                 popup_spec.as_mut().expect("--popup first").grab = true;
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--alpha] [--security-context APP_ID]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--primary] [--alpha] [--security-context APP_ID]");
                 std::process::exit(2);
             }
         }
@@ -643,6 +722,9 @@ fn main() {
         copy,
         paste,
         alpha,
+        primary,
+        primary_manager: None,
+        primary_device: None,
     };
     queue.roundtrip(&mut app).expect("roundtrip");
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {
@@ -655,6 +737,9 @@ fn main() {
     }
     if let (Some(manager), Some(seat)) = (&app.data_manager, &app.seat) {
         app.data_device = Some(manager.get_data_device(seat, &qh, ()));
+    }
+    if let (Some(manager), Some(seat)) = (&app.primary_manager, &app.seat) {
+        app.primary_device = Some(manager.get_device(seat, &qh, ()));
     }
     let surface = compositor.create_surface(&qh, ());
     let xs = wm_base.get_xdg_surface(&surface, &qh, false);

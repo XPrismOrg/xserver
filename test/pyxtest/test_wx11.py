@@ -591,3 +591,37 @@ class TestSandbox:
             xns.terminate()
             xns.wait(timeout=5)
             shutil.rmtree(runtime, ignore_errors=True)
+
+
+def _selection_text(conn, selection, target_name="UTF8_STRING"):
+    """paste selection (an atom name) as target_name from an X client"""
+    from test_clipboard_grants import _received
+    win = conn.create_window()
+    sel, target = conn.intern_atom(selection), conn.intern_atom(target_name)
+    prop = conn.intern_atom("WX11_TEST")
+    conn.send_request(struct.pack("<BxHIIIII", 24, 6, win, sel, target, prop, 0))
+    return _received(conn, win, prop)
+
+
+def test_wayland_primary_selection_pastes_in_x(xserver, client):
+    c, win = _shown(xserver, client, "selecting", "--primary", "--copy", "selected text")
+    Input(xserver).focus(win)
+    c.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    from test_clipboard_grants import _owner
+    end = time.monotonic() + 5
+    while not _owner(conn, 1) and time.monotonic() < end:       # PRIMARY is atom 1
+        time.sleep(0.05)
+    assert _selection_text(conn, "PRIMARY") == b"selected text"
+    # the clipboard is another matter
+    assert not _owner(conn, conn.intern_atom("CLIPBOARD"))
+
+
+def test_x_primary_selection_pastes_in_wayland(xserver, client):
+    from test_clipboard_grants import _answer, _set_owner
+    owner = RawX11Connection(xserver.display_num)
+    _set_owner(owner, owner.create_window(), 1)                 # PRIMARY
+    c, win = _shown(xserver, client, "middle click", "--primary", "--paste")
+    Input(xserver).focus(win)
+    assert _answer(owner, b"from X primary"), "WX11 did not ask the PRIMARY owner"
+    c.wait_for("pasted from X primary")

@@ -38,17 +38,26 @@ pub enum Event {
     /// the pointer moved to x, y in the window
     Motion(u32, f64, f64, u32),
     /// another X client owns CLIPBOARD now (None: nobody does)
-    ClipboardOwner(Option<u32>),
+    ClipboardOwner(Sel, Option<u32>),
     /// an X client asks for our CLIPBOARD (we own it for a Wayland client)
     ClipboardRequest(SelectionRequest),
     /// the X clipboard we asked for (None: refused)
-    ClipboardData(Option<Vec<u8>>),
+    ClipboardData(Sel, Option<Vec<u8>>),
     /// an X pointer button went down (true) or up, at x, y in the window
     Button(u32, u8, bool, f64, f64, u32),
 }
 
+/// the selections WX11 bridges: CLIPBOARD (copy and paste) and PRIMARY
+/// (select, then middle-click)
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Sel {
+    Clipboard,
+    Primary,
+}
+
 /// what an X client asked of the clipboard WX11 owns
 pub struct SelectionRequest {
+    pub which: Sel,
     requestor: u32,
     selection: u32,
     target: u32,
@@ -117,6 +126,7 @@ pub struct XSide {
     targets: u32,
     text: u32,
     wx11_selection: u32,
+    wx11_primary: u32,
     /// an InputOnly window that owns and requests selections
     sel_win: u32,
 }
@@ -157,6 +167,7 @@ impl XSide {
         let targets = atom("TARGETS")?;
         let text = atom("TEXT")?;
         let wx11_selection = atom("WX11_SELECTION")?;
+        let wx11_primary = atom("WX11_PRIMARY")?;
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
         let argb = match argb_visual {
@@ -186,16 +197,18 @@ impl XSide {
             0,
             &CreateWindowAux::new(),
         )?;
-        // hear about every change of the CLIPBOARD owner
+        // hear about every change of the CLIPBOARD and PRIMARY owners
         if watch_clipboard {
             conn.xfixes_query_version(5, 0)?.reply()?;
-            conn.xfixes_select_selection_input(
-                sel_win,
-                clipboard,
-                SelectionEventMask::SET_SELECTION_OWNER
-                    | SelectionEventMask::SELECTION_WINDOW_DESTROY
-                    | SelectionEventMask::SELECTION_CLIENT_CLOSE,
-            )?;
+            for selection in [clipboard, AtomEnum::PRIMARY.into()] {
+                conn.xfixes_select_selection_input(
+                    sel_win,
+                    selection,
+                    SelectionEventMask::SET_SELECTION_OWNER
+                        | SelectionEventMask::SELECTION_WINDOW_DESTROY
+                        | SelectionEventMask::SELECTION_CLIENT_CLOSE,
+                )?;
+            }
         }
         Ok(XSide {
             conn,
@@ -215,40 +228,65 @@ impl XSide {
             targets,
             text,
             wx11_selection,
+            wx11_primary,
             sel_win,
         })
     }
 
-    /// own CLIPBOARD on behalf of a Wayland client
-    pub fn own_clipboard(&self) {
-        let _ = self
-            .conn
-            .set_selection_owner(self.sel_win, self.clipboard, x11rb::CURRENT_TIME);
+    fn selection_atom(&self, which: Sel) -> u32 {
+        match which {
+            Sel::Clipboard => self.clipboard,
+            Sel::Primary => AtomEnum::PRIMARY.into(),
+        }
     }
 
-    /// give CLIPBOARD up, if we own it
-    pub fn disown_clipboard(&self) {
+    fn which(&self, atom: u32) -> Option<Sel> {
+        if atom == self.clipboard {
+            Some(Sel::Clipboard)
+        } else if atom == u32::from(AtomEnum::PRIMARY) {
+            Some(Sel::Primary)
+        } else {
+            None
+        }
+    }
+
+    /// own a selection on behalf of a Wayland client
+    pub fn own_clipboard(&self, which: Sel) {
+        let _ = self.conn.set_selection_owner(
+            self.sel_win,
+            self.selection_atom(which),
+            x11rb::CURRENT_TIME,
+        );
+    }
+
+    /// give a selection up, if we own it
+    pub fn disown_clipboard(&self, which: Sel) {
+        let atom = self.selection_atom(which);
         let owner = self
             .conn
-            .get_selection_owner(self.clipboard)
+            .get_selection_owner(atom)
             .ok()
             .and_then(|c| c.reply().ok())
             .map(|r| r.owner);
         if owner == Some(self.sel_win) {
             let _ = self
                 .conn
-                .set_selection_owner(x11rb::NONE, self.clipboard, x11rb::CURRENT_TIME);
+                .set_selection_owner(x11rb::NONE, atom, x11rb::CURRENT_TIME);
         }
     }
 
-    /// ask the X owner of CLIPBOARD for UTF-8 text; the answer comes as
-    /// Event::ClipboardData
-    pub fn request_clipboard(&self) {
+    /// ask the X owner of a selection for UTF-8 text; the answer comes as
+    /// Event::ClipboardData (each selection into its own property)
+    pub fn request_clipboard(&self, which: Sel) {
+        let property = match which {
+            Sel::Clipboard => self.wx11_selection,
+            Sel::Primary => self.wx11_primary,
+        };
         let _ = self.conn.convert_selection(
             self.sel_win,
-            self.clipboard,
+            self.selection_atom(which),
             self.utf8_string,
-            self.wx11_selection,
+            property,
             x11rb::CURRENT_TIME,
         );
     }
@@ -598,14 +636,18 @@ impl XSide {
         let mut out = Vec::new();
         while let Ok(Some(ev)) = self.conn.poll_for_event() {
             match ev {
-                XEvent::XfixesSelectionNotify(s) if s.selection == self.clipboard => {
+                XEvent::XfixesSelectionNotify(s) if self.which(s.selection).is_some() => {
                     let owner = (s.owner != x11rb::NONE).then_some(s.owner);
                     if owner != Some(self.sel_win) {
-                        out.push(Event::ClipboardOwner(owner));
+                        out.push(Event::ClipboardOwner(
+                            self.which(s.selection).unwrap(),
+                            owner,
+                        ));
                     }
                 }
-                XEvent::SelectionRequest(r) if r.selection == self.clipboard => {
+                XEvent::SelectionRequest(r) if self.which(r.selection).is_some() => {
                     out.push(Event::ClipboardRequest(SelectionRequest {
+                        which: self.which(r.selection).unwrap(),
                         requestor: r.requestor,
                         selection: r.selection,
                         target: r.target,
@@ -613,7 +655,10 @@ impl XSide {
                         time: r.time,
                     }))
                 }
-                XEvent::SelectionNotify(n) if n.requestor == self.sel_win => {
+                XEvent::SelectionNotify(n)
+                    if n.requestor == self.sel_win && self.which(n.selection).is_some() =>
+                {
+                    let which = self.which(n.selection).unwrap();
                     let data = (n.property != x11rb::NONE)
                         .then(|| {
                             self.conn
@@ -630,7 +675,7 @@ impl XSide {
                                 .map(|r| r.value)
                         })
                         .flatten();
-                    out.push(Event::ClipboardData(data));
+                    out.push(Event::ClipboardData(which, data));
                 }
                 XEvent::ClientMessage(m)
                     if m.type_ == self.wm_protocols

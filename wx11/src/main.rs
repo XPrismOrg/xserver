@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
+use smithay::delegate_primary_selection;
 use smithay::delegate_seat;
 use smithay::delegate_shm;
 use smithay::delegate_xdg_shell;
@@ -54,6 +55,10 @@ use smithay::wayland::selection::data_device::{
     set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
     ServerDndGrabHandler,
 };
+use smithay::wayland::selection::primary_selection::{
+    clear_primary_selection, request_primary_client_selection, set_primary_focus,
+    set_primary_selection, PrimarySelectionHandler, PrimarySelectionState,
+};
 use smithay::wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceData, XdgShellHandler,
@@ -63,6 +68,7 @@ use smithay::wayland::shm::{with_buffer_contents, ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
 use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
+use x::Sel;
 
 use smithay::delegate_security_context;
 use smithay::wayland::security_context::{
@@ -105,11 +111,12 @@ pub struct State {
     seat: Seat<State>,
     data_device: DataDeviceState,
     handle: LoopHandle<'static, State>,
-    /// the text type a Wayland client's clipboard offers, while it owns
-    /// the X CLIPBOARD
-    wayland_clipboard: Option<String>,
-    /// Wayland clients' pipes waiting for the X clipboard, in order
-    to_wayland: VecDeque<OwnedFd>,
+    /// the text type a Wayland client's selection offers, while it owns
+    /// that X selection (CLIPBOARD, PRIMARY)
+    wayland_selection: HashMap<Sel, String>,
+    /// Wayland clients' pipes waiting for an X selection, in order
+    to_wayland: HashMap<Sel, VecDeque<OwnedFd>>,
+    primary_selection: PrimarySelectionState,
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
     /// WX11's own connection (clipboard, keyboard layout)
@@ -698,10 +705,11 @@ impl State {
                         self.pointer_button(button, pressed, time)
                     }
                 }
-                x::Event::ClipboardOwner(owner) => self.x_clipboard_owner(owner),
+                x::Event::ClipboardOwner(which, owner) => self.x_clipboard_owner(which, owner),
                 x::Event::ClipboardRequest(req) => self.x_clipboard_request(req),
-                x::Event::ClipboardData(data) => {
-                    if let Some(fd) = self.to_wayland.pop_front() {
+                x::Event::ClipboardData(which, data) => {
+                    let waiting = self.to_wayland.entry(which).or_default().pop_front();
+                    if let Some(fd) = waiting {
                         if let Some(data) = data {
                             // a thread: the client may read slowly
                             std::thread::spawn(move || {
@@ -739,7 +747,8 @@ impl SeatHandler for State {
     /// the client with the keyboard sees the clipboard
     fn focus_changed(&mut self, seat: &Seat<State>, focused: Option<&WlSurface>) {
         let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
-        set_data_device_focus(&self.dh, seat, client);
+        set_data_device_focus(&self.dh, seat, client.clone());
+        set_primary_focus(&self.dh, seat, client);
     }
 }
 
@@ -752,21 +761,25 @@ const TEXT_TYPES: [&str; 4] = [
 ];
 
 impl State {
-    /// another X client took the clipboard (or nobody has it)
-    fn x_clipboard_owner(&mut self, owner: Option<u32>) {
-        self.wayland_clipboard = None;
-        if owner.is_some() {
-            let types = TEXT_TYPES.iter().map(|s| s.to_string()).collect();
-            set_data_device_selection(&self.dh, &self.seat, types, ());
-        } else {
-            clear_data_device_selection(&self.dh, &self.seat);
+    /// another X client took a selection (or nobody has it)
+    fn x_clipboard_owner(&mut self, which: Sel, owner: Option<u32>) {
+        self.wayland_selection.remove(&which);
+        let types: Vec<String> = TEXT_TYPES.iter().map(|s| s.to_string()).collect();
+        match (which, owner.is_some()) {
+            (Sel::Clipboard, true) => set_data_device_selection(&self.dh, &self.seat, types, ()),
+            (Sel::Clipboard, false) => clear_data_device_selection(&self.dh, &self.seat),
+            (Sel::Primary, true) => set_primary_selection(&self.dh, &self.seat, types, ()),
+            (Sel::Primary, false) => clear_primary_selection(&self.dh, &self.seat),
         }
     }
 
     /// an X client pastes what a Wayland client copied: read it from the
     /// Wayland client through a pipe, then answer
     fn x_clipboard_request(&mut self, req: x::SelectionRequest) {
-        let mime = match (&self.wayland_clipboard, self.x.clipboard_target(&req)) {
+        let mime = match (
+            self.wayland_selection.get(&req.which),
+            self.x.clipboard_target(&req),
+        ) {
             (None, _) | (_, x::ClipboardTarget::Other) => {
                 return self.x.answer_clipboard(&req, None);
             }
@@ -776,7 +789,15 @@ impl State {
         let Ok((reader, writer)) = std::io::pipe() else {
             return self.x.answer_clipboard(&req, None);
         };
-        if request_data_device_client_selection(&self.seat, mime, writer.into()).is_err() {
+        let asked = match req.which {
+            Sel::Clipboard => {
+                request_data_device_client_selection(&self.seat, mime, writer.into()).is_ok()
+            }
+            Sel::Primary => {
+                request_primary_client_selection(&self.seat, mime, writer.into()).is_ok()
+            }
+        };
+        if !asked {
             return self.x.answer_clipboard(&req, None);
         }
         let mut data = Vec::new();
@@ -804,6 +825,19 @@ impl State {
     }
 }
 
+fn sel(ty: SelectionTarget) -> Sel {
+    match ty {
+        SelectionTarget::Clipboard => Sel::Clipboard,
+        SelectionTarget::Primary => Sel::Primary,
+    }
+}
+
+impl PrimarySelectionHandler for State {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection
+    }
+}
+
 impl SelectionHandler for State {
     type SelectionUserData = ();
 
@@ -814,18 +848,18 @@ impl SelectionHandler for State {
         source: Option<SelectionSource>,
         _seat: Seat<State>,
     ) {
-        if ty != SelectionTarget::Clipboard {
-            return;
-        }
+        let which = sel(ty);
         let mimes = source.map(|s| s.mime_types()).unwrap_or_default();
-        self.wayland_clipboard = TEXT_TYPES
+        let text = TEXT_TYPES
             .iter()
             .find(|t| mimes.iter().any(|m| m == *t))
             .map(|t| t.to_string());
-        if self.wayland_clipboard.is_some() {
-            self.x.own_clipboard();
+        if let Some(text) = text {
+            self.wayland_selection.insert(which, text);
+            self.x.own_clipboard(which);
         } else {
-            self.x.disown_clipboard();
+            self.wayland_selection.remove(&which);
+            self.x.disown_clipboard(which);
         }
     }
 
@@ -838,10 +872,9 @@ impl SelectionHandler for State {
         _seat: Seat<State>,
         _user_data: &(),
     ) {
-        if ty == SelectionTarget::Clipboard {
-            self.to_wayland.push_back(fd);
-            self.x.request_clipboard();
-        }
+        let which = sel(ty);
+        self.to_wayland.entry(which).or_default().push_back(fd);
+        self.x.request_clipboard(which);
     }
 }
 
@@ -977,6 +1010,7 @@ delegate_shm!(State);
 delegate_xdg_shell!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
+delegate_primary_selection!(State);
 delegate_security_context!(State);
 
 impl SecurityContextHandler for State {
@@ -1115,8 +1149,9 @@ fn main() {
         seat,
         data_device: DataDeviceState::new::<State>(&dh),
         handle: event_loop.handle(),
-        wayland_clipboard: None,
-        to_wayland: VecDeque::new(),
+        wayland_selection: HashMap::new(),
+        to_wayland: HashMap::new(),
+        primary_selection: PrimarySelectionState::new::<State>(&dh),
         keyboard,
         pointer,
         compositor: CompositorState::new::<State>(&dh),
