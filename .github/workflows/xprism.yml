@@ -75,6 +75,18 @@ jobs:
                 for c in /sys/class/drm/card[0-9]; do udevadm info "$c" | grep -E "DEVPATH|ID_SEAT"; done
                 echo "XPRISM_KMS_TESTS=1" >> "$GITHUB_ENV"
 
+            # WX11 (Rust, wx11/): built before the tests so that
+            # test_wx11.py runs; WX11_REQUIRED makes it fail, not skip,
+            # if the build is missing
+            - name: build WX11
+              run: |
+                sudo apt-get install -y libxkbcommon-dev
+                cargo --version
+                cargo build --locked --manifest-path wx11/Cargo.toml
+                cargo clippy --locked --manifest-path wx11/Cargo.toml -- -D warnings
+                cargo fmt --manifest-path wx11/Cargo.toml --check
+                echo "WX11_REQUIRED=1" >> "$GITHUB_ENV"
+
             - name: build and test
               run: .github/scripts/ubuntu/run-xserver-build-and-test.sh
 

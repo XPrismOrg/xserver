@@ -1,0 +1,17 @@
+[package]
+name = "wx11"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "WX11: Wayland applications as X11 windows on XPrism"
+publish = false
+
+[dependencies]
+# protocol handling only: no renderer or backend, the X server is the backend
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+x11rb = "0.13"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+
+[profile.release]
+lto = "thin"
