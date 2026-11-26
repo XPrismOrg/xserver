@@ -9,7 +9,8 @@ windows.
 Version 0.1 defines two attributes per window, opacity and a transform.
 Version 0.2 adds two decorations, rounded corners and a drop shadow, and
 version 0.3 a third, background blur. From version 0.4, input follows
-transforms. Later versions are expected to add animation timing.
+transforms, and transformed windows have shadows and background blur.
+Later versions are expected to add animation timing.
 
 The wire format is defined in `Xext/composite/xprismsceneproto.h`.
 
@@ -66,9 +67,9 @@ them.
 | Mask bit | Decoration | Description |
 |---|---|---|
 | `1 << 2` | corner radius | The window's corners are rounded with this radius, in pixels, up to 1024. The radius is limited to half the window's shorter side. Corners are antialiased, and the rounding is applied together with the window's opacity and transform. |
-| `1 << 3` | shadow | A shadow with the window's outer size and rounded corners is drawn below the window, moved by `dx`, `dy` and blurred with a radius of `blur` pixels, up to 128. The colour is ARGB without premultiplication, so `0x80000000` is half-transparent black. Shadows are not drawn for transformed windows. |
+| `1 << 3` | shadow | A shadow with the window's outer size and rounded corners is drawn below the window, moved by `dx`, `dy` and blurred with a radius of `blur` pixels, up to 128. The colour is ARGB without premultiplication, so `0x80000000` is half-transparent black. For a transformed window (0.4), the shadow is its shape shown through the transform, moved by `dx`, `dy` on the screen; before 0.4 transformed windows had no shadow. |
 
-| `1 << 4` | background blur (0.3) | What shows through the window is blurred with a radius of up to 64 pixels. Only has an effect while the window is translucent, through its opacity or an alpha channel, and is not applied to transformed windows. |
+| `1 << 4` | background blur (0.3) | What shows through the window is blurred with a radius of up to 64 pixels. Only has an effect while the window is translucent, through its opacity or an alpha channel, and, from 0.4, also applies to transformed windows, over the area where they are shown. |
 
 The shadow is drawn over the windows below, and the window is drawn over
 its own shadow. Background blur shows the windows below the window and

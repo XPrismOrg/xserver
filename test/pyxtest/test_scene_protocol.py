@@ -375,6 +375,61 @@ def test_shadow_change_repaints(xvfb):
     assert x.pixel(90, 90) == ROOT_BG
 
 
+RIGHT_300 = [ONE, 0, 300 * ONE, 0, ONE, 0, 0, 0, ONE]
+TWICE = [2 * ONE, 0, 0, 0, 2 * ONE, 0, 0, 0, ONE]
+
+
+def test_transformed_window_casts_shadow(xvfb):
+    x, w, wm = _wm_and_window(xvfb)
+    assert wm.set(w, TRANSFORM, transform=RIGHT_300) == []
+    assert wm.decorate(w, SHADOW, blur=0, dx=20, dy=20, color=0xFFFFFFFF) == []
+    assert x.pixel(510, 210) == WHITE        # beside where it is shown
+    assert x.pixel(450, 150) == RED
+    assert x.pixel(525, 225) == ROOT_BG
+    assert x.pixel(210, 210) == ROOT_BG      # not where it really is
+
+
+def test_shadow_of_scaled_window_scales_with_it(xvfb):
+    x, w, wm = _wm_and_window(xvfb)
+    wm.set(w, TRANSFORM, transform=TWICE)    # shown 100..300
+    wm.decorate(w, SHADOW, blur=0, dx=20, dy=20, color=0xFFFFFFFF)
+    assert x.pixel(310, 310) == WHITE        # the offset is on the screen
+    assert x.pixel(250, 250) == RED
+    assert x.pixel(325, 325) == ROOT_BG
+    assert x.pixel(110, 310) == ROOT_BG
+
+
+def test_shadow_hidden_behind_translucent_transformed_window(xvfb):
+    x, w, wm = _wm_and_window(xvfb)
+    wm.set(w, OPACITY | TRANSFORM, 0x80000000, transform=RIGHT_300)
+    wm.decorate(w, RADIUS | SHADOW, radius=20, dx=10, dy=10, color=0xFFFFFFFF)
+    assert _near(x.pixel(450, 150), 0x7F0000)   # no white through the window
+    assert x.pixel(505, 150) == WHITE
+    assert x.pixel(498, 198) == WHITE           # in the rounded-off corner
+
+
+def test_background_blur_on_transformed_window(xvfb):
+    x, wm, glass, _ = _blur_scene(xvfb)
+    right_50 = [ONE, 0, 50 * ONE, 0, ONE, 0, 0, 0, ONE]
+    assert wm.set(glass, OPACITY | TRANSFORM, 0x10000000, transform=right_50) == []
+    assert _rgb(x.pixel(398, 200))[2] == 0          # sharp edge without blur
+    assert wm.decorate(glass, BLUR, bg_blur=16) == []
+    r, g, b = _rgb(x.pixel(398, 200))
+    assert r > 60 and b > 60, (r, g, b)               # blurred where shown
+    assert x.pixel(320, 200) == RED                   # not where it really is
+    assert x.pixel(398, 350) == RED
+    assert x.pixel(560, 200) == BLUE
+
+
+def test_background_blur_on_scaled_window(xvfb):
+    """The blur covers all of what is shown, here twice the window."""
+    x, wm, glass, _ = _blur_scene(xvfb)
+    wm.set(glass, OPACITY | TRANSFORM, 0x10000000, transform=TWICE)  # 300..700, 100..500
+    wm.decorate(glass, BLUR, bg_blur=16)
+    r, g, b = _rgb(x.pixel(398, 350))   # below the window's real bottom (300)
+    assert r > 60 and b > 60, (r, g, b)
+
+
 def test_decorated_fullscreen_window_is_composited(xvfb):
     x = Client(xvfb)
     fs = x.window(0, 0, SCREEN_W, SCREEN_H, GREEN)

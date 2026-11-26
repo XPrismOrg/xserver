@@ -134,7 +134,9 @@ Taking over requires the `compositor.legacy` capability, see
   corners, shadows and background blur. Input follows transforms
   (pointer hits and event coordinates), but `TranslateCoordinates`,
   pointer confinement and `WarpPointer` relative to a window use its
-  actual geometry. Transformed windows have no shadow or blur.
+  actual geometry. The shadow of a transformed window is recomputed
+  whenever it is repainted, unlike that of other windows, which is
+  cached.
 - Background blur costs about 1 to 16 ms to repaint a whole 600x400
   window in software, depending on the radius (small radii cost most),
   and well under 1 ms for small updates. With glamor the blur runs on

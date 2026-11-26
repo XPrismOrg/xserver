@@ -57,12 +57,13 @@ Bool sceneCompositorEnabled = XPRISM_COMPOSITOR_DEFAULT;  /* -Dcompositor_defaul
 /* One node of the scene: a viewable top-level window. */
 typedef struct {
     XID id;
-    BoxRec box;                 /* shown bounds, screen coords */
+    BoxRec box;                 /* shown bounds with shadow, screen coords */
+    BoxRec shown;               /* shown bounds of the window itself */
     CARD32 opacity;             /* 0xffffffff = opaque */
     bool transformed;
     PictTransform xform;        /* window -> shown (XPRISM-SCENE) */
     CARD16 radius;              /* corner radius, 0 = square */
-    bool shadow;                /* shadow drawn (never for transformed) */
+    bool shadow;                /* shadow drawn */
     BoxRec shadowBox;           /* screen coords, if shadow */
     CARD16 shadowBlur;
     CARD32 shadowColor;
@@ -207,11 +208,13 @@ sceneTransformPoint(const PictTransform *t, double x, double y,
     return true;
 }
 
-/* Bounds (window-local) of a w x h window shown through t. */
+/* Bounds (window-local) of the window-local rectangle x1,y1 - x2,y2 shown
+   through t. */
 static bool
-sceneTransformBounds(const PictTransform *t, int w, int h, BoxPtr box)
+sceneTransformRectBounds(const PictTransform *t, int rx1, int ry1, int rx2, int ry2,
+                         BoxPtr box)
 {
-    const double cx[4] = { 0, w, 0, w }, cy[4] = { 0, 0, h, h };
+    const double cx[4] = { rx1, rx2, rx1, rx2 }, cy[4] = { ry1, ry1, ry2, ry2 };
     double x1 = HUGE_VAL, y1 = HUGE_VAL, x2 = -HUGE_VAL, y2 = -HUGE_VAL;
 
     for (int i = 0; i < 4; i++) {
@@ -229,6 +232,13 @@ sceneTransformBounds(const PictTransform *t, int w, int h, BoxPtr box)
     box->x2 = (short) bx2;
     box->y2 = (short) by2;
     return true;
+}
+
+/* Bounds (window-local) of a w x h window shown through t. */
+static bool
+sceneTransformBounds(const PictTransform *t, int w, int h, BoxPtr box)
+{
+    return sceneTransformRectBounds(t, 0, 0, w, h, box);
 }
 
 /* ---- decoration masks (0.2) -------------------------------------------- */
@@ -634,6 +644,7 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
         memset(node, 0, sizeof(*node));
         node->id = pWin->drawable.id;
         node->box = *RegionExtents(&pWin->borderSize);
+        node->shown = node->box;
         node->opacity = (attrs->mask & XpSceneNodeOpacity) ?
             attrs->opacity : sceneWindowOpacity(pSettings);
         if (attrs->mask & XpSceneNodeTransform) {
@@ -649,35 +660,48 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
                     .x1 = max(local.x1 + ox, -32767), .y1 = max(local.y1 + oy, -32767),
                     .x2 = min(local.x2 + ox, 32767), .y2 = min(local.y2 + oy, 32767),
                 };
+                node->shown = node->box;
             }
         }
 
         if (attrs->mask & XpSceneNodeCornerRadius)
             node->radius = attrs->radius;
-        if ((attrs->mask & XpSceneNodeBackgroundBlur) && attrs->bgBlur &&
-            !node->transformed) {
+        if ((attrs->mask & XpSceneNodeBackgroundBlur) && attrs->bgBlur) {
             /* only what shows through the window is blurred */
             PictFormatPtr format = PictureWindowFormat(pWin);
             if (node->opacity != 0xffffffff ||
                 (format && format->direct.alphaMask))
                 node->bgBlur = attrs->bgBlur;
         }
-        if ((attrs->mask & XpSceneNodeShadow) && !node->transformed) {
+        if (attrs->mask & XpSceneNodeShadow) {
             int bw = wBorderWidth(pWin), b = attrs->shadowBlur;
+            int ow = pWin->drawable.width + 2 * bw, oh = pWin->drawable.height + 2 * bw;
             int x = pWin->drawable.x - bw + attrs->shadowDx - b;
             int y = pWin->drawable.y - bw + attrs->shadowDy - b;
-            node->shadow = true;
-            node->shadowBlur = attrs->shadowBlur;
-            node->shadowColor = attrs->shadowColor;
-            node->shadowBox = (BoxRec) {
-                .x1 = max(x, -32767), .y1 = max(y, -32767),
-                .x2 = min(x + pWin->drawable.width + 2 * bw + 2 * b, 32767),
-                .y2 = min(y + pWin->drawable.height + 2 * bw + 2 * b, 32767),
-            };
-            node->box.x1 = min(node->box.x1, node->shadowBox.x1);
-            node->box.y1 = min(node->box.y1, node->shadowBox.y1);
-            node->box.x2 = max(node->box.x2, node->shadowBox.x2);
-            node->box.y2 = max(node->box.y2, node->shadowBox.y2);
+            BoxRec local = { .x1 = -b, .y1 = -b, .x2 = ow + b, .y2 = oh + b };
+            /* transformed: the shadow is the window's shape shown through
+               the transform, then moved by dx, dy on the screen */
+            if (node->transformed) {
+                node->shadow = sceneTransformRectBounds(&attrs->xform, -b, -b,
+                                                        ow + b, oh + b, &local);
+                x = pWin->drawable.x - bw + attrs->shadowDx + local.x1;
+                y = pWin->drawable.y - bw + attrs->shadowDy + local.y1;
+            } else {
+                node->shadow = true;
+            }
+            if (node->shadow) {
+                node->shadowBlur = attrs->shadowBlur;
+                node->shadowColor = attrs->shadowColor;
+                node->shadowBox = (BoxRec) {
+                    .x1 = max(x, -32767), .y1 = max(y, -32767),
+                    .x2 = min(x + (local.x2 - local.x1), 32767),
+                    .y2 = min(y + (local.y2 - local.y1), 32767),
+                };
+                node->box.x1 = min(node->box.x1, node->shadowBox.x1);
+                node->box.y1 = min(node->box.y1, node->shadowBox.y1);
+                node->box.x2 = max(node->box.x2, node->shadowBox.x2);
+                node->box.y2 = max(node->box.y2, node->shadowBox.y2);
+            }
         }
 
         /* content drawn into the window since the last frame */
@@ -850,11 +874,35 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
     FreeScratchGC(pGC);
 }
 
+static void scenePaintShadowTransformed(ScreenPtr pScreen, const SceneTarget *t,
+                                        WindowPtr pWin, SceneAttrsPtr attrs,
+                                        const SceneNodeRec *node, RegionPtr pRegion);
+
+/* A premultiplied solid picture of an ARGB colour (not premultiplied). */
+static PicturePtr
+sceneSolidARGB(CARD32 c)
+{
+    int error;
+    CARD16 a = (c >> 24) * 0x101;
+    xRenderColor color = {
+        .red = ((c >> 16) & 0xff) * a / 0xff,
+        .green = ((c >> 8) & 0xff) * a / 0xff,
+        .blue = (c & 0xff) * a / 0xff,
+        .alpha = a,
+    };
+    return CreateSolidPicture(0, &color, &error);
+}
+
 static void
 scenePaintShadow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
                  SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pRegion)
 {
-    int bw = wBorderWidth(pWin), error;
+    if (node->transformed) {
+        scenePaintShadowTransformed(pScreen, t, pWin, attrs, node, pRegion);
+        return;
+    }
+
+    int bw = wBorderWidth(pWin);
     PicturePtr pMask = sceneShadowMask(pScreen, attrs,
                                        pWin->drawable.width + 2 * bw,
                                        pWin->drawable.height + 2 * bw);
@@ -890,16 +938,7 @@ scenePaintShadow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
         RegionDestroy(pBody);
     }
     if (RegionNotEmpty(&clip)) {
-        CARD32 c = node->shadowColor;
-        CARD16 a = (c >> 24) * 0x101;
-        /* Render colours are premultiplied */
-        xRenderColor color = {
-            .red = ((c >> 16) & 0xff) * a / 0xff,
-            .green = ((c >> 8) & 0xff) * a / 0xff,
-            .blue = (c & 0xff) * a / 0xff,
-            .alpha = a,
-        };
-        PicturePtr pSrc = CreateSolidPicture(0, &color, &error);
+        PicturePtr pSrc = sceneSolidARGB(node->shadowColor);
         if (pSrc) {
             sceneTargetClip(t, &clip);
             const BoxRec *b = &node->shadowBox;
@@ -1081,6 +1120,76 @@ sceneScratchPicture(ScreenPtr pScreen, int w, int h, PictFormatPtr format)
     return pPicture;
 }
 
+/*
+ * The shadow of a transformed window: its shadow shape shown through the
+ * window's transform and moved by dx, dy on the screen, minus the
+ * window's own shape (nothing of the shadow shows through the window,
+ * as for untransformed windows), in the shadow colour.
+ */
+static void
+scenePaintShadowTransformed(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
+                            SceneAttrsPtr attrs, const SceneNodeRec *node,
+                            RegionPtr pRegion)
+{
+    int bw = wBorderWidth(pWin);
+    int ow = pWin->drawable.width + 2 * bw, oh = pWin->drawable.height + 2 * bw;
+    int b = attrs->shadowBlur;
+    const BoxRec *sb = &node->shadowBox;
+    int sw = sb->x2 - sb->x1, sh = sb->y2 - sb->y1;
+    int ox = pWin->drawable.x - bw, oy = pWin->drawable.y - bw;
+
+    RegionRec clip, box;
+    RegionInit(&box, (BoxPtr) sb, 1);
+    RegionNull(&clip);
+    RegionIntersect(&clip, pRegion, &box);
+    RegionUninit(&box);
+    if (!RegionNotEmpty(&clip) || sw <= 0 || sh <= 0) {
+        RegionUninit(&clip);
+        return;
+    }
+
+    PicturePtr pShape = sceneShadowMask(pScreen, attrs, ow, oh);
+    PicturePtr pBody = sceneCornerMask(pScreen, &attrs->backdrop, node->radius,
+                                       ow, oh, 0xff);
+    PictFormatPtr a8 = PictureMatchFormat(pScreen, 8, PICT_a8);
+    PicturePtr pAlpha = a8 ? sceneScratchPicture(pScreen, sw, sh, a8) : NULL;
+    PicturePtr pSrc = sceneSolidARGB(node->shadowColor);
+
+    if (pShape && pBody && pAlpha && pSrc) {
+        /* screen, relative to the window's outer corner -> shadow mask:
+           undo dx, dy, undo the transform, then the mask's blur margin */
+        PictTransform shift, unshift, tmp, toShape;
+        pixman_transform_init_translate(&shift, IntToxFixed(-attrs->shadowDx),
+                                        IntToxFixed(-attrs->shadowDy));
+        pixman_transform_init_translate(&unshift, IntToxFixed(b), IntToxFixed(b));
+        pixman_transform_multiply(&tmp, &attrs->inverse, &shift);
+        pixman_transform_multiply(&toShape, &unshift, &tmp);
+
+        SetPictureTransform(pShape, &toShape);
+        SetPictureFilter(pShape, (char *) "bilinear", 8, NULL, 0);
+        CompositePicture(PictOpSrc, pShape, NULL, pAlpha,
+                         sb->x1 - ox, sb->y1 - oy, 0, 0, 0, 0, sw, sh);
+        SetPictureTransform(pShape, NULL);
+        SetPictureFilter(pShape, (char *) "nearest", 7, NULL, 0);
+
+        SetPictureTransform(pBody, &attrs->inverse);
+        SetPictureFilter(pBody, (char *) "bilinear", 8, NULL, 0);
+        CompositePicture(PictOpOutReverse, pBody, NULL, pAlpha,
+                         sb->x1 - ox, sb->y1 - oy, 0, 0, 0, 0, sw, sh);
+        SetPictureTransform(pBody, NULL);
+        SetPictureFilter(pBody, (char *) "nearest", 7, NULL, 0);
+
+        sceneTargetClip(t, &clip);
+        CompositePicture(PictOpOver, pSrc, pAlpha, t->pict, 0, 0, 0, 0,
+                         sb->x1 - t->ox, sb->y1 - t->oy, sw, sh);
+    }
+    if (pAlpha)
+        FreePicture(pAlpha, 0);
+    if (pSrc)
+        FreePicture(pSrc, 0);
+    RegionUninit(&clip);
+}
+
 static void
 sceneScaleTransform(PictTransform *t, xFixed scale)
 {
@@ -1135,13 +1244,23 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
     WindowPtr pWin = wins[i], pRoot = pScreen->root;
     SceneAttrsPtr attrs = sceneAttrs(pWin);
     const SceneNodeRec *node = &nodes[i];
-    BoxRec b = sceneOuterBox(pWin);
+    BoxRec o = sceneOuterBox(pWin);
+    /* where the blurred backdrop goes: a transformed window's shown
+       bounds, cut to its shape by the mask below */
+    BoxRec b = node->transformed ? node->shown : o;
     const BoxRec *scr = RegionExtents(&pRoot->winSize);
     int r = node->bgBlur;
 
     RegionRec clip;
     RegionNull(&clip);
-    RegionIntersect(&clip, pRegion, &pWin->borderSize);
+    if (node->transformed) {
+        RegionRec shown;
+        RegionInit(&shown, &b, 1);
+        RegionIntersect(&clip, pRegion, &shown);
+        RegionUninit(&shown);
+    } else {
+        RegionIntersect(&clip, pRegion, &pWin->borderSize);
+    }
     if (!RegionNotEmpty(&clip)) {
         RegionUninit(&clip);
         return;
@@ -1196,11 +1315,15 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
                      max(1, (r + scale / 2) / scale));
 
     PicturePtr pMask = NULL;
-    if (node->radius) {
+    if (node->radius || node->transformed) {
         pMask = sceneCornerMask(pScreen, &attrs->backdrop, node->radius,
-                                b.x2 - b.x1, b.y2 - b.y1, 0xff);
+                                o.x2 - o.x1, o.y2 - o.y1, 0xff);
         if (!pMask)
             goto out;
+        if (node->transformed) {
+            SetPictureTransform(pMask, &attrs->inverse);
+            SetPictureFilter(pMask, (char *) "bilinear", 8, NULL, 0);
+        }
     }
     PictTransform up;
     sceneScaleTransform(&up, xFixed1 / scale);
@@ -1208,8 +1331,12 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
     SetPictureFilter(pSmall, (char *) "bilinear", 8, NULL, 0);
     sceneTargetClip(t, &clip);
     CompositePicture(pMask ? PictOpOver : PictOpSrc, pSmall, pMask, t->pict,
-                     b.x1 - e.x1, b.y1 - e.y1, 0, 0,
+                     b.x1 - e.x1, b.y1 - e.y1, b.x1 - o.x1, b.y1 - o.y1,
                      b.x1 - t->ox, b.y1 - t->oy, b.x2 - b.x1, b.y2 - b.y1);
+    if (pMask && node->transformed) {
+        SetPictureTransform(pMask, NULL);
+        SetPictureFilter(pMask, (char *) "nearest", 7, NULL, 0);
+    }
 out:
     for (int k = 0; k < nlevels; k++)
         FreePicture(levels[k], 0);

@@ -129,7 +129,7 @@ applications in a sandbox, see the bubblewrap example in
 |---|---|---|
 | I | Codebase audit, security hooks, launcher-assigned identity, capabilities in audit mode, platform abstraction layer, CI on Linux, FreeBSD and OpenBSD | Nearly complete |
 | II | Atomic modesetting, per-output scheduling, hotplug, variable refresh rate, multi-GPU | Planned |
-| III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | In progress |
+| III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | Nearly complete: needs testing on real hardware; direct scanout per monitor waits for Phase II |
 | IV | Per-output color management, wide gamut and HDR | Planned |
 | V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | Planned |
 | VI | Running Wayland applications as X11 windows (WX11) | Planned |
