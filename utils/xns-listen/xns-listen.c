@@ -44,6 +44,7 @@
 #define X_XnsDeleteNamespace        3
 #define X_XnsAddListener            10
 #define X_XnsSetNamespaceGrants     13
+#define X_XnsSetNamespaceInjectScope 16
 #define XNS_NO_CEILING              0xffffffffu
 #define XNS_DELETE_KILL_CLIENTS     1
 #define XNS_APP_STRING_MAX          255
@@ -89,6 +90,9 @@ usage(FILE *f)
 "                            xkeyboard); default: none\n"
 "  -g, --grant CAP[,CAP...]  with --create: XPrism capabilities for the\n"
 "                            namespace, e.g. window.inspect,clipboard.read\n"
+"      --inject-into NS      with --create: let the namespace's clients\n"
+"                            automate namespace NS's windows through XTest,\n"
+"                            with a pointer and keyboard of their own\n"
 "      --ceiling CAP[,CAP...]  most capabilities clients on SOCKET may ever\n"
 "                            hold, whatever the namespace is granted;\n"
 "                            \"none\" for none; default: no limit\n"
@@ -277,6 +281,29 @@ xns_set_grants(const char *name, uint32_t grants)
 }
 
 static int
+xns_set_inject_scope(const char *name, const char *target)
+{
+    size_t n = strlen(name), t = strlen(target);
+    uint8_t body[4 + 2 * 256] = { 0 };
+    uint16_t lens[2] = { (uint16_t) n, (uint16_t) t };
+    memcpy(body, lens, 4);
+    size_t off = 4;
+    put_str(body, &off, name, n);
+    put_str(body, &off, target, t);
+
+    int xerr;
+    void *r = xns_request(X_XnsSetNamespaceInjectScope, body, off, NULL, 0, &xerr);
+    if (!r) {
+        fprintf(stderr, "%s: cannot let \"%s\" inject into \"%s\": %s%s\n",
+                progname, name, target, xerr_name(xerr),
+                xerr == 1 ? " (the X server's X-NAMESPACE is older than 1.2)" : "");
+        return -1;
+    }
+    free(r);
+    return 0;
+}
+
+static int
 xns_add_listener(const char *name, const char *app_id, const char *instance_id,
                  const char *engine, uint32_t ceiling, int listen_fd, int close_fd)
 {
@@ -428,9 +455,9 @@ main(int argc, char **argv)
     const char *app_id = "", *instance_id = "", *engine = "";
     int create = 0;
     uint32_t caps = 0, grants = 0, ceiling = XNS_NO_CEILING;
-    const char *allow = NULL, *grant = NULL, *ceiling_arg = NULL;
+    const char *allow = NULL, *grant = NULL, *ceiling_arg = NULL, *inject_into = NULL;
 
-    enum { OPT_APP_ID = 256, OPT_INSTANCE_ID, OPT_ENGINE, OPT_CEILING };
+    enum { OPT_APP_ID = 256, OPT_INSTANCE_ID, OPT_ENGINE, OPT_CEILING, OPT_INJECT_INTO };
     static const struct option opts[] = {
         { "display",     required_argument, NULL, 'd' },
         { "namespace",   required_argument, NULL, 'n' },
@@ -438,6 +465,7 @@ main(int argc, char **argv)
         { "allow",       required_argument, NULL, 'a' },
         { "grant",       required_argument, NULL, 'g' },
         { "ceiling",     required_argument, NULL, OPT_CEILING },
+        { "inject-into", required_argument, NULL, OPT_INJECT_INTO },
         { "app-id",      required_argument, NULL, OPT_APP_ID },
         { "instance-id", required_argument, NULL, OPT_INSTANCE_ID },
         { "engine",      required_argument, NULL, OPT_ENGINE },
@@ -455,6 +483,7 @@ main(int argc, char **argv)
         case 'a': allow = optarg; break;
         case 'g': grant = optarg; break;
         case OPT_CEILING: ceiling_arg = optarg; break;
+        case OPT_INJECT_INTO: inject_into = optarg; break;
         case OPT_APP_ID: app_id = optarg; break;
         case OPT_INSTANCE_ID: instance_id = optarg; break;
         case OPT_ENGINE: engine = optarg; break;
@@ -488,6 +517,10 @@ main(int argc, char **argv)
     }
     if (grant && parse_grants(grant, &grants) != 0)
         return 1;
+    if (inject_into && (!create || !*inject_into || strlen(inject_into) > 255)) {
+        fprintf(stderr, "%s: --inject-into needs --create and a namespace name\n", progname);
+        return 1;
+    }
     if (ceiling_arg && parse_grants(ceiling_arg, &ceiling) != 0)
         return 1;
     if (check_app_string("--app-id", app_id) || check_app_string("--instance-id", instance_id) ||
@@ -520,6 +553,8 @@ main(int argc, char **argv)
             goto out;
         created = 1;
         if (grants && xns_set_grants(ns, grants) != 0)
+            goto out;
+        if (inject_into && xns_set_inject_scope(ns, inject_into) != 0)
             goto out;
     }
 

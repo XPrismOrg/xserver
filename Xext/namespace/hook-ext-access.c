@@ -45,8 +45,14 @@ void hookExtAccess(CallbackListPtr *pcbl, void *unused, void *calldata)
         case EXTENSION_MAJOR_MIT_SCREEN_SAVER:
         case EXTENSION_MAJOR_RECORD:
         case EXTENSION_MAJOR_SECURITY:
-        case EXTENSION_MAJOR_XTEST:
         case EXTENSION_MAJOR_XVIDEO:
+            goto reject;
+
+        /* granted input.inject, or scoped automation (the capability
+           checks decide the rest) */
+        case EXTENSION_MAJOR_XTEST:
+            if (XnsMayInject(subj->ns))
+                goto pass;
             goto reject;
 
         /* only allowed if namespace has flag set */

@@ -13,6 +13,7 @@
  */
 #include <dix-config.h>
 
+#include <string.h>
 #include <unistd.h>
 
 #include <X11/Xmd.h>
@@ -489,6 +490,42 @@ ProcXnsSetNamespaceGrants(ClientPtr client)
     return X_SEND_REPLY_SIMPLE(client, reply);
 }
 
+/** @brief Scoped automation: whose windows a namespace may inject into (since 1.2). */
+static int
+ProcXnsSetNamespaceInjectScope(ClientPtr client)
+{
+    X_REQUEST_HEAD_AT_LEAST(xXnsSetNamespaceInjectScopeReq);
+    X_REQUEST_FIELD_CARD16(nameLen);
+    X_REQUEST_FIELD_CARD16(targetLen);
+
+    const char *name, *target;
+    X_REQUEST_VAR_BEGIN();
+    X_REQUEST_VAR_FIELD(name, stuff->nameLen);
+    X_REQUEST_VAR_FIELD(target, stuff->targetLen);
+    X_REQUEST_VAR_END();
+
+    struct Xnamespace *ns = XnsLookup(name, stuff->nameLen);
+    if (!ns)
+        return BadName;
+    if ((XnsAttrs(ns) & XNS_ATTR_IMMUTABLE) || ns->superPower)
+        return BadAccess;
+    if (stuff->targetLen > XNS_NAME_MAX)
+        return BadName;
+
+    char *scope = NULL;
+    if (stuff->targetLen) {
+        scope = strndup(target, stuff->targetLen);
+        if (!scope)
+            return BadAlloc;
+    }
+    free(ns->injectInto);
+    ns->injectInto = scope;
+    XNS_LOG("namespace \"%s\" injects into %s\n", ns->name, scope ? scope : "nothing");
+
+    xXnsAckReply reply = { 0 };
+    return X_SEND_REPLY_SIMPLE(client, reply);
+}
+
 /** @brief Namespace, app info and peer identity of a client (since 1.1). */
 static int
 ProcXnsGetClientInfo(ClientPtr client)
@@ -689,6 +726,7 @@ ProcXnsDispatch(ClientPtr client)
     case X_XnsSetNamespaceGrants:  return ProcXnsSetNamespaceGrants(client);
     case X_XnsSetPermissionAgent:  return ProcXnsSetPermissionAgent(client);
     case X_XnsAnswerPermission:    return ProcXnsAnswerPermission(client);
+    case X_XnsSetNamespaceInjectScope: return ProcXnsSetNamespaceInjectScope(client);
     default:                       return BadRequest;
     }
 }

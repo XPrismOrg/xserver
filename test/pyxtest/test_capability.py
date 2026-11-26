@@ -156,6 +156,13 @@ class TestCapabilityEnforce:
         assert any("denied window.enumerate" in line for line in log), log
         assert not any("[audit]" in line for line in log), log
 
+    def test_display_configure_is_enforced(self, xserver):
+        """(Xnamespace refuses writes to the real root as well)"""
+        opcode = _opcode(xserver, Extension.RANDR)
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        assert _errors_of(conn, struct.pack("<BBHIHHII", opcode, RR_SET_SCREEN_SIZE, 5,
+                                            conn.root_window, 640, 480, 169, 127)) == [BAD_ACCESS]
+
     def test_granted_capability_is_allowed(self, xserver):
         assert _inspect_other_window(xserver, GRANTED_COOKIE) == []
         assert _list_other_window(xserver, GRANTED_COOKIE) == []

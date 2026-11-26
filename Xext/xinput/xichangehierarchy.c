@@ -132,7 +132,8 @@ XISendDeviceHierarchyEvent(int flags[MAXDEVICES])
  */
 
 static int
-add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES])
+add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES],
+           DeviceIntPtr *ptr_out)
 {
     DeviceIntPtr ptr, keybd, XTestptr, XTestkeybd;
     char *name;
@@ -192,6 +193,8 @@ add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES])
 
     for (int i = 0; i < currentMaxClients; i++)
         XIBarrierNewMasterDevice(clients[i], ptr->id);
+    if (ptr_out)
+        *ptr_out = ptr;
 
  unwind:
     free(name);
@@ -224,6 +227,48 @@ find_disabled_master(int type)
     }
 
     return NULL;
+}
+
+static int remove_master(ClientPtr client, xXIRemoveMasterInfo * r, int flags[MAXDEVICES]);
+
+/* XPrism: a seat (a master pointer and keyboard with their XTest devices)
+   the server makes for a client, as XIChangeHierarchy AddMaster would,
+   sending core events; NULL if it cannot */
+DeviceIntPtr
+XIAddSeat(const char *name)
+{
+    size_t n = strlen(name);
+    xXIAddMasterInfo *c = calloc(1, sizeof(*c) + n + 1);
+    int flags[MAXDEVICES] = { 0 };
+    DeviceIntPtr ptr = NULL;
+
+    if (!c)
+        return NULL;
+    c->type = XIAddMaster;
+    c->name_len = n;
+    c->send_core = TRUE;
+    c->enable = TRUE;
+    memcpy(&c[1], name, n);
+    if (add_master(serverClient, c, flags, &ptr) != Success)
+        ptr = NULL;
+    free(c);
+    XISendDeviceHierarchyEvent(flags);
+    return ptr;
+}
+
+/* and remove it, its devices left floating */
+void
+XIRemoveSeat(DeviceIntPtr ptr)
+{
+    xXIRemoveMasterInfo r = {
+        .type = XIRemoveMaster,
+        .deviceid = ptr->id,
+        .return_mode = XIFloating,
+    };
+    int flags[MAXDEVICES] = { 0 };
+
+    remove_master(serverClient, &r, flags);
+    XISendDeviceHierarchyEvent(flags);
 }
 
 static int
@@ -489,7 +534,7 @@ ProcXIChangeHierarchy(ClientPtr client)
                 goto unwind;
             }
 
-            rc = add_master(client, c, flags);
+            rc = add_master(client, c, flags, NULL);
             if (rc != Success)
                 goto unwind;
             changes = FLUSH;

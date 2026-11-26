@@ -38,7 +38,8 @@
 #define X_XnsSetNamespaceGrants 13  /* since 1.1 */
 #define X_XnsSetPermissionAgent 14  /* since 1.2 */
 #define X_XnsAnswerPermission   15  /* since 1.2 */
-#define XnsNumberRequests       16
+#define X_XnsSetNamespaceInjectScope 16 /* since 1.2 */
+#define XnsNumberRequests       17
 
 /* events (since 1.2) */
 #define XnsPermissionRequest    0
@@ -458,6 +459,21 @@ typedef struct {
     CARD16  pad1;
 } xXnsAnswerPermissionReq;
 #define sz_xXnsAnswerPermissionReq 12
+
+/* SetNamespaceInjectScope (since 1.2): scoped automation. Clients of
+   namespace name may use XTest, through a seat of their own, into the
+   windows of namespace target (targetLen 0: no longer). BadAccess for the
+   built-in and superpower namespaces, BadName. Replies with an empty
+   ack. */
+typedef struct {
+    CARD8   reqType;
+    CARD8   xnsReqType;         /* X_XnsSetNamespaceInjectScope */
+    CARD16  length;
+    CARD16  nameLen;
+    CARD16  targetLen;
+    /* CARD8 name[nameLen], padded, then target[targetLen], padded */
+} xXnsSetNamespaceInjectScopeReq;
+#define sz_xXnsSetNamespaceInjectScopeReq 8
 
 /* PermissionRequest event (since 1.2), to the agent: a client's request
    needs a capability it lacks; the client waits for the answer (at most

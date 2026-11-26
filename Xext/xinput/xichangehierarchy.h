@@ -35,4 +35,8 @@
 
 void XISendDeviceHierarchyEvent(int flags[MAXDEVICES]);
 
+/* XPrism: seats the server makes for automation clients (dix/capability.c) */
+DeviceIntPtr XIAddSeat(const char *name);
+void XIRemoveSeat(DeviceIntPtr ptr);
+
 #endif                          /* CHDEVHIER_H */

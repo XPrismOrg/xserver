@@ -87,6 +87,7 @@ block:
     return;
 
 pass:
-    /* leaves another hook's denial (the capability checks run first) */
+    /* leaves a denial by a hook that ran before (callbacks run newest
+       first, so the capability checks run after this one) */
     return;
 }

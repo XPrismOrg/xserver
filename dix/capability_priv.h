@@ -119,6 +119,33 @@ void XpCapRefuseAll(void);
 void XpCapBeginRequest(ClientPtr client);
 void XpCapEndRequest(ClientPtr client, int *result);
 
+/*
+ * Scoped automation (idea.txt section 8). A client without input.inject
+ * whose policy gives it an inject scope may still use XTest, through a
+ * seat of its own (a master pointer and keyboard the server makes on its
+ * first injection, and removes when it goes), so it does not take over
+ * the user's pointer and keyboard. Its key and button events must reach
+ * a window of its scope or its own; motion is free. While the user's own
+ * input is active (within XP_CAP_USER_PRIORITY_MS), its key and button
+ * events wait.
+ *
+ * The scope proc answers whether @p injector may inject into windows of
+ * @p target; with target NULL, whether it has a scope at all.
+ */
+#define XP_CAP_USER_PRIORITY_MS 500
+
+typedef Bool (*XpCapInjectScopeProc)(ClientPtr injector, ClientPtr target);
+void XpCapSetInjectScope(XpCapInjectScopeProc scope);
+/** injects with a scope (holds no input.inject, has a scope) */
+Bool XpCapInjectScoped(ClientPtr client);
+/** XTest's device for a scoped client: its seat's, replacing a core one;
+    BadAccess for any other device */
+int XpCapInjectDevice(ClientPtr client, DeviceIntPtr *dev);
+/** may this event (core type) of a scoped client go out now? Success,
+    with *wait_ms > 0 if it must wait for the user; BadAccess outside the
+    scope */
+int XpCapInjectTarget(ClientPtr client, DeviceIntPtr dev, int type, CARD32 *wait_ms);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

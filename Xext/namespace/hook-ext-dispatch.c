@@ -104,9 +104,13 @@ void hookExtDispatch(CallbackListPtr *pcbl, void *unused, void *calldata)
         case EXTENSION_MAJOR_MIT_SCREEN_SAVER:
         case EXTENSION_MAJOR_RECORD:
         case EXTENSION_MAJOR_SECURITY:
-        case EXTENSION_MAJOR_XTEST:
             goto reject;
         break;
+
+        case EXTENSION_MAJOR_XTEST:
+            if (XnsMayInject(subj->ns))
+                goto pass;
+            goto reject;
     }
 
     XNS_HOOK_LOG("unhandled extension call: %s\n", param->ext->name);
@@ -118,6 +122,7 @@ reject:
     return;
 
 pass:
-    param->status = Success;
+    /* leaves a denial by a hook that ran before (callbacks run newest
+       first, so the capability checks run after this one) */
     return;
 }

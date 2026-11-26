@@ -16,3 +16,16 @@ namespace xclock root
   auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad91b7
   auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad92b7
   auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad93b7
+
+# XPrism capabilities (doc/capabilities.md): what clients of a namespace
+# may do beyond its own windows
+namespace editor root
+  auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad90c1
+  grant clipboard.read clipboard.write
+
+# scoped automation: a test runner or assistant that may click and type
+# into the editor's windows, and nobody else's, with a pointer and
+# keyboard of its own
+namespace editor-bot root
+  auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad90c2
+  inject-into editor

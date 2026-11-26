@@ -45,6 +45,32 @@ XnsCapGrants(ClientPtr client)
     return XnsClientGrants(XnsClientPriv(client));
 }
 
+/* scoped automation: may injector inject into target's windows (target
+   NULL: may it inject at all)? Its launcher's ceiling must allow
+   input.inject. */
+static Bool
+XnsInjectScope(ClientPtr injector, ClientPtr target)
+{
+    struct XnamespaceClientPriv *priv = XnsClientPriv(injector);
+
+    if (!priv || !priv->ns || !priv->ns->injectInto)
+        return FALSE;
+    if (priv->app && !(priv->app->ceiling & XP_CAP_BIT(XP_CAP_INPUT_INJECT)))
+        return FALSE;
+    if (!target)
+        return TRUE;
+    struct XnamespaceClientPriv *t = XnsClientPriv(target);
+    return t && t->ns && strcmp(t->ns->name, priv->ns->injectInto) == 0;
+}
+
+/* XTest is for namespaces that may inject */
+Bool
+XnsMayInject(struct Xnamespace *ns)
+{
+    return ns->superPower || (ns->xpcaps & XP_CAP_BIT(XP_CAP_INPUT_INJECT)) ||
+           ns->injectInto != NULL;
+}
+
 static void
 XnsCapLabel(ClientPtr client, char *buf, size_t len)
 {
@@ -91,6 +117,7 @@ NamespaceExtensionInit(void)
         FatalError("NamespaceExtensionInit: allocation failure\n");
 
     XpCapSetProvider(XnsCapGrants, XnsCapLabel);
+    XpCapSetInjectScope(XnsInjectScope);
 
     /* Do the serverClient */
     struct XnamespaceClientPriv *srv = XnsClientPriv(serverClient);

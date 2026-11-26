@@ -168,6 +168,19 @@ static void parseLine(char *line, struct Xnamespace **walk_ns)
         return;
     }
 
+    /* "inject-into editor": scoped automation (doc/capabilities.md) */
+    if (strcmp(token, "inject-into") == 0)
+    {
+        token = strtok(NULL, " \t");
+        if (!token || strtok(NULL, " \t"))
+            XNS_LOG("inject-into takes one namespace name\n");
+        else {
+            free(curr->injectInto);
+            curr->injectInto = strdup(token);
+        }
+        return;
+    }
+
     /* "grant capture.window clipboard.read ..." - XPrism capabilities */
     if (strcmp(token, "grant") == 0)
     {
@@ -521,6 +534,7 @@ void XnsDestroyNamespace(struct Xnamespace *ns)
         freeToken(at);
 
     xorg_list_del(&ns->entry);
+    free(ns->injectInto);
     free((void *) ns->name);
     free(ns);
 }

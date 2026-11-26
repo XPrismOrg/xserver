@@ -20,6 +20,8 @@ xns-listen [options] SOCKET [-- COMMAND [ARG...]]
                             transparency, xinput, xkeyboard
   -g, --grant CAP[,CAP...]  with --create: capabilities for the
                             namespace (see doc/capabilities.md)
+      --inject-into NS      with --create: may automate namespace NS's
+                            windows (XTest, with a seat of its own)
       --ceiling CAP[,CAP...]  the most capabilities clients on SOCKET
                             may hold; "none" for none; no limit by default
       --app-id ID           application ID, e.g. org.example.Editor

@@ -33,6 +33,9 @@ struct Xnamespace {
     Bool superPower;
     uint32_t xpcaps;            /* XPrism capabilities (dix/capability_priv.h);
                                    superPower implies all of them */
+    char *injectInto;           /* scoped automation: may inject, through a
+                                   seat of its own, into this namespace's
+                                   windows (config "inject-into"), or NULL */
     Bool autoRemove;           /* destroy when the last client exits */
     struct xorg_list auth_tokens;
     CARD32 tokenHandleSeq;      /* monotonic per-namespace handle counter */
@@ -93,6 +96,7 @@ void XnsProtoExtensionInit(void);
 WindowPtr XnsCreateVirtualRoot(WindowPtr realRoot, const char *name);
 struct Xnamespace *XnsFindByName(const char* name);
 struct Xnamespace *XnsLookup(const char *name, size_t namelen);
+Bool XnsMayInject(struct Xnamespace *ns);
 int XnsAddToken(struct Xnamespace *ns, const char *proto, size_t protolen,
                 const char *data, size_t datalen, CARD32 *handleOut);
 

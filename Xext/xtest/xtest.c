@@ -36,6 +36,7 @@
 #include <X11/extensions/XI.h>
 #include <X11/extensions/XIproto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/input_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/exevents_priv.h"
@@ -365,6 +366,11 @@ ProcXTestFakeInput(ClientPtr client)
         }
     }
 
+    /* XPrism: a client injecting with a scope uses its own seat */
+    int rc = XpCapInjectDevice(client, &dev);
+    if (rc != Success)
+        return rc;
+
 
     /* If the event has a time set, wait for it to pass */
     if (ev->u.keyButtonPointer.time) {
@@ -452,6 +458,26 @@ ProcXTestFakeInput(ClientPtr client)
         }
         break;
     }
+    /* XPrism: only into its scope, and after the user */
+    CARD32 wait_ms;
+    rc = XpCapInjectTarget(client, dev, type, &wait_ms);
+    if (rc != Success)
+        return rc;
+    if (wait_ms) {
+        TimeStamp activateTime = currentTime;
+        CARD32 ms = activateTime.milliseconds + wait_ms;
+        if (ms < activateTime.milliseconds)
+            activateTime.months++;
+        activateTime.milliseconds = ms;
+        if (!ClientSleepUntil(client, &activateTime, NULL, NULL))
+            return BadAlloc;
+        if (client->swapped)
+            (void) XTestSwapFakeInput(client, (xReq *) stuff);
+        ResetCurrentRequest(client);
+        client->sequence--;
+        return Success;
+    }
+
     if (screenIsSaved == SCREEN_SAVER_ON)
         dixSaveScreens(serverClient, SCREEN_SAVER_OFF, ScreenSaverReset);
 

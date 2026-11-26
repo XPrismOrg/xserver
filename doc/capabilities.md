@@ -43,6 +43,42 @@ answer.
 is such an agent: it shows a dialog (kdialog, zenity, or any command) for
 each prompt.
 
+## Scoped automation
+
+An automation client (a test runner, an assistant, remote help) can be
+allowed to operate one application without `input.inject`, which would
+let it type into anything. Its namespace is given an inject scope, the
+namespace of the application it may operate:
+
+```
+namespace editor-bot
+  auth MIT-MAGIC-COOKIE-1 ...
+  inject-into editor
+```
+
+or at run time with X-NAMESPACE `SetNamespaceInjectScope`
+(`xns-listen --create --inject-into editor`). Its clients then see XTest,
+and:
+
+- Their injected input goes through a seat of their own: a master
+  pointer and keyboard the server creates on their first XTest request
+  ("XPrism automation seat N") and removes when they disconnect. The
+  user's pointer and keyboard are not moved or pressed; core XTest
+  requests are redirected to the seat, and other devices are refused.
+- Their key and button events must reach a window of the scope's
+  namespace, or their own: the window under the seat's pointer, its
+  keyboard focus, or the window holding a grab. Otherwise the request
+  fails with `BadAccess`. Moving the pointer is not limited.
+- The user goes first: while the user's own input is active (an event
+  from any other device within the last 500 ms, including on-screen
+  keyboards through the core XTest devices), their key and button
+  events wait.
+- `GrabControl` (ignoring server grabs) is refused. A launcher ceiling
+  without `input.inject` takes the scope away too.
+
+In audit mode nothing is refused, so XTest works as for unconfined
+clients.
+
 ## Which clients hold which capabilities
 
 Without a policy provider (no `-namespace` option), every client holds
@@ -79,7 +115,7 @@ rules. A request has to pass both.
 |---|---|---|
 | `capture.screen` | Read access to the root window (`GetImage`, `ShmGetImage`, the source of `CopyArea` and `CopyPlane`) | |
 | `capture.window` | Read access to another client's window or pixmap | |
-| `input.inject` | XTEST requests other than `GetVersion` | |
+| `input.inject` | XTEST requests other than `GetVersion` | Without it, a namespace with an inject scope may still automate one application (see Scoped automation). |
 | `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion`; keyboard grabs and `QueryKeymap` without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
 | `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
 | `window.enumerate` | Listing the children of another client's window or of the root window (`QueryTree`) | |

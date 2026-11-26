@@ -59,6 +59,7 @@
 #include <X11/extensions/XI2.h>
 #include <X11/extensions/XI2proto.h>
 #include <X11/extensions/randrproto.h>
+#include <X11/extensions/xtestproto.h>
 
 #include "dix/capability_priv.h"
 #include "dix/devices_priv.h"
@@ -77,6 +78,7 @@
 #include "os/pal/identity.h"
 #include "Xext/xace.h"
 #include "Xext/xacestr.h"
+#include "Xext/xinput/xichangehierarchy.h"
 
 enum xp_cap_mode xpCapMode = XP_CAP_MODE_ENFORCE;
 
@@ -136,6 +138,7 @@ typedef struct {
     XID ask_target;
     uint32_t prompt;        /* open prompt's id, or 0 */
     OsTimerPtr timer;
+    int seat;               /* id of its automation seat's master pointer */
 } CapClientRec;
 
 static DevPrivateKeyRec capClientPrivKeyRec;
@@ -369,6 +372,177 @@ XpCapRefuseAll(void)
     }
 }
 
+/* ------------------------------------------------------------------ *
+ *  Scoped automation
+ * ------------------------------------------------------------------ */
+
+static XpCapInjectScopeProc inject_scope;
+static Bool seat_dev[MAXDEVICES];       /* devices of automation seats */
+static CARD32 last_user_input;
+static Bool had_user_input;
+
+void
+XpCapSetInjectScope(XpCapInjectScopeProc scope)
+{
+    inject_scope = scope;
+}
+
+static Bool
+holds(ClientPtr client, enum xp_cap cap)
+{
+    uint32_t grants = provider_grants(client);
+    CapClientRec *c = cap_client(client);
+
+    if (grants & XP_CAP_BIT(XP_CAP_COMPOSITOR_LEGACY))
+        grants |= XP_CAP_BIT(XP_CAP_CAPTURE_SCREEN) | XP_CAP_BIT(XP_CAP_CAPTURE_WINDOW);
+    if (c)
+        grants |= c->allowed;
+    return (grants & XP_CAP_BIT(cap)) != 0;
+}
+
+Bool
+XpCapInjectScoped(ClientPtr client)
+{
+    return xpCapMode == XP_CAP_MODE_ENFORCE && provider_grants && inject_scope &&
+           client && client != serverClient && !holds(client, XP_CAP_INPUT_INJECT) &&
+           inject_scope(client, NULL);
+}
+
+static void
+mark_seat(DeviceIntPtr ptr, Bool on)
+{
+    DeviceIntPtr kbd = GetMaster(ptr, MASTER_KEYBOARD);
+    DeviceIntPtr devs[] = { ptr, kbd, GetXTestDevice(ptr), kbd ? GetXTestDevice(kbd) : NULL };
+
+    for (size_t i = 0; i < ARRAY_SIZE(devs); i++)
+        if (devs[i])
+            seat_dev[devs[i]->id] = on;
+}
+
+/* the client's seat, if it still exists */
+static DeviceIntPtr
+seat_of(CapClientRec *c)
+{
+    DeviceIntPtr d;
+
+    if (!c->seat)
+        return NULL;
+    if (dixLookupDevice(&d, c->seat, serverClient, DixReadAccess) != Success ||
+        !InputDevIsMaster(d) || !seat_dev[d->id]) {
+        c->seat = 0;
+        return NULL;
+    }
+    return d;
+}
+
+int
+XpCapInjectDevice(ClientPtr client, DeviceIntPtr *dev)
+{
+    CapClientRec *c = cap_client(client);
+
+    if (!c || !XpCapInjectScoped(client))
+        return Success;
+
+    DeviceIntPtr ptr = seat_of(c);
+    if (!ptr) {
+        char name[64];
+        snprintf(name, sizeof(name), "XPrism automation seat %d", client->index);
+        ptr = XIAddSeat(name);
+        if (!ptr)
+            return BadAlloc;
+        c->seat = ptr->id;
+        mark_seat(ptr, TRUE);
+        LogMessageVerb(X_INFO, 1, "capability: automation seat %d for client %d\n",
+                       ptr->id, client->index);
+    }
+    DeviceIntPtr kbd = GetMaster(ptr, MASTER_KEYBOARD);
+    DeviceIntPtr xptr = GetXTestDevice(ptr), xkbd = kbd ? GetXTestDevice(kbd) : NULL;
+    DeviceIntPtr d = *dev;
+
+    if (d == ptr || d == kbd || d == xptr || d == xkbd)
+        return Success;
+    /* the core XTest devices: the user's pointer and keyboard */
+    if (d && IsXTestDevice(d, NULL) && !seat_dev[d->id]) {
+        DeviceIntPtr master = GetMaster(d, MASTER_ATTACHED);
+        if (master == inputInfo.pointer || master == inputInfo.keyboard) {
+            *dev = d->key ? xkbd : xptr;
+            return *dev ? Success : BadAlloc;
+        }
+    }
+    log_missing(client, XP_CAP_INPUT_INJECT, 0, TRUE);
+    return BadAccess;
+}
+
+int
+XpCapInjectTarget(ClientPtr client, DeviceIntPtr dev, int type, CARD32 *wait_ms)
+{
+    *wait_ms = 0;
+    if (!XpCapInjectScoped(client) || (type != KeyPress && type != KeyRelease &&
+                                       type != ButtonPress && type != ButtonRelease))
+        return Success;
+
+    /* the user first */
+    CARD32 now = GetTimeInMillis();
+    if (had_user_input && now - last_user_input < XP_CAP_USER_PRIORITY_MS) {
+        *wait_ms = XP_CAP_USER_PRIORITY_MS - (now - last_user_input);
+        return Success;
+    }
+
+    DeviceIntPtr m = InputDevIsMaster(dev) ? dev : GetMaster(dev, MASTER_ATTACHED);
+    WindowPtr win = NULL;
+    if (!m)
+        return BadAccess;
+    if (m->deviceGrab.grab)
+        win = m->deviceGrab.grab->window;
+    else if (type == KeyPress || type == KeyRelease) {
+        win = m->focus ? m->focus->win : NoneWin;
+        if (win == PointerRootWin) {
+            DeviceIntPtr ptr = GetMaster(m, MASTER_POINTER);
+            win = ptr ? InputDevSpriteWindow(ptr) : NULL;
+        }
+        else if (win == NoneWin || win == FollowKeyboardWin)
+            win = NULL;
+    }
+    else
+        win = InputDevSpriteWindow(m);
+
+    int owner = win ? dixClientIdForXID(win->drawable.id) : 0;
+    ClientPtr target = owner > 0 && owner < currentMaxClients ? clients[owner] : NULL;
+    if (target && (target == client || inject_scope(client, target)))
+        return Success;
+    log_missing(client, XP_CAP_INPUT_INJECT, win ? win->drawable.id : 0, TRUE);
+    return BadAccess;
+}
+
+/* the user's input: events of devices that are not automation seats'.
+   XTest through the core devices counts (on-screen keyboards). */
+static void
+cap_device_event(CallbackListPtr *pcbl, void *unused, void *calldata)
+{
+    DeviceEventInfoRec *info = calldata;
+    DeviceIntPtr d = info->device;
+    DeviceIntPtr m = d && !InputDevIsMaster(d) ? GetMaster(d, MASTER_ATTACHED) : d;
+
+    if (!d || seat_dev[d->id] || (m && seat_dev[m->id]))
+        return;
+    last_user_input = GetTimeInMillis();
+    had_user_input = TRUE;
+}
+
+static Bool
+remove_seat(ClientPtr unused, void *closure)
+{
+    int id = (int) (intptr_t) closure;
+    DeviceIntPtr d;
+
+    if (dixLookupDevice(&d, id, serverClient, DixReadAccess) == Success &&
+        InputDevIsMaster(d) && seat_dev[id]) {
+        mark_seat(d, FALSE);
+        XIRemoveSeat(d);
+    }
+    return TRUE;
+}
+
 static void
 cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
 {
@@ -376,10 +550,17 @@ cap_client_state(CallbackListPtr *pcbl, void *unused, void *calldata)
     ClientPtr client = info->client;
     CapClientRec *c = cap_client(client);
 
-    if (c && client->clientState == ClientStateGone && c->prompt) {
+    if (!c || client->clientState != ClientStateGone)
+        return;
+    if (c->prompt) {
         c->prompt = 0;
         TimerFree(c->timer);
         c->timer = NULL;
+    }
+    if (c->seat) {
+        /* not from inside CloseDownClient */
+        QueueWorkProc(remove_seat, NULL, (void *) (intptr_t) c->seat);
+        c->seat = 0;
     }
 }
 
@@ -519,8 +700,12 @@ cap_ext_dispatch(CallbackListPtr *pcbl, void *unused, void *calldata)
 
     switch (client->majorOp) {
     case EXTENSION_MAJOR_XTEST:
-        if (client->minorOp != 0)               /* GetVersion */
-            apply(&rec->status, XpCapCheck(client, XP_CAP_INPUT_INJECT, 0));
+        /* GetVersion is free; scoped clients may inject (checked in
+           FakeInput) and compare cursors, not ignore grabs */
+        if (client->minorOp == 0 ||
+            (client->minorOp != X_XTestGrabControl && XpCapInjectScoped(client)))
+            break;
+        apply(&rec->status, XpCapCheck(client, XP_CAP_INPUT_INJECT, 0));
         break;
     case EXTENSION_MAJOR_RECORD:
         if (client->minorOp != 0)               /* QueryVersion */
@@ -634,6 +819,7 @@ XpCapInit(void)
           XaceRegisterCallback(XACE_RECEIVE_ACCESS, cap_receive, NULL) &&
           AddCallback(&ExtensionDispatchCallback, cap_ext_dispatch, NULL) &&
           AddCallback(&DeviceAccessCallback, cap_device, NULL) &&
-          AddCallback(&ClientStateCallback, cap_client_state, NULL)))
+          AddCallback(&ClientStateCallback, cap_client_state, NULL) &&
+          AddCallback(&DeviceEventCallback, cap_device_event, NULL)))
         FatalError("capability: cannot register checks\n");
 }

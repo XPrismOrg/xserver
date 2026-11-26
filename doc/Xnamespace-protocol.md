@@ -532,6 +532,24 @@ clients, audit mode, and the agent itself are never asked about.
 A request that Xnamespace's own isolation also refuses (a window of
 another namespace) fails after an "allow" too.
 
+### 6.17 SetNamespaceInjectScope (since 1.2)
+
+Scoped automation (`doc/capabilities.md`): clients of namespace `name`
+may use XTest, through a seat of their own, into the windows of namespace
+`target`. An empty `target` takes that away. The config file says the
+same with `inject-into TARGET`.
+
+```
+  SetNamespaceInjectScope
+    name:   STRING8
+    target: STRING8
+  =>
+    (empty)
+```
+
+`BadName` for an unknown `name`, `BadAccess` for the built-in and
+superpower namespaces. `target` need not exist yet.
+
 7. Errors
 ---------
 
