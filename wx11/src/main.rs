@@ -27,6 +27,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
@@ -37,19 +38,31 @@ use smithay::wayland::compositor::{
     SurfaceAttributes,
 };
 use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-    XdgToplevelSurfaceData,
+    PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceData, XdgShellHandler,
+    XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{with_buffer_contents, ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
 
 use x::XSide;
 
+type Id = smithay::reexports::wayland_server::backend::ObjectId;
+
 /// A Wayland toplevel shown as an X window.
 struct Toplevel {
     surface: ToplevelSurface,
     window: Option<u32>,
     size: (u32, u32),
+}
+
+/// A popup (menu, tooltip) shown as an override-redirect X window, placed
+/// relative to its parent's window. A grabbing popup holds an X pointer
+/// grab; a click outside it dismisses it.
+struct Popup {
+    surface: PopupSurface,
+    window: Option<u32>,
+    size: (u32, u32),
+    grabbed: bool,
 }
 
 pub struct State {
@@ -63,7 +76,8 @@ pub struct State {
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
     x: XSide,
-    toplevels: HashMap<smithay::reexports::wayland_server::backend::ObjectId, Toplevel>,
+    toplevels: HashMap<Id, Toplevel>,
+    popups: HashMap<Id, Popup>,
     start: Instant,
 }
 
@@ -88,6 +102,10 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         let id = surface.id();
+        if self.popups.contains_key(&id) {
+            self.commit_popup(surface);
+            return;
+        }
         let Some(top) = self.toplevels.get(&id) else {
             return;
         };
@@ -105,56 +123,191 @@ impl CompositorHandler for State {
             return;
         }
 
-        let (buffer, callbacks) = with_states(surface, |states| {
-            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-            let current = attrs.current();
-            (
-                current.buffer.take(),
-                std::mem::take(&mut current.frame_callbacks),
-            )
-        });
-
+        let (buffer, callbacks) = take_commit(surface);
         match buffer {
             Some(BufferAssignment::NewBuffer(buffer)) => self.show_buffer(&id, &buffer),
             Some(BufferAssignment::Removed) => self.hide(&id),
             None => {}
         }
+        self.frame_done(callbacks);
+    }
+}
 
+/// the pixels of an shm buffer as BGRX rows (width, height, pixels); the
+/// buffer is released
+fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>)> {
+    let mut image = None;
+    let _ = with_buffer_contents(buffer, |ptr, len, data| {
+        let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
+        if w <= 0 || h <= 0 || stride < w * 4 || off < 0 {
+            return;
+        }
+        let need = off as usize + stride as usize * h as usize;
+        if need > len {
+            return;
+        }
+        // xrgb8888 / argb8888 are BGRX in memory, as a depth 24
+        // ZPixmap with 32 bits per pixel
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for row in 0..h as usize {
+            let start = off as usize + row * stride as usize;
+            let src = unsafe { std::slice::from_raw_parts(ptr.add(start), w as usize * 4) };
+            pixels.extend_from_slice(src);
+        }
+        image = Some((w as u32, h as u32, pixels));
+    });
+    buffer.release();
+    image
+}
+
+/// take the committed buffer and frame callbacks of surface
+fn take_commit(surface: &WlSurface) -> (Option<BufferAssignment>, Vec<WlCallback>) {
+    with_states(surface, |states| {
+        let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+        let current = attrs.current();
+        (
+            current.buffer.take(),
+            std::mem::take(&mut current.frame_callbacks),
+        )
+    })
+}
+
+impl State {
+    fn frame_done(&self, callbacks: Vec<WlCallback>) {
         let time = self.start.elapsed().as_millis() as u32;
         for cb in callbacks {
             cb.done(time);
         }
     }
-}
 
-impl State {
-    fn show_buffer(
-        &mut self,
-        id: &smithay::reexports::wayland_server::backend::ObjectId,
-        buffer: &WlBuffer,
-    ) {
-        let mut image = None;
-        let _ = with_buffer_contents(buffer, |ptr, len, data| {
-            let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
-            if w <= 0 || h <= 0 || stride < w * 4 || off < 0 {
-                return;
-            }
-            let need = off as usize + stride as usize * h as usize;
-            if need > len {
-                return;
-            }
-            // xrgb8888 / argb8888 are BGRX in memory, as a depth 24
-            // ZPixmap with 32 bits per pixel
-            let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
-            for row in 0..h as usize {
-                let start = off as usize + row * stride as usize;
-                let src = unsafe { std::slice::from_raw_parts(ptr.add(start), w as usize * 4) };
-                pixels.extend_from_slice(src);
-            }
-            image = Some((w as u32, h as u32, pixels));
+    fn commit_popup(&mut self, surface: &WlSurface) {
+        let id = surface.id();
+        let configured = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<XdgPopupSurfaceData>()
+                .map(|d| d.lock().unwrap().initial_configure_sent)
+                .unwrap_or(true)
         });
-        buffer.release();
-        let Some((w, h, pixels)) = image else {
+        if !configured {
+            let _ = self.popups[&id].surface.send_configure();
+            return;
+        }
+        let (buffer, callbacks) = take_commit(surface);
+        match buffer {
+            Some(BufferAssignment::NewBuffer(buffer)) => {
+                if let Some((w, h, pixels)) = read_pixels(&buffer) {
+                    self.show_popup(&id, w, h, &pixels);
+                }
+            }
+            Some(BufferAssignment::Removed) => self.hide_popup(&id),
+            None => {}
+        }
+        self.frame_done(callbacks);
+    }
+
+    /// the X window showing surface (a toplevel or a popup)
+    fn window_of_surface(&self, surface: &WlSurface) -> Option<u32> {
+        let id = surface.id();
+        self.toplevels
+            .get(&id)
+            .and_then(|t| t.window)
+            .or_else(|| self.popups.get(&id).and_then(|p| p.window))
+    }
+
+    fn show_popup(&mut self, id: &Id, w: u32, h: u32, pixels: &[u8]) {
+        let popup = &self.popups[id];
+        let parent = popup
+            .surface
+            .get_parent_surface()
+            .and_then(|s| self.window_of_surface(&s));
+        let Some(parent) = parent else {
+            return; // the parent is not shown (yet)
+        };
+        let geometry = popup.surface.with_pending_state(|s| s.geometry);
+        let (px, py) = self.x.root_position(parent);
+        let (x, y) = (px + geometry.loc.x, py + geometry.loc.y);
+        let popup = self.popups.get_mut(id).unwrap();
+        let window = match popup.window {
+            Some(win) => {
+                self.x.move_resize(win, x, y, w, h);
+                win
+            }
+            None => {
+                let win = self.x.create_popup(x, y, w, h);
+                popup.window = Some(win);
+                if popup.grabbed {
+                    self.x.grab_pointer(win);
+                }
+                win
+            }
+        };
+        popup.size = (w, h);
+        self.x.put_image(window, w, h, pixels);
+    }
+
+    fn hide_popup(&mut self, id: &Id) {
+        if let Some(popup) = self.popups.get_mut(id) {
+            if let Some(win) = popup.window.take() {
+                self.x.destroy_window(win);
+            }
+            if popup.grabbed {
+                popup.grabbed = false;
+                self.x.ungrab_pointer();
+            }
+        }
+    }
+
+    /// the toplevel a popup (chain) belongs to
+    fn root_toplevel(&self, surface: &WlSurface) -> Option<WlSurface> {
+        let mut s = surface.clone();
+        loop {
+            if self.toplevels.contains_key(&s.id()) {
+                return Some(s);
+            }
+            s = self.popups.get(&s.id())?.surface.get_parent_surface()?;
+        }
+    }
+
+    /// a click outside the grabbing popups dismisses them (xdg_popup.grab);
+    /// true if the click was used for that
+    fn dismiss_popups_on_click(&mut self, window: u32, x: f64, y: f64) -> bool {
+        let grabbed: Vec<Id> = self
+            .popups
+            .iter()
+            .filter(|(_, p)| p.grabbed)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if grabbed.is_empty() {
+            return false;
+        }
+        let inside = self.popups.values().any(|p| {
+            p.window == Some(window)
+                && x >= 0.0
+                && y >= 0.0
+                && x < p.size.0 as f64
+                && y < p.size.1 as f64
+        });
+        if inside {
+            return false;
+        }
+        let mut back_to = None;
+        for id in grabbed {
+            let p = self.popups.get_mut(&id).unwrap();
+            p.grabbed = false;
+            p.surface.send_popup_done();
+            back_to = self.root_toplevel(self.popups[&id].surface.wl_surface());
+        }
+        self.x.ungrab_pointer();
+        if back_to.is_some() {
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, back_to, SERIAL_COUNTER.next_serial());
+        }
+        true
+    }
+
+    fn show_buffer(&mut self, id: &Id, buffer: &WlBuffer) {
+        let Some((w, h, pixels)) = read_pixels(buffer) else {
             return;
         };
 
@@ -188,7 +341,7 @@ impl State {
         self.x.put_image(window, w, h, &pixels);
     }
 
-    fn hide(&mut self, id: &smithay::reexports::wayland_server::backend::ObjectId) {
+    fn hide(&mut self, id: &Id) {
         if let Some(top) = self.toplevels.get_mut(id) {
             if let Some(win) = top.window.take() {
                 self.x.destroy_window(win);
@@ -203,13 +356,37 @@ impl State {
     fn surface_for_window(&self, window: u32) -> Option<WlSurface> {
         self.toplevel_for_window(window)
             .map(|t| t.surface.wl_surface().clone())
+            .or_else(|| {
+                self.popups
+                    .values()
+                    .find(|p| p.window == Some(window))
+                    .map(|p| p.surface.wl_surface().clone())
+            })
     }
 
     /// pointer motion inside window (each toplevel's surface is at the
     /// origin of its own X window)
+    /// the size of the toplevel or popup shown in window
+    fn window_size(&self, window: u32) -> Option<(u32, u32)> {
+        self.toplevel_for_window(window)
+            .map(|t| t.size)
+            .or_else(|| {
+                self.popups
+                    .values()
+                    .find(|p| p.window == Some(window))
+                    .map(|p| p.size)
+            })
+    }
+
     fn pointer_motion(&mut self, window: u32, x: f64, y: f64, time: u32) {
+        // during a popup's grab, X reports motion anywhere relative to the
+        // popup: outside its area the pointer is on no surface of ours
+        let inside = self
+            .window_size(window)
+            .is_some_and(|(w, h)| x >= 0.0 && y >= 0.0 && x < w as f64 && y < h as f64);
         let focus = self
             .surface_for_window(window)
+            .filter(|_| inside)
             .map(|s| (s, (0.0, 0.0).into()));
         let pointer = self.pointer.clone();
         pointer.motion(
@@ -335,7 +512,10 @@ impl State {
                     );
                     pointer.frame(self);
                 }
-                x::Event::Button(win, button, pressed, time) => {
+                x::Event::Button(win, button, pressed, bx, by, time) => {
+                    if pressed && self.dismiss_popups_on_click(win, bx, by) {
+                        continue;
+                    }
                     if self.surface_for_window(win).is_some() {
                         self.pointer_button(button, pressed, time)
                     }
@@ -418,16 +598,64 @@ impl XdgShellHandler for State {
         }
     }
 
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        // placed where the positioner says, relative to the parent; it is
+        // not moved to stay on screen (yet)
+        surface.with_pending_state(|s| s.geometry = positioner.get_geometry());
+        let id = surface.wl_surface().id();
+        self.popups.insert(
+            id,
+            Popup {
+                surface,
+                window: None,
+                size: (0, 0),
+                grabbed: false,
+            },
+        );
+    }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
+        let id = surface.wl_surface().id();
+        let Some(popup) = self.popups.get_mut(&id) else {
+            return;
+        };
+        popup.grabbed = true;
+        if let Some(win) = popup.window {
+            self.x.grab_pointer(win);
+        }
+        // a grabbing popup (a menu) gets the keyboard
+        let keyboard = self.keyboard.clone();
+        keyboard.set_focus(
+            self,
+            Some(surface.wl_surface().clone()),
+            SERIAL_COUNTER.next_serial(),
+        );
+    }
 
     fn reposition_request(
         &mut self,
-        _surface: PopupSurface,
-        _positioner: PositionerState,
-        _token: u32,
+        surface: PopupSurface,
+        positioner: PositionerState,
+        token: u32,
     ) {
+        surface.with_pending_state(|s| {
+            s.geometry = positioner.get_geometry();
+            s.positioner = positioner;
+        });
+        surface.send_repositioned(token);
+        let _ = surface.send_configure();
+    }
+
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        let id = surface.wl_surface().id();
+        let had_keyboard = self.keyboard.current_focus().as_ref() == Some(surface.wl_surface());
+        let back_to = self.root_toplevel(surface.wl_surface());
+        self.hide_popup(&id);
+        self.popups.remove(&id);
+        if had_keyboard {
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, back_to, SERIAL_COUNTER.next_serial());
+        }
     }
 }
 
@@ -554,6 +782,7 @@ fn main() {
         dh,
         x,
         toplevels: HashMap::new(),
+        popups: HashMap::new(),
         start: Instant::now(),
     };
 

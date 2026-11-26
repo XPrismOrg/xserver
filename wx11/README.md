@@ -28,6 +28,9 @@ Options: `--display DISPLAY` (default `$DISPLAY`), `--socket NAME` (in
   leave, buttons and the wheel go to the toplevel under the pointer. The X
   server has already decided who gets the input (including XPrism's
   capability checks); WX11 only passes it on
+- popups (menus, tooltips) as override-redirect windows placed by their
+  positioner; a grabbing popup gets the keyboard and an X pointer grab,
+  and a click outside it closes it
 
 Buffers are copied into the window with `PutImage` for now.
 
@@ -36,7 +39,8 @@ Buffers are copied into the window with `PutImage` for now.
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
-- popups as override-redirect windows, subsurfaces, alpha (ARGB visual)
+- subsurfaces, alpha (ARGB visual), keeping popups on screen (positioner
+  constraints)
 - clipboard and drag and drop, bridged to X selections and XDND
 - a security context per Wayland client (AD-2)
 

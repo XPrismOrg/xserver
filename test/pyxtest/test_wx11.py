@@ -337,3 +337,67 @@ def test_focus_to_an_x_window_leaves_wayland(xserver, client):
     c.wait_for("keyboard leave")
     inp.key(X_KEY_A)
     assert not [line for line in c.heard() if line.startswith("key ")]
+
+
+def _place(conn, win):
+    """x, y, width, height of win"""
+    r = _reply(conn, conn.send_request(struct.pack("<BxHI", X_GET_GEOMETRY, 2, win)))
+    return struct.unpack_from("<hhHH", r.data, 12)
+
+
+def _override_redirect(conn, win):
+    r = _reply(conn, conn.send_request(struct.pack("<BxHI", X_GET_WINDOW_ATTRIBUTES, 2, win)))
+    return r.data[27] == 1
+
+
+def _popup_window(conn, host, timeout=5.0):
+    """the window shown next to host (the popup)"""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        others = [w for w in _children(conn) if w != host and _override_redirect(conn, w)]
+        if others:
+            return others[-1]
+        time.sleep(0.05)
+    return None
+
+
+def test_popup_is_an_override_redirect_window(xserver, client):
+    c, host = _shown(xserver, client, "menu host", "--popup", "30x20+10+5",
+                     "--popup-color", "00ffff")
+    c.wait_for("popup configure 10 5 30 20")
+    c.wait_for("popup drawn")
+    conn = RawX11Connection(xserver.display_num)
+    popup = _popup_window(conn, host)
+    assert popup, "no X window for the popup"
+    assert not _override_redirect(conn, host)
+    assert _place(conn, popup) == (10, 5, 30, 20)     # the host is at 0, 0
+    assert _pixel(conn, popup, 3, 3) == 0x00ffff
+
+
+def test_grabbing_popup_gets_input_and_closes_on_click_outside(xserver, client):
+    c, host = _shown(xserver, client, "menu", "--popup", "30x20+10+5", "--grab")
+    inp = Input(xserver)
+    inp.fake(MOTION_NOTIFY, x=5, y=5)
+    c.wait_for("pointer enter 5 5")
+    inp.fake(BUTTON_PRESS, 1)               # opens the menu, grabbing
+    inp.fake(BUTTON_RELEASE, 1)
+    c.wait_for("popup drawn")
+    c.wait_for("keyboard enter popup")
+    conn = RawX11Connection(xserver.display_num)
+    popup = _popup_window(conn, host)
+    assert popup
+    inp.fake(MOTION_NOTIFY, x=20, y=10)     # into the popup
+    c.wait_for("pointer enter popup 10 5")
+    inp.fake(BUTTON_PRESS, 1)               # a click inside keeps it open
+    inp.fake(BUTTON_RELEASE, 1)
+    c.wait_for("button 0x110 released")
+    assert "popup done" not in c.heard()
+    inp.fake(MOTION_NOTIFY, x=300, y=300)   # off every window
+    inp.fake(BUTTON_PRESS, 1)
+    inp.fake(BUTTON_RELEASE, 1)
+    c.wait_for("popup done")
+    end = time.monotonic() + 5
+    while popup in _children(conn) and time.monotonic() < end:
+        time.sleep(0.05)
+    assert popup not in _children(conn)
+    c.wait_for("keyboard enter")            # back to the window

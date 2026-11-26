@@ -6,8 +6,8 @@ use std::os::fd::{AsFd, OwnedFd};
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::{
-    AtomEnum, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask,
-    ImageFormat, NotifyDetail, PropMode, WindowClass,
+    AtomEnum, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, GrabMode,
+    GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, WindowClass,
 };
 use x11rb::protocol::Event as XEvent;
 use x11rb::rust_connection::RustConnection;
@@ -28,8 +28,8 @@ pub enum Event {
     Leave(u32, u32),
     /// the pointer moved to x, y in the window
     Motion(u32, f64, f64, u32),
-    /// an X pointer button went down (true) or up
-    Button(u32, u8, bool, u32),
+    /// an X pointer button went down (true) or up, at x, y in the window
+    Button(u32, u8, bool, f64, f64, u32),
 }
 
 /// the keyboard layout the X server uses (_XKB_RULES_NAMES), for the
@@ -126,19 +126,89 @@ impl XSide {
         self.conn.flush().is_ok()
     }
 
+    /// the event mask of every window WX11 shows
+    fn event_mask() -> EventMask {
+        EventMask::STRUCTURE_NOTIFY
+            | EventMask::FOCUS_CHANGE
+            | EventMask::KEY_PRESS
+            | EventMask::KEY_RELEASE
+            | EventMask::BUTTON_PRESS
+            | EventMask::BUTTON_RELEASE
+            | EventMask::POINTER_MOTION
+            | EventMask::ENTER_WINDOW
+            | EventMask::LEAVE_WINDOW
+    }
+
+    /// an override-redirect window at x, y on the root (a popup: the
+    /// window manager does not manage it)
+    pub fn create_popup(&self, x: i32, y: i32, w: u32, h: u32) -> u32 {
+        let win = self.conn.generate_id().expect("X resource id");
+        let aux = CreateWindowAux::new()
+            .background_pixel(0)
+            .override_redirect(1)
+            .event_mask(Self::event_mask());
+        let _ = self.conn.create_window(
+            self.depth,
+            win,
+            self.root,
+            x as i16,
+            y as i16,
+            w.max(1) as u16,
+            h.max(1) as u16,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            self.visual,
+            &aux,
+        );
+        let _ = self.conn.map_window(win);
+        win
+    }
+
+    /// where window's origin is on the root window
+    pub fn root_position(&self, win: u32) -> (i32, i32) {
+        self.conn
+            .translate_coordinates(win, self.root, 0, 0)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| (r.dst_x as i32, r.dst_y as i32))
+            .unwrap_or((0, 0))
+    }
+
+    pub fn move_resize(&self, win: u32, x: i32, y: i32, w: u32, h: u32) {
+        let _ = self
+            .conn
+            .configure_window(win, &ConfigureWindowAux::new().x(x).y(y).width(w).height(h));
+    }
+
+    /// grab the pointer for a popup: our own windows still get their
+    /// events, clicks anywhere else come to win (outside its area)
+    pub fn grab_pointer(&self, win: u32) -> bool {
+        let mask = EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION;
+        self.conn
+            .grab_pointer(
+                true,
+                win,
+                mask,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            )
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some_and(|r| r.status == GrabStatus::SUCCESS)
+    }
+
+    pub fn ungrab_pointer(&self) {
+        let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+    }
+
     pub fn create_window(&self, w: u32, h: u32, title: &str, app_id: &str) -> u32 {
         let win = self.conn.generate_id().expect("X resource id");
-        let aux = CreateWindowAux::new().background_pixel(0).event_mask(
-            EventMask::STRUCTURE_NOTIFY
-                | EventMask::FOCUS_CHANGE
-                | EventMask::KEY_PRESS
-                | EventMask::KEY_RELEASE
-                | EventMask::BUTTON_PRESS
-                | EventMask::BUTTON_RELEASE
-                | EventMask::POINTER_MOTION
-                | EventMask::ENTER_WINDOW
-                | EventMask::LEAVE_WINDOW,
-        );
+        let aux = CreateWindowAux::new()
+            .background_pixel(0)
+            .event_mask(Self::event_mask());
         let _ = self.conn.create_window(
             self.depth,
             win,
@@ -264,23 +334,39 @@ impl XSide {
                 XEvent::KeyRelease(k) => {
                     out.push(Event::Key(k.event, k.detail as u32, false, k.time))
                 }
-                XEvent::ButtonPress(b) => out.push(Event::Button(b.event, b.detail, true, b.time)),
-                XEvent::ButtonRelease(b) => {
-                    out.push(Event::Button(b.event, b.detail, false, b.time))
-                }
+                XEvent::ButtonPress(b) => out.push(Event::Button(
+                    b.event,
+                    b.detail,
+                    true,
+                    b.event_x as f64,
+                    b.event_y as f64,
+                    b.time,
+                )),
+                XEvent::ButtonRelease(b) => out.push(Event::Button(
+                    b.event,
+                    b.detail,
+                    false,
+                    b.event_x as f64,
+                    b.event_y as f64,
+                    b.time,
+                )),
                 XEvent::MotionNotify(m) => out.push(Event::Motion(
                     m.event,
                     m.event_x as f64,
                     m.event_y as f64,
                     m.time,
                 )),
-                XEvent::EnterNotify(e) => out.push(Event::Enter(
+                // crossings caused by grabbing or ungrabbing are not the
+                // pointer moving (a popup's grab starts with one)
+                XEvent::EnterNotify(e) if e.mode == NotifyMode::NORMAL => out.push(Event::Enter(
                     e.event,
                     e.event_x as f64,
                     e.event_y as f64,
                     e.time,
                 )),
-                XEvent::LeaveNotify(e) => out.push(Event::Leave(e.event, e.time)),
+                XEvent::LeaveNotify(e) if e.mode == NotifyMode::NORMAL => {
+                    out.push(Event::Leave(e.event, e.time))
+                }
                 _ => {}
             }
         }
