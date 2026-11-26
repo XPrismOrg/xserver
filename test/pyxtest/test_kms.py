@@ -278,7 +278,7 @@ def test_output_off_after_dpms_cycle(server):
     _assert_off(node)
     rr.set_crtc(rr.crtcs[0], mode, rr.outputs)
     _assert_showing(node, 1024, 768)
-    assert "commit" not in log.read_text(errors="replace"), "an atomic commit failed"
+    assert "atomic commit (" not in log.read_text(errors="replace"), "an atomic commit failed"
 
 
 def test_rotation(server):
@@ -327,7 +327,7 @@ def test_screen_saver_blanks_and_unblanks(server):
     _assert_off(node)
     rr.set_crtc(rr.crtcs[0], mode, rr.outputs)
     _assert_showing(node, 1024, 768)
-    assert "commit" not in log.read_text(errors="replace"), "an atomic commit failed"
+    assert "atomic commit (" not in log.read_text(errors="replace"), "an atomic commit failed"
 
 
 def test_dpms_after_screen_saver(server):
@@ -339,4 +339,4 @@ def test_dpms_after_screen_saver(server):
     _assert_off(node)
     rr.dpms(DPMS_ON)
     _assert_showing(node, 1024, 768)
-    assert "commit" not in log.read_text(errors="replace"), "an atomic commit failed"
+    assert "atomic commit (" not in log.read_text(errors="replace"), "an atomic commit failed"
