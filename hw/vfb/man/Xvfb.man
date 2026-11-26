@@ -91,6 +91,9 @@ Enable glamor hw acceleration.
 .TP 4
 .B "\-dri \fI/dev/dri/renderDxxx\fP"
 render device node for glamor to use to enable DRI3.
+If the device's kernel driver has timeline sync objects, Xvfb also
+supports explicit synchronization (DRI3 1.4 and Present 1.4), as used by
+Vulkan and EGL clients.
 .TP 4
 .B "\-linebias \fIn\fP"
 This option specifies how to adjust the pixelization of thin lines.

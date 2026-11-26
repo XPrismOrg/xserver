@@ -169,10 +169,12 @@ present_scmd_query_capabilities(present_screen_priv_ptr screen_priv)
 {
     uint32_t capabilities;
 
+    /* A screen without driver info (Xvfb, Xephyr) presents by copying on
+       a fake clock; synced copies only need its fenced flush. */
     if (!screen_priv->info)
-        return 0;
-
-    capabilities = screen_priv->info->capabilities;
+        capabilities = PresentCapabilitySyncobj;
+    else
+        capabilities = screen_priv->info->capabilities;
 
     /* Synced copies need the driver's fenced flush for the release point */
 #ifdef DRI3

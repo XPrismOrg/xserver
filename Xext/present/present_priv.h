@@ -267,6 +267,9 @@ msc_is_after(uint64_t test, uint64_t reference)
 uint32_t
 present_query_capabilities(RRCrtcPtr crtc);
 
+uint32_t
+present_query_window_capabilities(WindowPtr window);
+
 RRCrtcPtr
 present_get_crtc(WindowPtr window);
 

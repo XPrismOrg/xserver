@@ -81,6 +81,7 @@ from The Open Group.
 #ifdef GLAMOR
 #include "glamor.h"
 #include "glamor_egl.h"
+#include "present.h"
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -903,6 +904,17 @@ vfbCloseScreen(ScreenPtr pScreen)
 }
 
 #ifdef GLAMOR
+static int
+vfbPresentFlushFenced(WindowPtr window)
+{
+    ScreenPtr pScreen = window->drawable.pScreen;
+    int fd = glamor_egl_flush_fence_fd(pScreen);
+
+    if (fd < 0)
+        glamor_finish(pScreen);
+    return fd;
+}
+
 static Bool
 vfbGlamorInit(ScreenPtr pScreen)
 {
@@ -943,6 +955,12 @@ vfbGlamorInit(ScreenPtr pScreen)
         close(pvfb->dri_fd);
         return FALSE;
     }
+
+    /* Explicit sync: copies wait for the client's acquire point, and the
+       release point needs a fence for the copy, as with modesetting. */
+    if (!(flags & GLAMOR_NO_DRI3) && glamor_egl_syncobj_supported(pScreen) &&
+        present_screen_init(pScreen, NULL))
+        present_screen_set_flush_fenced(pScreen, vfbPresentFlushFenced);
 
     return TRUE;
 }

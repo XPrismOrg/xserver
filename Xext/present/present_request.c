@@ -257,19 +257,24 @@ proc_present_query_capabilities (ClientPtr client)
 
     REQUEST_SIZE_MATCH(xPresentQueryCapabilitiesReq);
     r = dixLookupWindow(&window, stuff->target, client, DixGetAttrAccess);
+    uint32_t capabilities;
+
     switch (r) {
     case Success:
         crtc = present_get_crtc(window);
+        capabilities = crtc ? present_query_capabilities(crtc)
+                            : present_query_window_capabilities(window);
         break;
     case BadWindow:
         VERIFY_RR_CRTC(stuff->target, crtc, DixGetAttrAccess);
+        capabilities = present_query_capabilities(crtc);
         break;
     default:
         return r;
     }
 
     xPresentQueryCapabilitiesReply reply = {
-        .capabilities = present_query_capabilities(crtc)
+        .capabilities = capabilities
     };
 
     if (client->swapped) {

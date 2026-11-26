@@ -42,6 +42,23 @@ present_query_capabilities(RRCrtcPtr crtc)
     return screen_priv->query_capabilities(screen_priv);
 }
 
+/*
+ * Capabilities for a window that is on no CRTC: only those that do not
+ * depend on one. Synced copies work wherever the window is, so a screen
+ * that can do them says so, which is what Vulkan and EGL clients check
+ * before using explicit sync.
+ */
+uint32_t
+present_query_window_capabilities(WindowPtr window)
+{
+    present_screen_priv_ptr screen_priv = present_screen_priv(window->drawable.pScreen);
+
+    if (!screen_priv)
+        return 0;
+
+    return screen_priv->query_capabilities(screen_priv) & PresentCapabilitySyncobj;
+}
+
 RRCrtcPtr
 present_get_crtc(WindowPtr window)
 {
