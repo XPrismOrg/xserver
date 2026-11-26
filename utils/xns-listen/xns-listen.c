@@ -65,6 +65,7 @@ static const char *const grant_names[] = {
     "capture.screen", "capture.window", "input.inject", "input.monitor",
     "input.virtual_seat", "window.enumerate", "window.inspect",
     "window.manage", "clipboard.read", "clipboard.write", "display.configure",
+    "compositor.legacy",
 };
 
 static const char *progname = "xns-listen";

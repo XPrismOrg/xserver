@@ -69,6 +69,8 @@ them: a client needs both to pass.
 | `clipboard.write` | selection hook: `SetSelectionOwner` | As above. |
 | `display.configure` | extension dispatch: the RandR requests that change the configuration (`SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output/provider properties, monitors, leases) | Checked at dispatch, so every configuring request is covered in one place. Since commit `4e749a551` RandR also looks up the CRTCs, outputs, providers and root window it changes with write access, so Xnamespace (and SELinux) see the write too. |
 
+| `compositor.legacy` | Composite: manual redirection of a root window's subwindows, which is how an external compositor (picom, KWin-X11, Mutter-X11) takes the screen over from the [scene compositor](compositor.md) | A compositor sees every window, so this capability also grants `capture.screen` and `capture.window`. Grant it only to the compositor you chose. Today only unconfined clients can redirect the root at all (Xnamespace keeps confined ones off it first), so the check first matters when Phase V confines session clients. |
+
 "Another client's" means the resource's XID belongs to a different client
 (or to the server). A client never needs a capability for its own windows.
 

@@ -51,7 +51,8 @@
 #define XNS_GRANT_CLIPBOARD_READ      (1u << 8)
 #define XNS_GRANT_CLIPBOARD_WRITE     (1u << 9)
 #define XNS_GRANT_DISPLAY_CONFIGURE   (1u << 10)
-#define XNS_GRANT_ALL                 0x000007ffu
+#define XNS_GRANT_COMPOSITOR_LEGACY   (1u << 11)
+#define XNS_GRANT_ALL                 0x00000fffu
 #define XNS_NO_CEILING                0xffffffffu /* AddListener: no limit */
 
 #define XNS_APP_STRING_MAX      255 /* app id, instance id, engine */

@@ -33,10 +33,13 @@
  *                        confined clients never reach the session clipboard.
  *                        (Letting a grant open it to them is still to do.)
  *   display.configure    extension dispatch: the RandR requests that change
- *                        the configuration. Not the resource hook: RandR
- *                        looks up outputs and CRTCs with DixReadAccess even
- *                        in most requests that change them, and
- *                        SetScreenSize looks up no RandR resource at all.
+ *                        the configuration (all in one place; RandR's own
+ *                        lookups also use write access since 4e749a551)
+ *   compositor.legacy    Composite: Manual redirection of a root window's
+ *                        subwindows (compRedirectSubwindows), i.e. taking
+ *                        the screen over from the scene compositor. A
+ *                        compositor sees every window, so holding it also
+ *                        grants capture.screen and capture.window.
  *
  * Known gaps, see docs/audit-phase1.md: CopyArea with IncludeInferiors from
  * one's own window (G1), core/XI grabs and QueryKeymap (input.monitor).
@@ -83,6 +86,7 @@ static const char *const cap_names[XP_CAP_COUNT] = {
     [XP_CAP_CLIPBOARD_READ]     = "clipboard.read",
     [XP_CAP_CLIPBOARD_WRITE]    = "clipboard.write",
     [XP_CAP_DISPLAY_CONFIGURE]  = "display.configure",
+    [XP_CAP_COMPOSITOR_LEGACY]  = "compositor.legacy",
 };
 
 const char *
@@ -165,7 +169,10 @@ XpCapCheck(ClientPtr client, enum xp_cap cap, XID target)
         return Success;
     if (!client || client == serverClient || cap < 0 || cap >= XP_CAP_COUNT)
         return Success;
-    if (provider_grants(client) & XP_CAP_BIT(cap))
+    uint32_t grants = provider_grants(client);
+    if (grants & XP_CAP_BIT(XP_CAP_COMPOSITOR_LEGACY))
+        grants |= XP_CAP_BIT(XP_CAP_CAPTURE_SCREEN) | XP_CAP_BIT(XP_CAP_CAPTURE_WINDOW);
+    if (grants & XP_CAP_BIT(cap))
         return Success;
 
     Bool deny = (xpCapMode == XP_CAP_MODE_ENFORCE);

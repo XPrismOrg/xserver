@@ -341,6 +341,8 @@ ProcXnsGetClientNamespace(ClientPtr client)
 _Static_assert(XNS_GRANT_ALL == XP_CAP_ALL, "XNS_GRANT_* out of sync with enum xp_cap");
 _Static_assert(XNS_GRANT_DISPLAY_CONFIGURE == XP_CAP_BIT(XP_CAP_DISPLAY_CONFIGURE),
                "XNS_GRANT_* out of sync with enum xp_cap");
+_Static_assert(XNS_GRANT_COMPOSITOR_LEGACY == XP_CAP_BIT(XP_CAP_COMPOSITOR_LEGACY),
+               "XNS_GRANT_* out of sync with enum xp_cap");
 _Static_assert(XNS_GRANT_CLIPBOARD_READ == XP_CAP_BIT(XP_CAP_CLIPBOARD_READ),
                "XNS_GRANT_* out of sync with enum xp_cap");
 

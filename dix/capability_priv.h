@@ -33,6 +33,8 @@ enum xp_cap {
     XP_CAP_CLIPBOARD_READ,      /* read PRIMARY / SECONDARY / CLIPBOARD */
     XP_CAP_CLIPBOARD_WRITE,     /* own PRIMARY / SECONDARY / CLIPBOARD */
     XP_CAP_DISPLAY_CONFIGURE,   /* change outputs / CRTCs (RandR) */
+    XP_CAP_COMPOSITOR_LEGACY,   /* run an external compositor (AD-1);
+                                   implies capture.screen and capture.window */
     XP_CAP_COUNT
 };
 

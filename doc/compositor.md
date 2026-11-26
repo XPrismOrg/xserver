@@ -53,8 +53,13 @@ with `BadAccess`. When that client's redirection goes away (it exits or
 unredirects), the scene compositor takes the screen back on the next
 frame. The server log records both events.
 
-In AD-1 this mode requires the `compositor.legacy` capability. That
-check is not in place yet.
+Taking over requires the `compositor.legacy` capability (see
+[capabilities](capabilities.md)), checked in `compRedirectSubwindows`.
+Today only unconfined clients can redirect a root window at all: the
+plain session and privileged namespaces hold every capability, and
+Xnamespace keeps confined clients off the real root before this check
+is reached. The check starts denying things once session clients are
+no longer all-powerful by default (Phase V).
 
 ## Code
 

@@ -19,6 +19,7 @@ COOKIE_PROTO = b"MIT-MAGIC-COOKIE-1"
 ROOT_COOKIE = bytes.fromhex("11111111111111111111111111111111")
 SANDBOX_COOKIE = bytes.fromhex("22222222222222222222222222222222")
 GRANTED_COOKIE = bytes.fromhex("33333333333333333333333333333333")
+COMPOSITOR_COOKIE = bytes.fromhex("44444444444444444444444444444444")
 
 X_GET_WINDOW_ATTRIBUTES = 3
 X_QUERY_TREE = 15
@@ -43,6 +44,9 @@ def xserver_args(tmp_path, capmode):
         f"namespace granted root\n"
         f"  auth {COOKIE_PROTO.decode()} {GRANTED_COOKIE.hex()}\n"
         f"  grant window.inspect window.enumerate\n"
+        f"namespace compositor\n"
+        f"  auth {COOKIE_PROTO.decode()} {COMPOSITOR_COOKIE.hex()}\n"
+        f"  grant compositor.legacy\n"
     )
     return ["-namespace", str(conf), "-capmode", capmode]
 
@@ -284,6 +288,17 @@ class TestCapabilityCoverage:
                                      conn.root_window, 640, 480, 169, 127))
         _assert_checked(xserver, "display.configure")
 
+    def test_compositor_legacy_implies_capture(self, xserver):
+        """A compositor sees every window: holding compositor.legacy
+        covers capture.screen (Xnamespace still keeps the namespace off
+        the real root, so only the log shows the capability decision)."""
+        for cookie in (COMPOSITOR_COOKIE, SANDBOX_COOKIE):
+            conn = _connect(xserver, cookie)
+            _get_image(conn, conn.root_window)
+        log = [l for l in _cap_log(xserver) if "would deny capture.screen" in l]
+        assert any("sandbox" in l for l in log), log
+        assert not any("compositor" in l for l in log), log
+
     def test_display_query_needs_no_capability(self, xserver):
         """Reading the configuration is not configuring it."""
         opcode = _opcode(xserver, Extension.RANDR)
@@ -319,7 +334,7 @@ X_XNS_QUERY_NAMESPACE = 4
 X_XNS_GET_CLIENT_INFO = 12
 X_XNS_SET_NAMESPACE_GRANTS = 13
 GRANT_WINDOW_INSPECT = 1 << 6
-GRANT_ALL = 0x7FF
+GRANT_ALL = 0xFFF
 BAD_VALUE = 2
 
 
@@ -374,6 +389,12 @@ def _inspect_from(xserver, cookie, spy):
     owner = _connect(xserver, cookie)
     wid = owner.create_window()
     return _errors_of(spy, struct.pack("<BxHI", X_GET_WINDOW_ATTRIBUTES, 2, wid))
+
+
+def _redirect_root_manual(xserver, conn):
+    """CompositeRedirectSubwindows(root, Manual), as picom does."""
+    opcode = _opcode(xserver, "Composite")
+    return _errors_of(conn, struct.pack("<BBHIBxxx", opcode, 2, 3, conn.root_window, 1))
 
 
 @pytest.fixture
@@ -432,6 +453,9 @@ class TestGrantsAndCeilings:
         assert grants == GRANT_WINDOW_INSPECT    # granted: inspect+enumerate, AND ceiling
         grants, ceiling = _grants_of(manager, opcode, _connect(xserver, GRANTED_COOKIE))
         assert ceiling == 0xFFFFFFFF and grants == GRANT_WINDOW_INSPECT | (1 << 5)
+
+    def test_session_compositor_needs_nothing(self, xserver):
+        assert _redirect_root_manual(xserver, _connect(xserver, ROOT_COOKIE)) == []
 
     def test_cannot_grant_builtin_namespaces(self, xserver):
         manager, opcode = _manager(xserver)

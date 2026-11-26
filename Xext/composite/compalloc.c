@@ -49,6 +49,7 @@
 #include "os/bug_priv.h"
 #include "Xext/damage/damageext_priv.h"
 
+#include "dix/capability_priv.h"
 #include "compint.h"
 #include "compositeext_intern.h"
 
@@ -354,8 +355,13 @@ compRedirectSubwindows(ClientPtr pClient, WindowPtr pWin, int update)
      * A legacy compositor taking over a root window: the XPrism scene
      * compositor steps aside instead of making this fail below.
      */
-    if (update == CompositeRedirectManual)
+    if (update == CompositeRedirectManual && !pWin->parent &&
+        pClient != serverClient) {
+        int rc = XpCapCheck(pClient, XP_CAP_COMPOSITOR_LEGACY, pWin->drawable.id);
+        if (rc != Success)
+            return rc;
         compSceneYield(pClient, pWin);
+    }
 
     CompSubwindowsPtr csw = GetCompSubwindows(pWin);
 

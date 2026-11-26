@@ -459,7 +459,7 @@ time.
 Bits, in this order from bit 0: `capture.screen`, `capture.window`,
 `input.inject`, `input.monitor`, `input.virtual_seat`,
 `window.enumerate`, `window.inspect`, `window.manage`, `clipboard.read`,
-`clipboard.write`, `display.configure` (`XNS_GRANT_*` in
+`clipboard.write`, `display.configure`, `compositor.legacy` (`XNS_GRANT_*` in
 `namespaceproto.h`). `BadValue` for other bits, `BadAccess` for the
 built-in namespaces (`root` holds everything; `anon` is for
 unauthenticated clients and is never granted anything), `BadName`.
