@@ -35,6 +35,7 @@ DRM_DROP_MASTER = 0x641F
 RR_QUERY_VERSION = 0
 RR_SET_SCREEN_SIZE = 7
 RR_GET_OUTPUT_INFO = 9
+RR_LIST_OUTPUT_PROPERTIES = 10
 RR_GET_CRTC_INFO = 20
 RR_SET_CRTC_CONFIG = 21
 RR_GET_CRTC_GAMMA_SIZE = 22
@@ -279,6 +280,23 @@ def test_output_off_after_dpms_cycle(server):
     rr.set_crtc(rr.crtcs[0], mode, rr.outputs)
     _assert_showing(node, 1024, 768)
     assert "atomic commit (" not in log.read_text(errors="replace"), "an atomic commit failed"
+
+
+def test_no_hdr_without_connector_support(server):
+    """The HDR output property needs the connector's Colorspace and
+    HDR_OUTPUT_METADATA properties, which vkms has not; its other
+    properties are still there."""
+    srv, _, _ = server
+    rr = RandR(srv.display_num)
+    d = rr.call(RR_LIST_OUTPUT_PROPERTIES, "I", rr.outputs[0])
+    n = struct.unpack_from("<H", d, 8)[0]
+    names = []
+    for atom in struct.unpack_from(f"<{n}I", d, 32):
+        seq = rr.c.send_request(struct.pack("<BxHI", 17, 2, atom))     # GetAtomName
+        r = rr.wait(seq)
+        names.append(r[32:32 + struct.unpack_from("<H", r, 8)[0]].decode())
+    assert "CONNECTOR_ID" in names, names
+    assert "HDR" not in names, names
 
 
 def test_rotation(server):

@@ -12,6 +12,7 @@
 #ifndef XF86_DDC_H
 #define XF86_DDC_H
 
+#include "compositeext.h"
 #include "edid.h"
 #include "xf86i2c.h"
 #include "xf86str.h"
@@ -49,6 +50,15 @@ extern _X_EXPORT Bool xf86SetDDCproperties(ScrnInfoPtr pScreen, xf86MonPtr DDC);
  * @return true if colorimetry & hdr static metadata is found
  */
 _X_EXPORT bool xf86DoInterpretHDRMetadata(xf86MonPtr monPtr);
+
+/**
+ * XPrism: the colour space a monitor shows when driven in HDR, from its
+ * EDID (it needs MONITOR_EDID_COMPLETE_RAWDATA): BT.2020 RGB with PQ,
+ * or HLG if it has no PQ, SDR white at 203 cd/m^2 and its peak as the
+ * peak it wants content mastered for (1000 cd/m^2 if it does not say).
+ * @return false if the monitor cannot be driven in HDR
+ */
+_X_EXPORT bool xf86MonitorHDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs);
 
 /*
  * parse EDID block and return a newly allocated xf86Monitor

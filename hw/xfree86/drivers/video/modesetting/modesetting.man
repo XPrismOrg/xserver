@@ -94,6 +94,20 @@ when an suitable application is flipping via the Present extension.
 The default is
 .B off.
 .TP
+.BI "Option \*qHDR\*q \*q" boolean \*q
+Drives outputs in HDR where the monitor's EDID says it can (BT.2020 RGB
+with the PQ or HLG transfer function) and the connector has the
+\fBColorspace\fP and \fBHDR_OUTPUT_METADATA\fP properties: the
+connector then sends BT.2020 RGB with the monitor's HDR metadata, at 10
+bits per channel or more, and the built-in compositor shows that output
+in HDR, SDR content with its white at 203 cd/m\(S2. Each such output
+has an \fBHDR\fP property (0 or 1) to change it at run time, for
+example with \fBxrandr \-\-output DP\-1 \-\-set HDR 1\fP. Needs
+atomic modesetting; use depth 30.
+.br
+The default is
+.B off.
+.TP
 .BI "Option \*qAsyncFlipSecondaries\*q \*q" boolean \*q
 Use async flips for secondary video outputs on multi-display setups. If a screen
 has multiple displays attached and DRI3 page flipping is used, then only one of

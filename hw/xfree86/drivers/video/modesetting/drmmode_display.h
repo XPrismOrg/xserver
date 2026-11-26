@@ -39,6 +39,7 @@
 #include <gbm.h>
 
 #include "drm_defines.h"
+#include "compositeext.h"
 
 enum drmmode_plane_property {
     DRMMODE_PLANE_TYPE = 0,
@@ -67,7 +68,16 @@ enum drmmode_plane_type {
 
 enum drmmode_connector_property {
     DRMMODE_CONNECTOR_CRTC_ID,
+    DRMMODE_CONNECTOR_COLORSPACE,
+    DRMMODE_CONNECTOR_HDR_OUTPUT_METADATA,
+    DRMMODE_CONNECTOR_MAX_BPC,
     DRMMODE_CONNECTOR__COUNT
+};
+
+enum drmmode_colorspace {
+    DRMMODE_COLORSPACE_DEFAULT,
+    DRMMODE_COLORSPACE_BT2020_RGB,
+    DRMMODE_COLORSPACE__COUNT
 };
 
 enum drmmode_crtc_property {
@@ -284,6 +294,16 @@ typedef struct {
     xf86CrtcPtr current_crtc;
     Atom ctm_atom;
     struct drm_color_ctm ctm;
+    /* XPrism: HDR (the "HDR" output property): the monitor's space and
+       the metadata sent to it, from its EDID */
+    Atom hdr_atom;
+    Bool hdr;                   /* asked for */
+    Bool hdr_capable;           /* the monitor and the connector can */
+    Bool hdr_managed;           /* ever asked for: the connector's colour
+                                   properties are set with each mode */
+    CompositeColorSpaceRec hdr_space;
+    struct hdr_output_metadata hdr_meta;
+    uint32_t hdr_blob_id;
 } drmmode_output_private_rec, *drmmode_output_private_ptr;
 
 typedef struct {

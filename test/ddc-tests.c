@@ -5,7 +5,9 @@
 #include <dix-config.h>
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "include/edid.h"
 #include "include/xf86DDC.h"
@@ -277,11 +279,86 @@ parse_simple(void)
     free(mon);
 }
 
+/* The colour space of a monitor driven in HDR (XPrism) */
+static bool
+hdr_space(const unsigned char *edid, CompositeColorSpaceRec *cs)
+{
+    xf86MonPtr mon = xf86InterpretEDID(0, (unsigned char *) edid);
+    bool ok;
+
+    assert(mon);
+    mon->flags |= MONITOR_EDID_COMPLETE_RAWDATA;
+    ok = xf86MonitorHDRColorSpace(mon, cs);
+    free(mon);
+    return ok;
+}
+
+/* The CTA extension's HDR static metadata data block (extended tag 6) */
+static unsigned char *
+hdr_block(unsigned char *edid)
+{
+    unsigned char *cta = edid + 128;
+    int end = cta[2];
+
+    for (int i = 4; i < end; i += (cta[i] & 0x1f) + 1)
+        if ((cta[i] >> 5) == 7 && cta[i + 1] == 6)
+            return cta + i;
+    return NULL;
+}
+
+static void
+hdr_color_space(void)
+{
+    CompositeColorSpaceRec cs;
+    static const float bt2020[8] = { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046,
+                                     0.3127, 0.3290 };
+
+    /* PQ and BT.2020 RGB, peak 366.8 cd/m^2, no minimum given */
+    assert(hdr_space(msi_mag321curv_dp_edid, &cs));
+    assert(cs.transfer == 3);
+    assert(!memcmp(cs.xy, bt2020, sizeof(bt2020)));
+    assert(cs.refWhite == 203);
+    assert(fabsf(cs.maxLum - 366.8016f) < 0.01);
+    assert(cs.minLum == 0.005f);
+
+    assert(hdr_space(hp_5dq99aa_hdmi_edid, &cs));
+    assert(cs.transfer == 3);
+    assert(fabsf(cs.maxLum - 603.6658f) < 0.01);
+    assert(fabsf(cs.minLum - 9.28359659e-05f) < 1e-9);
+
+    /* PQ and HLG, but no BT.2020 RGB: SDR only */
+    assert(!hdr_space(samsung_q800t_hdmi2_0_edid, &cs));
+    /* no CTA extension */
+    assert(!hdr_space(qemu_edid, &cs));
+
+    unsigned char edid[256];
+    memcpy(edid, msi_mag321curv_dp_edid, sizeof(edid));
+    unsigned char *b = hdr_block(edid);
+    assert(b && (b[2] & CTA_HDR_SMDB_TF_ST2084));
+
+    /* HLG without PQ */
+    b[2] = CTA_HDR_SMDB_TF_SDR | CTA_HDR_SMDB_TF_HLG;
+    assert(hdr_space(edid, &cs));
+    assert(cs.transfer == 4);
+
+    /* no peak given: 1000 cd/m^2; one below SDR white: SDR white */
+    b[2] = CTA_HDR_SMDB_TF_SDR | CTA_HDR_SMDB_TF_ST2084;
+    b[4] = 0;
+    assert(hdr_space(edid, &cs) && cs.maxLum == 1000);
+    b[4] = 1;                   /* 50 * 2^(1/32), about 51 cd/m^2 */
+    assert(hdr_space(edid, &cs) && cs.maxLum == 203);
+
+    /* SDR only */
+    b[2] = CTA_HDR_SMDB_TF_SDR;
+    assert(!hdr_space(edid, &cs));
+}
+
 const testfunc_t*
 ddc_tests(void)
 {
     static const testfunc_t testfuncs[] = {
         parse_simple,
+        hdr_color_space,
         NULL,
     };
 

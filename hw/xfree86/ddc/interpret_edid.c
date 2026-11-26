@@ -887,3 +887,33 @@ bool xf86DoInterpretHDRMetadata(xf86MonPtr monPtr)
 
     return monPtr->hdr.colorimetry_valid && monPtr->hdr.hdr_valid;
 }
+
+bool
+xf86MonitorHDRColorSpace(xf86MonPtr mon, CompositeColorSpaceRec *cs)
+{
+    static const float bt2020[8] = { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046,
+                                     0.3127, 0.3290 };
+
+    if (!mon || !(mon->flags & MONITOR_EDID_COMPLETE_RAWDATA))
+        return false;
+    memset(&mon->hdr, 0, sizeof(mon->hdr));
+    if (!xf86DoInterpretHDRMetadata(mon) ||
+        !is_CTA_CDB_BT2020_RGB(mon->hdr.colorimetry_profiles) ||
+        !(mon->hdr.tf_pq || mon->hdr.tf_hlg))
+        return false;
+
+    memset(cs, 0, sizeof(*cs));
+    memcpy(cs->xy, bt2020, sizeof(bt2020));
+    cs->transfer = mon->hdr.tf_pq ? 3 : 4;      /* PQ, else HLG */
+    cs->refWhite = 203;                         /* BT.2408 */
+    /* the peak it wants content mastered for; 0 if it does not say:
+       then BT.2408's reference display, 1000 cd/m^2 */
+    cs->maxLum = mon->hdr.desired_content_max_luminance;
+    if (!(cs->maxLum > 0))
+        cs->maxLum = 1000;
+    else if (cs->maxLum < cs->refWhite)
+        cs->maxLum = cs->refWhite;
+    cs->minLum = mon->hdr.desired_content_min_luminance > 0 ?
+        mon->hdr.desired_content_min_luminance : 0.005;
+    return true;
+}

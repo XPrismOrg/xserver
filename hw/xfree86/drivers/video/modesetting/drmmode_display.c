@@ -603,6 +603,127 @@ drmmode_atomic_commit(ScrnInfoPtr scrn, drmModeAtomicReq *req,
     return ret;
 }
 
+/*
+ * XPrism: HDR. On, the connector sends BT.2020 RGB with the monitor's
+ * HDR metadata and at least 10 bits per channel; off (once it was on),
+ * the defaults again. The compositor then shows the CRTC in the
+ * monitor's HDR space (drmmode_crtc_update_color_space).
+ */
+static Bool
+drmmode_output_hdr_on(drmmode_output_private_ptr drmmode_output)
+{
+    return drmmode_output->hdr && drmmode_output->hdr_capable;
+}
+
+static int
+connector_add_hdr_props(drmModeAtomicReq *req, xf86OutputPtr output)
+{
+    drmmode_output_private_ptr drmmode_output = output->driver_private;
+    drmmode_prop_info_ptr cs = &drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE];
+    drmmode_prop_info_ptr bpc = &drmmode_output->props_connector[DRMMODE_CONNECTOR_MAX_BPC];
+    modesettingPtr ms = modesettingPTR(output->scrn);
+    Bool on = drmmode_output_hdr_on(drmmode_output);
+    int ret = 0;
+
+    if (!drmmode_output->hdr_managed || !cs->prop_id)
+        return 0;
+    if (on && !drmmode_output->hdr_blob_id &&
+        drmModeCreatePropertyBlob(ms->fd, &drmmode_output->hdr_meta,
+                                  sizeof(drmmode_output->hdr_meta),
+                                  &drmmode_output->hdr_blob_id))
+        return -1;
+    ret |= connector_add_prop(req, drmmode_output, DRMMODE_CONNECTOR_COLORSPACE,
+                              cs->enum_values[on ? DRMMODE_COLORSPACE_BT2020_RGB :
+                                              DRMMODE_COLORSPACE_DEFAULT].value);
+    ret |= connector_add_prop(req, drmmode_output, DRMMODE_CONNECTOR_HDR_OUTPUT_METADATA,
+                              on ? drmmode_output->hdr_blob_id : 0);
+    /* the kernel picks the most it can, up to this: 10 for HDR */
+    if (bpc->prop_id && bpc->value < 10)
+        ret |= connector_add_prop(req, drmmode_output, DRMMODE_CONNECTOR_MAX_BPC,
+                                  on ? 10 : bpc->value);
+    return ret;
+}
+
+static uint16_t
+hdr_u16(double v)
+{
+    v = round(v);
+    return (uint16_t) (v < 0 ? 0 : v > 65535 ? 65535 : v);
+}
+
+/* What the HDR property needs from the monitor's EDID: whether it can,
+   its space, and the metadata to send it */
+static void
+drmmode_output_hdr_probe(xf86OutputPtr output, xf86MonPtr mon)
+{
+    drmmode_output_private_ptr drmmode_output = output->driver_private;
+    struct hdr_metadata_infoframe *m = &drmmode_output->hdr_meta.hdmi_metadata_type1;
+    CompositeColorSpaceRec *cs = &drmmode_output->hdr_space;
+    modesettingPtr ms = modesettingPTR(output->scrn);
+    Bool capable;
+
+    capable = drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE].prop_id &&
+        drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE]
+            .enum_values[DRMMODE_COLORSPACE_BT2020_RGB].valid &&
+        drmmode_output->props_connector[DRMMODE_CONNECTOR_HDR_OUTPUT_METADATA].prop_id &&
+        xf86MonitorHDRColorSpace(mon, cs);
+    if (!capable) {
+        drmmode_output->hdr_capable = FALSE;
+        return;
+    }
+
+    struct hdr_output_metadata meta = { .metadata_type = 0 };   /* static, type 1 */
+    m = &meta.hdmi_metadata_type1;
+    m->eotf = cs->transfer == 3 ? 2 : 3;        /* SMPTE ST 2084, else HLG */
+    m->metadata_type = 0;
+    /* the monitor's own primaries, in 0.00002 */
+    const float xy[8] = { mon->features.redx, mon->features.redy,
+                          mon->features.greenx, mon->features.greeny,
+                          mon->features.bluex, mon->features.bluey,
+                          mon->features.whitex, mon->features.whitey };
+    for (int i = 0; i < 3; i++) {
+        m->display_primaries[i].x = hdr_u16(xy[2 * i] / 0.00002);
+        m->display_primaries[i].y = hdr_u16(xy[2 * i + 1] / 0.00002);
+    }
+    m->white_point.x = hdr_u16(xy[6] / 0.00002);
+    m->white_point.y = hdr_u16(xy[7] / 0.00002);
+    m->max_display_mastering_luminance = hdr_u16(cs->maxLum);
+    m->min_display_mastering_luminance =
+        hdr_u16(cs->minLum / 0.0001);
+    m->max_cll = hdr_u16(cs->maxLum);
+    m->max_fall = hdr_u16(mon->hdr.desired_content_max_frame_avg_luminance > 0 ?
+                          mon->hdr.desired_content_max_frame_avg_luminance : cs->maxLum);
+    if (memcmp(&meta, &drmmode_output->hdr_meta, sizeof(meta)) &&
+        drmmode_output->hdr_blob_id) {
+        drmModeDestroyPropertyBlob(ms->fd, drmmode_output->hdr_blob_id);
+        drmmode_output->hdr_blob_id = 0;
+    }
+    drmmode_output->hdr_meta = meta;
+    drmmode_output->hdr_capable = TRUE;
+}
+
+/* Tell the compositor the space CRTC crtc shows: HDR if an output on it
+   is, else the screen's */
+static void
+drmmode_crtc_update_color_space(xf86CrtcPtr crtc)
+{
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(crtc->scrn);
+    const CompositeColorSpaceRec *space = NULL;
+
+    if (!crtc->scrn->pScreen || !crtc->randr_crtc)
+        return;
+    for (int i = 0; i < xf86_config->num_output; i++) {
+        xf86OutputPtr output = xf86_config->output[i];
+        drmmode_output_private_ptr drmmode_output = output->driver_private;
+
+        if (output->crtc == crtc && drmmode_output_hdr_on(drmmode_output)) {
+            space = &drmmode_output->hdr_space;
+            break;
+        }
+    }
+    CompositeSetCrtcColorSpace(crtc->scrn->pScreen, crtc->randr_crtc, space);
+}
+
 static int
 crtc_add_dpms_props(drmModeAtomicReq *req, xf86CrtcPtr crtc,
                     int new_dpms, Bool *active)
@@ -628,8 +749,10 @@ crtc_add_dpms_props(drmModeAtomicReq *req, xf86CrtcPtr crtc,
         if (drmmode_output->output_id == -1)
             continue;
 
-        if (new_dpms == DPMSModeOn)
+        if (new_dpms == DPMSModeOn) {
             crtc_active = TRUE;
+            ret |= connector_add_hdr_props(req, output);
+        }
 
         ret |= connector_add_prop(req, drmmode_output,
                                   DRMMODE_CONNECTOR_CRTC_ID,
@@ -1676,6 +1799,7 @@ drmmode_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
 
         if (crtc->scrn->pScreen)
             xf86CrtcSetScreenSubpixelOrder(crtc->scrn->pScreen);
+        drmmode_crtc_update_color_space(crtc);
 
         ms->pending_modeset = TRUE;
         drmmode_crtc->need_modeset = FALSE;
@@ -3281,6 +3405,7 @@ drmmode_output_get_modes(xf86OutputPtr output)
             mon->flags |= MONITOR_EDID_COMPLETE_RAWDATA;
     }
     xf86OutputSetEDID(output, mon);
+    drmmode_output_hdr_probe(output, mon);
 
     drmmode_output_attach_tile(output);
 
@@ -3304,6 +3429,8 @@ drmmode_output_destroy(xf86OutputPtr output)
 
     drmModeFreePropertyBlob(drmmode_output->edid_blob);
     drmModeFreePropertyBlob(drmmode_output->tile_blob);
+    if (drmmode_output->hdr_blob_id)
+        drmModeDestroyPropertyBlob(drmmode_output->drmmode->fd, drmmode_output->hdr_blob_id);
 
     for (i = 0; i < drmmode_output->num_props; i++) {
         drmModeFreeProperty(drmmode_output->props[i].mode_prop);
@@ -3428,6 +3555,20 @@ drmmode_output_create_resources(xf86OutputPtr output)
                            "RRChangeOutputProperty error, %d\n", err);
             }
         }
+    }
+
+    /* XPrism: HDR on or off, where the connector can send it */
+    if (drmmode_output->props_connector[DRMMODE_CONNECTOR_COLORSPACE].prop_id &&
+        drmmode_output->props_connector[DRMMODE_CONNECTOR_HDR_OUTPUT_METADATA].prop_id) {
+        Atom name = dixAddAtom("HDR");
+        INT32 hdr_range[2] = { 0, 1 }, value = drmmode_output->hdr;
+
+        if (name != BAD_RESOURCE &&
+            !RRConfigureOutputProperty(output->randr_output, name, FALSE, TRUE,
+                                       FALSE, 2, hdr_range) &&
+            !RRChangeOutputProperty(output->randr_output, name, XA_INTEGER, 32,
+                                    PropModeReplace, 1, &value, FALSE, FALSE))
+            drmmode_output->hdr_atom = name;
     }
 
     if (drmmode->use_ctm) {
@@ -3572,6 +3713,34 @@ drmmode_output_set_property(xf86OutputPtr output, Atom property,
                 }
             }
         }
+    }
+
+    if (property && property == drmmode_output->hdr_atom) {
+        if (value->type != XA_INTEGER || value->format != 32 || value->size != 1)
+            return FALSE;
+        Bool on = *(INT32 *) value->data != 0;
+        if (on && !drmmode_output->hdr_capable) {
+            xf86DrvMsg(output->scrn->scrnIndex, X_WARNING,
+                       "%s: the monitor cannot show HDR\n", output->name);
+            return FALSE;
+        }
+        if (on == drmmode_output->hdr)
+            return TRUE;
+        if (on && output->scrn->depth < 30)
+            xf86DrvMsg(output->scrn->scrnIndex, X_WARNING,
+                       "%s: HDR at depth %d bands; use depth 30\n",
+                       output->name, output->scrn->depth);
+        drmmode_output->hdr = on;
+        drmmode_output->hdr_managed = TRUE;
+        xf86DrvMsg(output->scrn->scrnIndex, X_INFO, "%s: HDR %s\n", output->name,
+                   on ? "on" : "off");
+        xf86CrtcPtr crtc = output->crtc;
+        if (crtc && crtc->enabled &&
+            !xf86CrtcSetMode(crtc, &crtc->mode, crtc->rotation, crtc->x, crtc->y)) {
+            drmmode_output->hdr = !on;
+            return FALSE;
+        }
+        return TRUE;
     }
 
     if (property == drmmode_output->ctm_atom) {
@@ -3767,8 +3936,19 @@ drmmode_output_init(ScrnInfoPtr pScrn, drmmode_ptr drmmode, drmModeResPtr mode_r
     drmModePropertyBlobPtr path_blob = NULL;
     const char *s;
     drmModeObjectPropertiesPtr props;
+    static drmmode_prop_enum_info_rec colorspace_enums[] = {
+        [DRMMODE_COLORSPACE_DEFAULT] = { .name = "Default", },
+        [DRMMODE_COLORSPACE_BT2020_RGB] = { .name = "BT2020_RGB", },
+    };
     static const drmmode_prop_info_rec connector_props[] = {
         [DRMMODE_CONNECTOR_CRTC_ID] = { .name = "CRTC_ID", },
+        [DRMMODE_CONNECTOR_COLORSPACE] = {
+            .name = "Colorspace",
+            .enum_values = colorspace_enums,
+            .num_enum_values = DRMMODE_COLORSPACE__COUNT,
+        },
+        [DRMMODE_CONNECTOR_HDR_OUTPUT_METADATA] = { .name = "HDR_OUTPUT_METADATA", },
+        [DRMMODE_CONNECTOR_MAX_BPC] = { .name = "max bpc", },
     };
 
     koutput =
@@ -3842,6 +4022,9 @@ drmmode_output_init(ScrnInfoPtr pScrn, drmmode_ptr drmmode, drmModeResPtr mode_r
     drmmode_output->mode_output = koutput;
     drmmode_output->mode_encoders = kencoders;
     drmmode_output->drmmode = drmmode;
+    /* HDR where the monitor can: off unless Option "HDR" */
+    drmmode_output->hdr = drmmode_output->hdr_managed =
+        xf86ReturnOptValBool(drmmode->Options, OPTION_HDR, FALSE);
     output->mm_width = koutput->mmWidth;
     output->mm_height = koutput->mmHeight;
 

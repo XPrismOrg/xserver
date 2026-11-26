@@ -1,6 +1,6 @@
 # Colour management, wide gamut and HDR (Phase IV design)
 
-Status: being implemented. Steps 1 to 4 are done: the colour library
+Status: being implemented. Steps 1 to 4 are done, step 5 in part: the colour library
 (`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
 [XPRISM-COLOR 0.2](xprism-color-protocol.md) with window descriptions,
 output colour spaces in Xvfb, including HDR (PQ and HLG) outputs, and, with
@@ -153,5 +153,14 @@ Phase II, for vkms in CI or real hardware.
    output's own space come back exactly from its black level up, so
    they look the same composited or shown directly. sRGB outputs still
    compose in sRGB, unchanged.
-5. modesetting: `Colorspace`, `HDR_OUTPUT_METADATA`, `max bpc`, 10-bit
-   and fp16 scanout (needs a display device).
+5. modesetting, in part: HDR outputs (`Option "HDR"`, and an `HDR`
+   output property per output to change it at run time). Where the
+   monitor's EDID offers BT.2020 RGB with PQ or HLG
+   (`xf86MonitorHDRColorSpace`, unit-tested in `test/ddc-tests.c`) and
+   the connector has `Colorspace` and `HDR_OUTPUT_METADATA`, the mode
+   set sends BT.2020 RGB with the monitor's metadata and `max bpc` 10,
+   and the compositor shows that CRTC in the monitor's HDR space (one
+   space per CRTC). Checked on vkms only so far (which has neither
+   property, nor an EDID): it needs an HDR monitor. Remaining: wide-gamut
+   SDR monitors from their EDID primaries, fp16 scanout, the hardware
+   cursor's conversion.
