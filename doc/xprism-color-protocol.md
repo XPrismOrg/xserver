@@ -14,7 +14,7 @@ The wire format is defined in `Xext/composite/xprismcolorproto.h`.
 ## Availability
 
 The extension is only present while the built-in compositor is enabled
-(`-compositor on`). Clients should check with
+(the default; `-compositor off` disables it). Clients should check with
 `QueryExtension("XPRISM-COLOR")`.
 
 ## Access

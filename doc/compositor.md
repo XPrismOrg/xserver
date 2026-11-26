@@ -6,10 +6,11 @@ each screen, and the window manager describes effects through the
 [XPRISM-SCENE](xprism-scene-protocol.md) extension without needing access
 to other windows' contents.
 
-The compositor is experimental and disabled by default. Enable it with:
+The compositor is enabled by default (the `compositor_default` build
+option). Disable it with:
 
 ```sh
-Xvfb :1 -compositor on
+Xvfb :1 -compositor off
 ```
 
 ## Operation
@@ -158,8 +159,6 @@ kernel driver included) are expected to work the same way.
 
 ## Limitations
 
-- The compositor is disabled by default; it can be enabled with
-  `-compositor on` or the `compositor_default` build option.
 - All screens are updated from the main loop rather than at each
   output's vertical blank. Per-output scheduling depends on the atomic
   modesetting work planned for Phase II.

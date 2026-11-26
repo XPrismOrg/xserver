@@ -50,9 +50,10 @@ protocol performs the action. They are granted per namespace, can be
 limited per launcher socket, and can be changed at runtime. By default the server only logs
 what would be denied. See [doc/capabilities.md](doc/capabilities.md).
 
-### Server-side compositing (experimental)
+### Server-side compositing
 
-With `-compositor on`, the server composites windows itself. ARGB
+By default the server composites windows itself (`-compositor off`
+disables it). ARGB
 windows and window opacity work without an external compositor, and
 fullscreen windows bypass composition. The window manager can set
 per-window opacity, transforms, rounded corners, shadows and background

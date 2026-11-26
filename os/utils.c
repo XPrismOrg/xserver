@@ -272,8 +272,8 @@ UseMsg(void)
            "                       would be denied (default), or deny\n"
            "                       (experimental)\n");
     ErrorF("c #                    key-click volume (0-100)\n");
-    ErrorF("-compositor on|off     built-in compositor (experimental; default\n"
-           "                       set at build time, normally off)\n");
+    ErrorF("-compositor on|off     built-in compositor (default set at build\n"
+           "                       time, normally on)\n");
     ErrorF("-cc int                default color visual class\n");
     ErrorF("-nocursor              disable the cursor\n");
     ErrorF("-core                  generate core dump on fatal error\n");
