@@ -9,7 +9,7 @@ import time
 
 import pytest
 from test_compositor import (BLUE, GREEN, RED, ROOT_BG, SCREEN_H, SCREEN_W,
-                             Client, _is_composited, _near)
+                             Client, _becomes_direct, _is_composited, _near)
 from xclient import RawX11Connection, X11Error
 
 X_CHANGE_WINDOW_ATTRIBUTES = 2
@@ -380,7 +380,7 @@ def test_decorated_fullscreen_window_is_composited(xvfb):
     fs = x.window(0, 0, SCREEN_W, SCREEN_H, GREEN)
     x.map(fs)
     x.pixel(0, 0)
-    assert not _is_composited(x, fs)
+    assert _becomes_direct(x, fs)
     wm = Scene(xvfb)
     wm.become_wm(x)
     wm.decorate(fs, RADIUS, radius=30)
@@ -388,7 +388,7 @@ def test_decorated_fullscreen_window_is_composited(xvfb):
     assert _is_composited(x, fs)
     wm.clear(fs, RADIUS)
     assert x.pixel(0, 0) == GREEN
-    assert not _is_composited(x, fs)
+    assert _becomes_direct(x, fs)
 
 
 def test_swapped_decoration(xvfb):

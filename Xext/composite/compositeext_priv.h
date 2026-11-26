@@ -5,12 +5,17 @@
 #ifndef _XSERVER_COMPOSITEEXT_PRIV_H_
 #define _XSERVER_COMPOSITEEXT_PRIV_H_
 
+#include <stdbool.h>
 #include <X11/X.h>
 
 #include "include/xlibre_ptrtypes.h"
 
 void compSetRedirectBorderClip(WindowPtr pWin, RegionPtr pRegion);
 RegionPtr compGetRedirectBorderClip(WindowPtr pWin);
+
+/* XPrism: true if pWin is redirected only by the built-in compositor,
+   which clients must not be able to observe */
+bool compSceneOwnsRedirection(WindowPtr pWin);
 
 void PanoramiXCompositeInit(void);
 void PanoramiXCompositeReset(void);

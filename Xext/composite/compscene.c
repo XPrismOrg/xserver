@@ -41,7 +41,9 @@
 
 #include "compint.h"
 #include "compositeext_intern.h"
+#include "compositeext_priv.h"
 #include "dix/request_priv.h"
+#include "dix/resource_priv.h"
 #include "xprismsceneproto.h"
 
 #include <math.h>
@@ -102,12 +104,17 @@ typedef struct {
     PixUnion bg;
     /* fullscreen window shown directly (unredirected), or None */
     XID direct;
+    /* report drawing onto the root window, before and after it happens */
+    DamagePtr rootDamage;
+    DamagePtr rootDrawnDamage;
 } SceneScreenRec, *SceneScreenPtr;
 
 static DevPrivateKeyRec sceneScreenKeyRec;
 static DevPrivateKeyRec sceneWindowKeyRec;     /* DamagePtr per top-level */
 static DevPrivateKeyRec sceneAttrsKeyRec;      /* SceneAttrsRec per window */
 static Atom atomOpacity;
+static bool sceneInFrame;       /* painting a frame, or copying to windows */
+int compSceneHold;              /* > 0: no frames on demand (compCopyWindow) */
 static unsigned long handlersGeneration;
 
 static SceneScreenPtr
@@ -650,20 +657,13 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
 {
     WindowPtr pRoot = pScreen->root;
 
-    if (t->screen) {
-        /* Composite inhibits the root background while Manual redirection
-           is in place: painting it is our job now */
-        pRoot->inhibitBGPaint = FALSE;
-        miPaintWindow(pRoot, pRegion, PW_BACKGROUND);
-        pRoot->inhibitBGPaint = TRUE;
-        return;
-    }
-
-    DrawablePtr pDrawable = t->pict->pDrawable;
+    /* On the screen, the root window's children clip it: draw through
+       them, they are painted afterwards. */
+    DrawablePtr pDrawable = t->screen ? &pRoot->drawable : t->pict->pDrawable;
     GCPtr pGC = GetScratchGC(pDrawable->depth, pScreen);
     if (!pGC)
         return;
-    ChangeGCVal vals[4];
+    ChangeGCVal vals[5];
     BITS32 mask;
     if (pRoot->backgroundState == BackgroundPixmap) {
         mask = GCFillStyle | GCTile | GCTileStipXOrigin | GCTileStipYOrigin;
@@ -677,6 +677,10 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
             pRoot->background.pixel : pScreen->blackPixel;
     }
     ChangeGC(NULL, pGC, mask, vals);
+    if (t->screen) {
+        vals[0].val = IncludeInferiors;
+        ChangeGC(NULL, pGC, GCSubwindowMode, vals);
+    }
     ValidateGC(pDrawable, pGC);
 
     int n = RegionNumRects(pRegion);
@@ -1114,11 +1118,99 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
 
 /* ---- activation ------------------------------------------------------ */
 
+/*
+ * A client drawing onto the root window (IncludeInferiors draws over the
+ * top-level windows too) expects the windows it draws over to be on the
+ * screen already: compose pending changes first, as before reads. Damage
+ * reports before the drawing is done. Painting a frame reports here too;
+ * sceneFrame ignores that.
+ */
+static void
+sceneRootDrawReport(DamagePtr pDamage, RegionPtr pRegion, void *closure)
+{
+    compSceneValidate((ScreenPtr) closure);
+}
+
+/*
+ * Drawing on the root window with IncludeInferiors draws over its
+ * children. Unredirected, that lands in the children's contents (they
+ * are on the screen); here their contents are in their own pixmaps. So
+ * copy what was drawn over each top-level window's visible part into its
+ * pixmap, as if it had been drawn there. With ClipByChildren nothing is
+ * drawn over the children: they clip the root (compSceneOwnsRedirection).
+ */
+static void
+sceneRootDrawnReport(DamagePtr pDamage, RegionPtr pRegion, void *closure)
+{
+    ScreenPtr pScreen = closure;
+    WindowPtr pRoot = pScreen->root;
+    PixmapPtr pScreenPixmap = (*pScreen->GetScreenPixmap) (pScreen);
+
+    if (sceneInFrame || !RegionNotEmpty(pRegion))
+        return;
+    /* reading the screen below must not compose a frame first: that would
+       repaint the windows over what was just drawn */
+    sceneInFrame = true;
+
+    RegionRec covered, part;
+    RegionNull(&covered);
+    RegionNull(&part);
+    for (WindowPtr pWin = pRoot->firstChild; pWin; pWin = pWin->nextSib) {
+        if (!pWin->viewable || pWin->drawable.class == InputOnly)
+            continue;
+        RegionSubtract(&part, pRegion, &covered);
+        RegionIntersect(&part, &part, &pWin->borderSize);
+        RegionUnion(&covered, &covered, &pWin->borderSize);
+        PixmapPtr pPixmap = (*pScreen->GetWindowPixmap) (pWin);
+        if (!RegionNotEmpty(&part) || pPixmap == pScreenPixmap)
+            continue;
+
+        GCPtr pGC = GetScratchGC(pPixmap->drawable.depth, pScreen);
+        if (!pGC)
+            continue;
+        ChangeGCVal val = { .val = IncludeInferiors };
+        ChangeGC(NULL, pGC, GCSubwindowMode, &val);
+        ValidateGC(&pPixmap->drawable, pGC);
+        int n = RegionNumRects(&part);
+        BoxPtr b = RegionRects(&part);
+        for (int k = 0; k < n; k++)
+            (*pGC->ops->CopyArea) (&pRoot->drawable, &pPixmap->drawable, pGC,
+                                   b[k].x1 - pRoot->drawable.x,
+                                   b[k].y1 - pRoot->drawable.y,
+                                   b[k].x2 - b[k].x1, b[k].y2 - b[k].y1,
+                                   b[k].x1 - pPixmap->screen_x,
+                                   b[k].y1 - pPixmap->screen_y);
+        FreeScratchGC(pGC);
+    }
+    RegionUninit(&part);
+    RegionUninit(&covered);
+    sceneInFrame = false;
+}
+
+static void
+sceneRootDamageDestroy(DamagePtr pDamage, void *closure)
+{
+    SceneScreenPtr ss = sceneScreen((ScreenPtr) closure);
+
+    if (ss && ss->rootDamage == pDamage)
+        ss->rootDamage = NULL;
+    if (ss && ss->rootDrawnDamage == pDamage)
+        ss->rootDrawnDamage = NULL;
+}
+
 static void
 sceneDeactivate(ScreenPtr pScreen, SceneScreenPtr ss)
 {
     if (!ss->active)
         return;
+    DamagePtr damages[2] = { ss->rootDamage, ss->rootDrawnDamage };
+    ss->rootDamage = ss->rootDrawnDamage = NULL;
+    for (int k = 0; k < 2; k++) {
+        if (damages[k]) {
+            DamageUnregister(damages[k]);
+            DamageDestroy(damages[k]);
+        }
+    }
     for (WindowPtr pWin = pScreen->root->firstChild; pWin; pWin = pWin->nextSib)
         sceneDropWindowDamage(pWin);
     ss->active = false;
@@ -1134,12 +1226,27 @@ sceneActivate(ScreenPtr pScreen, SceneScreenPtr ss)
 {
     if (ss->active || ss->yielded || !pScreen->root)
         return;
-    if (compRedirectSubwindows(serverClient, pScreen->root,
-                               CompositeRedirectManual) != Success)
-        return;
+    /* active first: the clips computed while redirecting depend on it
+       (compSceneOwnsRedirection) */
     ss->active = true;
+    if (compRedirectSubwindows(serverClient, pScreen->root,
+                               CompositeRedirectManual) != Success) {
+        ss->active = false;
+        return;
+    }
     ss->fullDamage = true;
     ss->bgState = -1;
+    ss->rootDamage = DamageCreate(sceneRootDrawReport, sceneRootDamageDestroy,
+                                  DamageReportRawRegion, TRUE, pScreen, pScreen);
+    if (ss->rootDamage)
+        DamageRegister(&pScreen->root->drawable, ss->rootDamage);
+    ss->rootDrawnDamage = DamageCreate(sceneRootDrawnReport, sceneRootDamageDestroy,
+                                       DamageReportRawRegion, TRUE, pScreen,
+                                       pScreen);
+    if (ss->rootDrawnDamage) {
+        DamageSetReportAfterOp(ss->rootDrawnDamage, TRUE);
+        DamageRegister(&pScreen->root->drawable, ss->rootDrawnDamage);
+    }
 }
 
 /* ---- direct scanout ----------------------------------------------------- */
@@ -1173,17 +1280,23 @@ sceneCanScanOut(WindowPtr pWin)
     return b->x1 <= r->x1 && b->y1 <= r->y1 && b->x2 >= r->x2 && b->y2 >= r->y2;
 }
 
-static void
-sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss)
+/* The window that should be shown directly now, or NULL. */
+static WindowPtr
+sceneWantDirect(ScreenPtr pScreen)
 {
-    WindowPtr top = NULL;
-
     for (WindowPtr pWin = pScreen->root->firstChild; pWin; pWin = pWin->nextSib)
-        if (pWin->viewable && pWin->drawable.class == InputOutput) {
-            top = pWin;
-            break;
-        }
-    WindowPtr want = (top && sceneCanScanOut(top)) ? top : NULL;
+        if (pWin->viewable && pWin->drawable.class == InputOutput)
+            return sceneCanScanOut(pWin) ? pWin : NULL;
+    return NULL;
+}
+
+/* Start or end direct scanout. Starting it frees the window's pixmap, so
+   only the block handler does that (allowStart); ending it allocates one
+   and is also done before composing on demand. */
+static void
+sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss, bool allowStart)
+{
+    WindowPtr want = sceneWantDirect(pScreen);
 
     if (ss->direct != None && (!want || want->drawable.id != ss->direct)) {
         WindowPtr old;
@@ -1193,27 +1306,34 @@ sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss)
         ss->direct = None;
         ss->fullDamage = true;
     }
-    if (want && ss->direct == None && want->redirectDraw != RedirectDrawNone &&
+    if (allowStart && want && ss->direct == None &&
+        want->redirectDraw != RedirectDrawNone &&
         compUnredirectWindow(serverClient, want, CompositeRedirectManual) == Success &&
         want->redirectDraw == RedirectDrawNone)
         ss->direct = want->drawable.id;
 }
 
+/*
+ * Compose one frame. A frame composed on demand (fromHook: before the
+ * root window is read from or drawn on) runs in the middle of a request
+ * or a drawing operation. It may end direct scanout, which gives the
+ * window a new pixmap, but not start it, which frees one that the
+ * operation may still use; and none runs while compCopyWindow copies a
+ * window. Starting direct scanout is left to the block handler.
+ */
 static void
-sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
+sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
 {
-    /* Painting reads the screen (background blur), and reads of a root
-       window compose pending changes first (compSceneValidate): a frame
-       must not start another one. */
-    static bool inFrame;
     RegionRec damage;
     WindowPtr *wins;
     SceneNodeRec *nodes;
 
-    if (inFrame)
+    /* Painting draws on the root window, and drawing on or reading from
+       it composes pending changes first: a frame must not start another */
+    if (sceneInFrame || (fromHook && compSceneHold))
         return;
-    inFrame = true;
-    sceneUpdateDirect(pScreen, ss);
+    sceneInFrame = true;
+    sceneUpdateDirect(pScreen, ss, !fromHook);
 
     RegionNull(&damage);
     int n = sceneSnapshot(pScreen, ss, &wins, &nodes, &damage);
@@ -1235,7 +1355,36 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
     free(ss->nodes);
     ss->nodes = nodes;
     ss->numNodes = n;
-    inFrame = false;
+    sceneInFrame = false;
+}
+
+/*
+ * Whether pWin is drawn into a pixmap only because the built-in
+ * compositor redirects its top-level window. Clients cannot see that
+ * redirection, so the server must keep the semantics of an unredirected
+ * window for them (GetImage bounds, for one). A redirection requested by
+ * any client, of the top-level window or of a window inside it, counts
+ * as visible.
+ */
+bool
+compSceneOwnsRedirection(WindowPtr pWin)
+{
+    SceneScreenPtr ss = sceneScreen(pWin->drawable.pScreen);
+
+    if (!ss || !ss->active)
+        return false;
+    WindowPtr pRedirected = pWin;
+    while (pRedirected && pRedirected->redirectDraw == RedirectDrawNone)
+        pRedirected = pRedirected->parent;
+    if (!pRedirected || !pRedirected->parent || pRedirected->parent->parent)
+        return false;           /* not redirected, or not a top-level */
+    CompWindowPtr cw = GetCompWindow(pRedirected);
+    if (!cw)
+        return false;
+    for (CompClientWindowPtr ccw = cw->clients; ccw; ccw = ccw->next)
+        if (dixClientIdForXID(ccw->id) != serverClient->index)
+            return false;
+    return true;
 }
 
 /* Bring the screen up to date before its contents are read. */
@@ -1245,7 +1394,7 @@ compSceneValidate(ScreenPtr pScreen)
     SceneScreenPtr ss = sceneScreen(pScreen);
 
     if (ss && ss->active)
-        sceneFrame(pScreen, ss);
+        sceneFrame(pScreen, ss, true);
 }
 
 static void
@@ -1259,7 +1408,7 @@ sceneBlockHandler(void *data, void *timeout)
             continue;
         sceneActivate(pScreen, ss);
         if (ss->active)
-            sceneFrame(pScreen, ss);
+            sceneFrame(pScreen, ss, false);
     }
 }
 

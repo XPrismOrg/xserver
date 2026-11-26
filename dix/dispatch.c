@@ -135,6 +135,7 @@ Equipment Corporation.
 #include "Xext/panoramiX/panoramiX_priv.h"
 #include "Xext/xfixes/xfixesint.h"
 #include "Xext/xfixes/xfixes_priv.h"
+#include "Xext/composite/compositeext_priv.h"
 
 #include "windowstr.h"
 #include "dixfontstr.h"
@@ -2108,6 +2109,17 @@ DoGetImage(ClientPtr client, int format, Drawable drawable,
     if (relx < 0 || relx + width > (int) pBoundingDraw->width ||
         rely < 0 || rely + height > (int) pBoundingDraw->height)
         return BadMatch;
+#ifdef COMPOSITE
+    /* The built-in compositor's redirection is invisible to clients: for
+     * them the rectangle must be on the screen, as without redirection. */
+    if (pDraw->type == DRAWABLE_WINDOW &&
+        compSceneOwnsRedirection((WindowPtr) pDraw)) {
+        int sx = pDraw->x + x, sy = pDraw->y + y;
+        if (sx < 0 || sx + width > pDraw->pScreen->width ||
+            sy < 0 || sy + height > pDraw->pScreen->height)
+            return BadMatch;
+    }
+#endif
 
     reply.depth = pDraw->depth;
 

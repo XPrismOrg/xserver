@@ -163,10 +163,13 @@ miShapedWindowIn(RegionPtr universe, RegionPtr bounding,
 
 /*
  * Manual redirected windows are treated as transparent; they do not obscure
- * siblings or parent windows
+ * siblings or parent windows. XPrism: except for the built-in compositor's
+ * redirection, which clients must not notice: drawing on the root window
+ * with ClipByChildren must still leave its children alone.
  */
 
-#define TreatAsTransparent(w)	((w)->redirectDraw == RedirectDrawManual)
+#define TreatAsTransparent(w)	((w)->redirectDraw == RedirectDrawManual && \
+				 !compSceneOwnsRedirection(w))
 
 #define HasParentRelativeBorder(w) (!(w)->borderIsPixel && \
 				    HasBorder((w)) && \

@@ -54,6 +54,25 @@ All drawing goes through Render, so it is GPU-accelerated wherever the
 driver accelerates Render (glamor) and done in software otherwise. Opaque
 windows look exactly the same with the compositor enabled as without it.
 
+## Core protocol drawing and reading
+
+Clients see the same results as without the compositor, which the X Test
+Suite checks in both modes:
+
+- Drawing on the root window with the default `ClipByChildren` stays
+  outside the windows: windows the compositor redirects still clip the
+  root, unlike windows an external compositor redirects.
+- Drawing on the root window with `IncludeInferiors` also changes the
+  windows below it. The compositor copies the drawn pixels into each
+  window's pixmap, so reading the window back returns them.
+- `GetImage` on a window fails with `BadMatch` when the area is not fully
+  on the screen, as for any window that is not redirected.
+
+With a translucent window, `IncludeInferiors` drawing copies the composed
+pixels, including what shows through the window, into the window's
+pixmap: an approximation, since a translucent window has no single pixel
+value at that point.
+
 ## Fullscreen windows
 
 A window is drawn directly to the screen, without composition, when all
@@ -93,6 +112,7 @@ Taking over requires the `compositor.legacy` capability, see
 | `Xext/composite/xprismsceneproto.h` | XPRISM-SCENE wire format |
 | `Xext/composite/compalloc.c` | Hooks for external compositors taking over and releasing a screen |
 | `Xext/composite/compinit.c` | Initialization; composing pending changes before a root window is read |
+| `mi/mivaltree.c` | Clipping: windows the compositor redirects still clip the root |
 | `test/pyxtest/test_compositor.py` | Compositor tests |
 | `test/pyxtest/test_scene_protocol.py` | XPRISM-SCENE tests |
 

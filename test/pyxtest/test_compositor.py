@@ -10,6 +10,7 @@
 # stepping aside for a legacy compositor.
 
 import struct
+import time
 
 import pytest
 from xclient import RawX11Connection, X11Error
@@ -177,6 +178,77 @@ def _scene(xvfb):
     return x, bottom, top
 
 
+GC_FOREGROUND = 1 << 2
+GC_SUBWINDOW_MODE = 1 << 15
+INCLUDE_INFERIORS = 1
+
+
+def _get_image(x, drawable, gx, gy, w=1, h=1):
+    """GetImage reply data, or the error code."""
+    seq = x.req(X_GET_IMAGE, Z_PIXMAP, struct.pack("<IhhHHI", drawable, gx, gy, w, h, 0xFFFFFFFF))
+    while True:
+        r = x.c.recv_response(timeout=5.0)
+        assert r is not None
+        if isinstance(r, X11Error):
+            return r.error_code
+        if r.response_type == 1 and r.sequence == seq:
+            return r.data
+
+
+class TestProtocolSemantics:
+    """X11 rules that the compositor's redirection must not change. These
+    are what the X Test Suite caught with the compositor on."""
+
+    def test_root_drawing_leaves_windows_alone(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)
+        x.pixel(0, 0)
+        x.fill(x.root, GREEN, 50, 50, 300, 300)       # ClipByChildren
+        assert x.pixel(150, 150) == RED
+        assert x.pixel(60, 60) == GREEN
+
+    def test_root_drawing_with_include_inferiors_reaches_windows(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)
+        x.pixel(0, 0)
+        gc = x.c.alloc_id()
+        x.req(X_CREATE_GC, 0, struct.pack("<IIIII", gc, x.root,
+                                          GC_FOREGROUND | GC_SUBWINDOW_MODE,
+                                          GREEN, INCLUDE_INFERIORS))
+        x.req(X_POLY_FILL_RECTANGLE, 0, struct.pack("<IIhhHH", x.root, gc, 140, 140, 20, 20))
+        assert x.pixel(150, 150) == GREEN
+        assert x.pixel(130, 130) == RED
+        data = _get_image(x, w, 50, 50)                 # the window's own contents
+        assert isinstance(data, bytes), data
+        assert struct.unpack_from("<I", data, 32)[0] & 0xFFFFFF == GREEN
+
+    def test_include_inferiors_line_right_after_map(self, xvfb):
+        """Only the line is drawn; the rest of its bounding box must keep
+        the window's contents, even though the window was just mapped."""
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)                                        # no frame yet
+        gc = x.c.alloc_id()
+        x.req(X_CREATE_GC, 0, struct.pack("<IIIII", gc, x.root,
+                                          GC_FOREGROUND | GC_SUBWINDOW_MODE,
+                                          GREEN, INCLUDE_INFERIORS))
+        x.req(65, 0, struct.pack("<IIhhhh", x.root, gc, 110, 110, 190, 190))  # PolyLine
+        assert x.pixel(150, 150) == GREEN
+        assert x.pixel(180, 120) == RED
+        data = _get_image(x, w, 80, 20)
+        assert struct.unpack_from("<I", data, 32)[0] & 0xFFFFFF == RED
+
+    def test_get_image_of_window_partly_off_screen(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(SCREEN_W - 50, 100, 100, 100, RED)
+        x.map(w)
+        assert x.sync() == []
+        assert _get_image(x, w, 0, 0, 100, 10) == BAD_MATCH      # beyond the screen
+        assert isinstance(_get_image(x, w, 0, 0, 50, 10), bytes)  # on screen
+
+
 class TestClassicLook:
     """Opaque scenes look the same with the compositor off and on."""
 
@@ -261,21 +333,47 @@ class TestRestack:
 
 
 class TestDamageIsNarrow:
-    """Drawing directly on the root survives where the compositor does not
-    repaint, which makes the repainted area visible."""
+    """Every frame paints onto the root window, so the DAMAGE extension on
+    the root reports what the compositor repainted."""
 
     @pytest.fixture
     def compositor(self):
         return "on"
 
+    def _painted(self, x, action):
+        ext = x.c.query_extension("DAMAGE")
+        assert ext
+        x.req(ext.opcode, 0, struct.pack("<II", 1, 1))       # QueryVersion
+        damage = x.c.alloc_id()
+        x.req(ext.opcode, 1, struct.pack("<IIBxxx", damage, x.root, 0))  # RawRectangles
+        x.pixel(0, 0)                                         # frame done
+        action()
+        # reading the root composes the frame; keep the events meanwhile
+        seq = x.req(X_GET_IMAGE, Z_PIXMAP,
+                    struct.pack("<IhhHHI", x.root, 0, 0, 1, 1, 0xFFFFFFFF))
+        boxes, done = [], False
+        while True:
+            r = x.c.recv_response(timeout=5.0 if not done else 0.3)
+            if r is None:
+                break
+            if isinstance(r, X11Error):
+                continue
+            if r.response_type == 1 and r.sequence == seq:
+                done = True
+            elif r.response_type & 0x7F == ext.first_event:
+                bx, by, bw, bh = struct.unpack_from("<hhHH", r.data, 16)
+                boxes.append((bx, by, bx + bw, by + bh))
+        x.req(ext.opcode, 2, struct.pack("<I", damage))       # Destroy
+        return boxes
+
     def test_restack_repaints_only_the_overlap(self, xvfb):
         x, a, b, c = _three(xvfb)
-        x.pixel(0, 0)                        # frame done
-        x.fill(x.root, 0xFFFFFF, 105, 105, 10, 10)   # mark on a, outside b
-        assert x.pixel(110, 110) == 0xFFFFFF
-        x.raise_(a)                          # a over b and c; only a∩b changes (a∩c is empty)
+        # raising a over b and c: only a∩b changes (a∩c is empty)
+        boxes = self._painted(x, lambda: x.raise_(a))
         assert x.pixel(175, 175) == RED
-        assert x.pixel(110, 110) == 0xFFFFFF  # not repainted
+        assert boxes, "nothing repainted"
+        for x1, y1, x2, y2 in boxes:
+            assert 150 <= x1 and x2 <= 200 and 150 <= y1 and y2 <= 200, boxes
 
 
 class TestComposition:
@@ -348,6 +446,25 @@ class TestLegacyCompositor:
         got = x.pixel(150, 150)
         assert _near(got, 0x80007F), hex(got)
 
+    def test_resumed_compositor_keeps_root_drawing_off_windows(self, xvfb):
+        """Windows that already exist when the compositor takes the screen
+        back must clip the root as before."""
+        legacy = Client(xvfb)
+        assert _redirect_root(legacy) == []
+        x = Client(xvfb)
+        w = x.window(100, 100, 100, 100, RED)
+        x.map(w)
+        assert x.sync() == []
+        legacy.c.close()
+        for _ in range(50):                 # the server notices the exit
+            if x.pixel(150, 150) == RED:
+                break
+            time.sleep(0.05)
+        assert x.pixel(150, 150) == RED
+        x.fill(x.root, GREEN, 50, 50, 300, 300)
+        assert x.pixel(150, 150) == RED
+        assert x.pixel(60, 60) == GREEN
+
 
 COMPOSITE_NAME_WINDOW_PIXMAP = 6
 BAD_MATCH = 8
@@ -366,6 +483,17 @@ def _is_composited(x, wid):
     return errs == []
 
 
+def _becomes_direct(x, wid, timeout=3.0):
+    """Direct scanout starts in the block handler, which runs when the
+    server is idle: give it the chance."""
+    end = time.monotonic() + timeout
+    while _is_composited(x, wid):
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.01)
+    return True
+
+
 class TestDirectScanout:
     @pytest.fixture
     def compositor(self):
@@ -380,7 +508,7 @@ class TestDirectScanout:
 
     def test_fullscreen_window_is_shown_directly(self, xvfb):
         x, fs = self._fullscreen(xvfb)
-        assert not _is_composited(x, fs)
+        assert _becomes_direct(x, fs)
         assert x.pixel(600, 500) == GREEN
         x.fill(fs, BLUE, 590, 490, 20, 20)
         assert x.pixel(600, 500) == BLUE
@@ -394,7 +522,7 @@ class TestDirectScanout:
         assert _is_composited(x, fs)
         x.unmap(popup)
         assert x.pixel(150, 150) == GREEN
-        assert not _is_composited(x, fs)
+        assert _becomes_direct(x, fs)
 
     def test_translucent_fullscreen_is_composited(self, xvfb):
         x, fs = self._fullscreen(xvfb)
@@ -403,7 +531,7 @@ class TestDirectScanout:
         assert _is_composited(x, fs)
         x.opacity(fs, 0xFFFFFFFF)
         x.pixel(0, 0)
-        assert not _is_composited(x, fs)
+        assert _becomes_direct(x, fs)
 
     def test_smaller_window_is_composited(self, xvfb):
         x = Client(xvfb)
@@ -426,6 +554,6 @@ class TestDirectScanout:
         fs = x.window(0, 0, SCREEN_W, SCREEN_H, GREEN)
         x.map(fs)
         x.pixel(0, 0)
-        assert not _is_composited(x, fs)
+        assert _becomes_direct(x, fs)
         x.fill(below, BLUE, 0, 0, 100, 100)   # damage under the direct window
         assert x.pixel(150, 150) == GREEN

@@ -217,6 +217,7 @@ void compSceneYield(ClientPtr pClient, WindowPtr pWin);
 void compSceneResume(ClientPtr pClient, WindowPtr pWin);
 void compSceneExtensionInit(void);
 void compSceneValidate(ScreenPtr pScreen);
+extern int compSceneHold;
 
 /*
  * compoverlay.c

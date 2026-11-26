@@ -481,7 +481,11 @@ compCopyWindow(WindowPtr pWin, xPoint ptOldOrg, RegionPtr prgnSrc)
     if (ptOldOrg.x != pWin->drawable.x || ptOldOrg.y != pWin->drawable.y) {
         if (dx || dy)
             RegionTranslate(prgnSrc, dx, dy);
+        /* the copy holds pWin's pixmap: no frame composed on demand
+           (compSceneValidate) may change redirection meanwhile */
+        compSceneHold++;
         (*pScreen->CopyWindow) (pWin, ptOldOrg, prgnSrc);
+        compSceneHold--;
         if (dx || dy)
             RegionTranslate(prgnSrc, -dx, -dy);
     }
