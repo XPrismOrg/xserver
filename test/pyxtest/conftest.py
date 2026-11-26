@@ -4,6 +4,7 @@
 
 import os
 import re
+import shlex
 import shutil
 import warnings
 import pytest
@@ -45,6 +46,12 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--server-path", default=None, help="Explicit path to the X server binary"
+    )
+    parser.addoption(
+        "--xvfb-args",
+        default="",
+        help="Extra arguments for every Xvfb started, e.g. "
+        "'-glamor -dri /dev/dri/renderD128' to run the tests on a GPU",
     )
     parser.addoption(
         "--display",
@@ -249,6 +256,8 @@ def _start_server(request, server_type, extra_args=None, log_file=None):
         pytest.skip("valgrind not available")
     use_asan = is_asan_build()
     server_path = request.config.getoption("--server-path")
+    if server_type == "xvfb":
+        extra_args = list(extra_args or []) + shlex.split(request.config.getoption("--xvfb-args"))
     suppressions = get_valgrind_suppressions(request.config)
 
     server = XServerProcess(

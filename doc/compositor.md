@@ -134,9 +134,12 @@ Taking over requires the `compositor.legacy` capability, see
   corners, shadows and background blur. Transforms affect only the
   display; input is still delivered according to the window's actual
   geometry, and transformed windows have no shadow or blur.
-- Background blur costs about 1 to 25 ms to repaint a whole 600x400
-  window in software, depending on the radius, and well under 1 ms for
-  small updates. It has not been measured with glamor yet.
+- Background blur costs about 1 to 16 ms to repaint a whole 600x400
+  window in software, depending on the radius (small radii cost most),
+  and well under 1 ms for small updates. With glamor the blur runs on
+  the GPU: about 1 to 1.5 ms on an AMD GPU and 2 to 4 ms on an NVIDIA
+  one for any radius, measured on Xvfb, whose screen is in system
+  memory, so the final copy to the screen is included.
 - Shadow and corner masks are computed on the CPU whenever a decorated
   window changes size. Only the corners and a band as wide as the blur
   are computed; the edges and the middle are repeated from them. For a

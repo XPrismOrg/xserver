@@ -50,6 +50,17 @@ option:
 pytest test/pyxtest --display :2
 ```
 
+To run the tests on a GPU, pass extra arguments to every Xvfb the tests
+start. Glamor then renders on that device:
+
+```sh
+pytest test/pyxtest --xvfb-args="-glamor -dri /dev/dri/renderD128"
+```
+
+Tests that need a render node (explicit sync, glamor's convolution) find
+one themselves and are skipped without one. `XPRISM_RENDER_NODE` picks
+the device, for example to test each GPU of a machine.
+
 ### Running with AddressSanitizer (ASAN)
 
 ASAN is a compile-time instrumentation that detects memory errors such as

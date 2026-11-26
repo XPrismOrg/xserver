@@ -1763,7 +1763,7 @@ glamor_composite(CARD8 op,
         }
     }
 
-    if ((source && source->filter >= PictFilterConvolution)
+    if ((source && source->filter > PictFilterConvolution)
         || (mask && mask->filter >= PictFilterConvolution)) {
         glamor_fallback("glamor_composite(): unsupported filter\n");
         goto fail;
@@ -1782,6 +1782,16 @@ glamor_composite(CARD8 op,
                                   x_dest + dest->pDrawable->x,
                                   y_dest + dest->pDrawable->y, width, height)) {
         return;
+    }
+
+    if (source->filter == PictFilterConvolution) {
+        ok = glamor_composite_convolution(op, source, mask, dest, &region,
+                                          x_source, y_source, x_dest, y_dest);
+        REGION_UNINIT(dest->pDrawable->pScreen, &region);
+        if (ok)
+            return;
+        glamor_fallback("glamor_composite(): unsupported convolution\n");
+        goto fail;
     }
 
     nbox = REGION_NUM_RECTS(&region);
