@@ -165,6 +165,13 @@ int XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw);
  */
 Bool XpCapSeesKeyState(ClientPtr client, DeviceIntPtr kbd);
 
+/**
+ * May @p client learn that @p pWin exists, e.g. as the keyboard focus?
+ * Its own windows, or with window.inspect. Quiet; FALSE only in enforce
+ * mode.
+ */
+Bool XpCapSeesWindow(ClientPtr client, WindowPtr pWin);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

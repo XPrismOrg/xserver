@@ -349,6 +349,58 @@ class TestNoPolicy:
         assert "no namespace configuration" in log[0]
 
 
+XI_CHANGE_CURSOR, XI_GET_FOCUS = 42, 50
+VCP, VCK = 2, 3
+
+
+def _xi(conn):
+    op = conn.query_extension(Extension.XI).opcode
+    assert _errors_of(conn, struct.pack("<BBHHH", op, 47, 2, 2, 2)) == []
+    return op
+
+
+def _xi_focus(conn, op):
+    seq = conn.send_request(struct.pack("<BBHHxx", op, XI_GET_FOCUS, 2, VCK))
+    while True:
+        r = conn.recv_response(timeout=5.0)
+        assert r is not None and not isinstance(r, X11Error), r
+        if r.response_type == 1 and r.sequence == seq:
+            return struct.unpack_from("<I", r.data, 8)[0]
+
+
+class TestXI2:
+    """XI2 as toolkits use it, for confined clients: the focus, cursors."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_focus_of_another_client_is_none(self, xserver):
+        wm = _connect(xserver, ROOT_COOKIE)
+        other = _connect(xserver, SANDBOX_COOKIE)
+        wid = _focused_window(xserver, other)
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        op = _xi(conn)
+        assert _focus(conn) == 0
+        assert _xi_focus(conn, op) == 0
+        # its owner, the window manager and window.inspect see it
+        assert _focus(other) == wid and _xi_focus(other, _xi(other)) == wid
+        assert _focus(wm) == wid
+        assert _focus(_connect(xserver, GRANTED_COOKIE)) == wid
+
+    def test_own_focus(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        wid = _focused_window(xserver, conn)
+        assert _xi_focus(conn, _xi(conn)) == wid
+
+    def test_change_cursor_on_own_window(self, xserver):
+        conn = _connect(xserver, SANDBOX_COOKIE)
+        op = _xi(conn)
+        wid = conn.create_window()
+        assert _errors_of(conn, struct.pack("<BBHIIHxx", op, XI_CHANGE_CURSOR, 4, wid, 0,
+                                            VCP)) == []
+
+
 X_SET_SCREEN_SAVER, X_FORCE_SCREEN_SAVER = 107, 115
 
 

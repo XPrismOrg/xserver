@@ -66,6 +66,9 @@ void hookDevice(CallbackListPtr *pcbl, void *unused, void *calldata)
             switch (client->minorOp) {
                 case X_ListInputDevices:
                 case X_XIQueryDevice:
+                case X_XIGetFocus:              // as GetInputFocus
+                case X_XIChangeCursor:          // GTK 3 sets cursors so; the
+                                                // window is checked as usual
                 case X_XIQueryPointer:          // as QueryPointer; the modifier
                                                 // state is the focused client's
                 case X_XIGrabDevice:            // menus (GTK, Qt)

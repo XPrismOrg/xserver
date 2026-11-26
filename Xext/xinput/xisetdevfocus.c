@@ -33,6 +33,7 @@
 #include <X11/extensions/XI2.h>
 #include <X11/extensions/XI2proto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/request_priv.h"
 #include "handlers.h"
@@ -87,8 +88,10 @@ ProcXIGetFocus(ClientPtr client)
         reply.focus = PointerRoot;
     else if (dev->focus->win == FollowKeyboardWin)
         reply.focus = FollowKeyboard;
-    else
+    else if (XpCapSeesWindow(client, dev->focus->win))
         reply.focus = dev->focus->win->drawable.id;
+    else
+        reply.focus = None;     /* XPrism: another client's window */
 
     X_REPLY_FIELD_CARD32(focus);
 

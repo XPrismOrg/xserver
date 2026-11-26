@@ -144,7 +144,7 @@ session is confined can run in a namespace of its own marked
 | `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion`; keyboard grabs, `QueryKeymap` and the modifiers held down, without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
 | `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
 | `window.enumerate` | Listing the children of another client's window or of the root window (`QueryTree`) | |
-| `window.inspect` | Reading the attributes or geometry of another client's window; reading or listing its properties | The attributes and properties of the root window are readable by everyone, since all toolkits depend on them. |
+| `window.inspect` | Reading the attributes or geometry of another client's window; reading or listing its properties; learning that it has the keyboard focus (`GetInputFocus` and `XIGetFocus` answer `None` without it) | The attributes and properties of the root window are readable by everyone, since all toolkits depend on them. |
 | `window.manage` | Manage access to another client's window or the root window: `ReparentWindow`, `ChangeSaveSet`, Composite redirection, selecting `SubstructureRedirect` or `ResizeRedirect` | |
 | `clipboard.read` | `ConvertSelection` on the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD` | See below. |
 | `clipboard.write` | `SetSelectionOwner` on the same selections | See below. |
@@ -222,8 +222,9 @@ layout indicators need:
   the locked state only.
 
 These are not refused or logged: toolkits read the state all the time.
-In audit mode clients see the full state. `XIQueryPointer` is allowed
-to confined clients now, as core `QueryPointer` was already.
+In audit mode clients see the full state. `XIQueryPointer`, `XIGetFocus`
+and `XIChangeCursor` (GTK 3 sets cursors with it) are allowed to confined
+clients now, as their core counterparts were already.
 
 ## Extensions
 

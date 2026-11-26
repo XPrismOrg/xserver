@@ -4989,8 +4989,10 @@ ProcGetInputFocus(ClientPtr client)
         reply.focus = None;
     else if (focus->win == PointerRootWin)
         reply.focus = PointerRoot;
-    else
+    else if (XpCapSeesWindow(client, focus->win))
         reply.focus = focus->win->drawable.id;
+    else
+        reply.focus = None;     /* XPrism: another client's window */
 
     if (client->swapped) {
         swapl(&reply.focus);

@@ -52,6 +52,10 @@
  *                        GetState, QueryPointer, XIQueryPointer show it
  *                        only the locked ones (XpCapSeesKeyState)
  *
+ *   window.inspect (focus) the focus window, if another client's: None
+ *                        to others (GetInputFocus, XIGetFocus;
+ *                        XpCapSeesWindow)
+ *
  *   capture.window (inferiors) other clients' windows inside one's own,
  *                        read with GetImage or IncludeInferiors copies
  *                        (XpCapCheckInferiors)
@@ -139,6 +143,7 @@ static Bool prompt_cap_ok(enum xp_cap cap);
 static Bool is_root(WindowPtr pWin);
 static Bool not_own(ClientPtr client, XID id);
 static Bool holds(ClientPtr client, enum xp_cap cap);
+static Bool in_own_window(ClientPtr client, WindowPtr pWin);
 
 /* per client */
 typedef struct {
@@ -414,6 +419,16 @@ XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw)
         return Success;             /* checked at the lookup */
     WindowPtr other = foreign_inferior(client, pWin);
     return other ? XpCapCheck(client, XP_CAP_CAPTURE_WINDOW, other->drawable.id) : Success;
+}
+
+Bool
+XpCapSeesWindow(ClientPtr client, WindowPtr pWin)
+{
+    if (xpCapMode != XP_CAP_MODE_ENFORCE || !provider_grants)
+        return TRUE;
+    if (!client || client == serverClient || !pWin)
+        return TRUE;
+    return holds(client, XP_CAP_WINDOW_INSPECT) || in_own_window(client, pWin);
 }
 
 Bool
