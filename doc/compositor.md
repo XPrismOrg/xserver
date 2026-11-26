@@ -47,6 +47,24 @@ What changes for users with the compositor on:
 - Opaque windows look exactly as they do with it off. The tests check
   this.
 
+## Direct scanout of fullscreen windows
+
+A fullscreen window doesn't need composition when it meets all of these:
+
+- it is the topmost viewable window;
+- it covers the whole screen and isn't shaped;
+- it is opaque: no alpha channel, full opacity;
+- it has no transform.
+
+The compositor then unredirects it. It renders straight to the screen,
+nothing is copied per frame, and on hardware Present can page-flip its
+buffers (games, video players). The window is composited again as soon
+as any condition stops holding: a popup maps above it, it gets opacity
+or a transform, or it moves or shrinks. Composite copies the contents
+both ways, so the switch is invisible. While a window is shown
+directly, the compositor never paints over it, even when windows below
+it change.
+
 ## Legacy compositor mode
 
 External compositors (picom, KWin-X11, Mutter-X11, xcompmgr) work as
@@ -83,8 +101,10 @@ no longer all-powerful by default (Phase V).
   output's vblank. Per-output scheduling comes with Phase II's atomic KMS
   work; the frame function is already per screen and will become per
   output.
-- **No direct scanout yet.** A fullscreen window is still copied every
-  frame. Direct scanout needs atomic KMS (Phase II).
+- **Direct scanout is whole-screen only.** A window that fills one
+  monitor of several is still composited. Scanning out per output, and
+  putting windows on hardware overlay planes, needs atomic KMS
+  (Phase II).
 - **Drawing on the root window.** Wallpapers set as the root background
   (xsetroot, feh, nitrogen) work. Clients that draw *directly* onto the
   root window are painted over wherever windows change. External

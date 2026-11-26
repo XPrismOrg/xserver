@@ -347,3 +347,85 @@ class TestLegacyCompositor:
         x.opacity(over, 0x80000000)
         got = x.pixel(150, 150)
         assert _near(got, 0x80007F), hex(got)
+
+
+COMPOSITE_NAME_WINDOW_PIXMAP = 6
+BAD_MATCH = 8
+SCREEN_W, SCREEN_H = 1280, 1024
+
+
+def _is_composited(x, wid):
+    """Composite names a pixmap only for redirected windows: BadMatch means
+    the window renders straight to the screen."""
+    ext = x.c.query_extension("Composite")
+    assert ext
+    body = struct.pack("<II", wid, x.c.alloc_id())
+    x.c.send_request(struct.pack("<BBH", ext.opcode, COMPOSITE_NAME_WINDOW_PIXMAP, 3) + body)
+    errs = x.sync()
+    assert errs in ([], [BAD_MATCH]), errs
+    return errs == []
+
+
+class TestDirectScanout:
+    @pytest.fixture
+    def compositor(self):
+        return "on"
+
+    def _fullscreen(self, xvfb):
+        x = Client(xvfb)
+        fs = x.window(0, 0, SCREEN_W, SCREEN_H, GREEN)
+        x.map(fs)
+        x.pixel(0, 0)
+        return x, fs
+
+    def test_fullscreen_window_is_shown_directly(self, xvfb):
+        x, fs = self._fullscreen(xvfb)
+        assert not _is_composited(x, fs)
+        assert x.pixel(600, 500) == GREEN
+        x.fill(fs, BLUE, 590, 490, 20, 20)
+        assert x.pixel(600, 500) == BLUE
+
+    def test_window_above_brings_composition_back(self, xvfb):
+        x, fs = self._fullscreen(xvfb)
+        popup = x.window(100, 100, 100, 100, RED)
+        x.map(popup)
+        assert x.pixel(150, 150) == RED
+        assert x.pixel(600, 500) == GREEN     # contents kept across the switch
+        assert _is_composited(x, fs)
+        x.unmap(popup)
+        assert x.pixel(150, 150) == GREEN
+        assert not _is_composited(x, fs)
+
+    def test_translucent_fullscreen_is_composited(self, xvfb):
+        x, fs = self._fullscreen(xvfb)
+        x.opacity(fs, 0x80000000)
+        x.pixel(0, 0)
+        assert _is_composited(x, fs)
+        x.opacity(fs, 0xFFFFFFFF)
+        x.pixel(0, 0)
+        assert not _is_composited(x, fs)
+
+    def test_smaller_window_is_composited(self, xvfb):
+        x = Client(xvfb)
+        w = x.window(0, 0, SCREEN_W - 1, SCREEN_H, GREEN)
+        x.map(w)
+        x.pixel(0, 0)
+        assert _is_composited(x, w)
+
+    def test_resize_out_of_fullscreen(self, xvfb):
+        x, fs = self._fullscreen(xvfb)
+        x.move(fs, 200)
+        assert x.pixel(100, 100) == ROOT_BG
+        assert x.pixel(300, 100) == GREEN
+        assert _is_composited(x, fs)
+
+    def test_window_below_never_shows_through(self, xvfb):
+        x = Client(xvfb)
+        below = x.window(100, 100, 100, 100, RED)
+        x.map(below)
+        fs = x.window(0, 0, SCREEN_W, SCREEN_H, GREEN)
+        x.map(fs)
+        x.pixel(0, 0)
+        assert not _is_composited(x, fs)
+        x.fill(below, BLUE, 0, 0, 100, 100)   # damage under the direct window
+        assert x.pixel(150, 150) == GREEN

@@ -40,6 +40,7 @@
 #include "miext/extinit_priv.h"
 
 #include "compint.h"
+#include "compositeext_intern.h"
 #include "dix/request_priv.h"
 #include "xprismsceneproto.h"
 
@@ -75,6 +76,8 @@ typedef struct {
     /* root background as last painted */
     int bgState;
     PixUnion bg;
+    /* fullscreen window shown directly (unredirected), or None */
+    XID direct;
 } SceneScreenRec, *SceneScreenPtr;
 
 static DevPrivateKeyRec sceneScreenKeyRec;
@@ -473,6 +476,7 @@ sceneDeactivate(ScreenPtr pScreen, SceneScreenPtr ss)
     for (WindowPtr pWin = pScreen->root->firstChild; pWin; pWin = pWin->nextSib)
         sceneDropWindowDamage(pWin);
     ss->active = false;
+    ss->direct = None;
     free(ss->nodes);
     ss->nodes = NULL;
     ss->numNodes = 0;
@@ -492,6 +496,63 @@ sceneActivate(ScreenPtr pScreen, SceneScreenPtr ss)
     ss->bgState = -1;
 }
 
+/* ---- direct scanout ----------------------------------------------------- */
+
+/*
+ * An opaque, untransformed window that covers the whole screen and has
+ * nothing above it needs no composition: unredirect it so it renders
+ * straight to the screen, which on real hardware also lets Present flip
+ * its buffers. It goes back to being composited as soon as that stops
+ * being true.
+ */
+static bool
+sceneCanScanOut(WindowPtr pWin)
+{
+    WindowPtr pRoot = pWin->drawable.pScreen->root;
+    SceneAttrsPtr attrs = sceneAttrs(pWin);
+
+    if (attrs->mask & XpSceneNodeTransform)
+        return false;
+    CARD32 opacity = (attrs->mask & XpSceneNodeOpacity) ?
+        attrs->opacity : sceneWindowOpacity(pWin);
+    if (opacity != 0xffffffff)
+        return false;
+    PictFormatPtr format = PictureWindowFormat(pWin);
+    if (!format || format->direct.alphaMask)
+        return false;
+    if (RegionNumRects(&pWin->borderSize) != 1)
+        return false;           /* shaped */
+    const BoxRec *b = RegionExtents(&pWin->borderSize);
+    const BoxRec *r = RegionExtents(&pRoot->winSize);
+    return b->x1 <= r->x1 && b->y1 <= r->y1 && b->x2 >= r->x2 && b->y2 >= r->y2;
+}
+
+static void
+sceneUpdateDirect(ScreenPtr pScreen, SceneScreenPtr ss)
+{
+    WindowPtr top = NULL;
+
+    for (WindowPtr pWin = pScreen->root->firstChild; pWin; pWin = pWin->nextSib)
+        if (pWin->viewable && pWin->drawable.class == InputOutput) {
+            top = pWin;
+            break;
+        }
+    WindowPtr want = (top && sceneCanScanOut(top)) ? top : NULL;
+
+    if (ss->direct != None && (!want || want->drawable.id != ss->direct)) {
+        WindowPtr old;
+        if (dixLookupWindow(&old, ss->direct, serverClient, DixUnknownAccess) == Success &&
+            old->parent == pScreen->root)
+            compRedirectWindow(serverClient, old, CompositeRedirectManual);
+        ss->direct = None;
+        ss->fullDamage = true;
+    }
+    if (want && ss->direct == None && want->redirectDraw != RedirectDrawNone &&
+        compUnredirectWindow(serverClient, want, CompositeRedirectManual) == Success &&
+        want->redirectDraw == RedirectDrawNone)
+        ss->direct = want->drawable.id;
+}
+
 static void
 sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
 {
@@ -499,12 +560,19 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss)
     WindowPtr *wins;
     SceneNodeRec *nodes;
 
+    sceneUpdateDirect(pScreen, ss);
+
     RegionNull(&damage);
     int n = sceneSnapshot(pScreen, ss, &wins, &nodes, &damage);
     if (ss->fullDamage) {
         RegionCopy(&damage, &pScreen->root->winSize);
         ss->fullDamage = false;
     }
+    /* a window shown directly draws itself: never paint over it */
+    WindowPtr pDirect;
+    if (ss->direct != None &&
+        dixLookupWindow(&pDirect, ss->direct, serverClient, DixUnknownAccess) == Success)
+        RegionSubtract(&damage, &damage, &pDirect->borderSize);
     if (RegionNotEmpty(&damage))
         scenePaint(pScreen, wins, nodes, n, &damage);
     RegionUninit(&damage);
