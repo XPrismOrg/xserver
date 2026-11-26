@@ -152,14 +152,14 @@ with FreeSync (48 to 240 Hz). The following worked:
   capped at 100 the monitor reported 100 Hz under FreeSync, without
   tearing; leaving fullscreen restored the composed desktop.
 
-NVIDIA GPUs, multiple monitors and HDR outputs have not been tested on
-hardware yet.
+The compositor uses glamor and the modesetting driver like any other X
+server, so other GPUs that work with Xorg and XLibre (NVIDIA's open
+kernel driver included) are expected to work the same way.
 
 ## Limitations
 
-- The compositor is disabled by default. It has been tested on one AMD
-  GPU (see above); NVIDIA GPUs and multiple monitors are still to be
-  tested before it is enabled by default.
+- The compositor is disabled by default; it can be enabled with
+  `-compositor on` or the `compositor_default` build option.
 - All screens are updated from the main loop rather than at each
   output's vertical blank. Per-output scheduling depends on the atomic
   modesetting work planned for Phase II.
