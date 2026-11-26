@@ -114,7 +114,7 @@ rules. A request has to pass both.
 | Capability | Checked at | Notes |
 |---|---|---|
 | `capture.screen` | Read access to the root window (`GetImage`, `ShmGetImage`, the source of `CopyArea` and `CopyPlane`) | |
-| `capture.window` | Read access to another client's window or pixmap | |
+| `capture.window` | Read access to another client's window or pixmap; reading one's own window with its inferiors (`GetImage`, `ShmGetImage`, `CopyArea`/`CopyPlane` with `IncludeInferiors`) while another client's viewable window is inside it | An embedded window (a tray icon in a panel) belongs to its own client. |
 | `input.inject` | XTEST requests other than `GetVersion` | Without it, a namespace with an inject scope may still automate one application (see Scoped automation). |
 | `input.monitor` | Delivery of XI2 raw key, button and touch events; RECORD requests other than `QueryVersion`; keyboard grabs and `QueryKeymap` without the focus (below) | Raw motion events are not covered. The pointer position is available to every client through `QueryPointer`. |
 | `input.virtual_seat` | Creating an input device (`XIChangeHierarchy` with `AddMaster`) | |
@@ -187,5 +187,6 @@ request is then ignored without an error.
 
 ## Known gaps
 
-- `CopyArea` with `IncludeInferiors` from a client's own window can copy
-  the contents of other clients' child windows.
+- XKB `StateNotify` events tell any client which modifiers are held,
+  also while another client has the focus. Toolkits rely on them for the
+  keyboard layout indicator.

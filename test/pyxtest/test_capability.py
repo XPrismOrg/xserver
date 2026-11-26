@@ -301,6 +301,97 @@ class TestDefaultMode:
         assert _inspect_other_window(xserver, GRANTED_COOKIE) == []
 
 
+X_CREATE_GC = 55
+X_COPY_AREA = 62
+GC_SUBWINDOW_MODE = 1 << 15
+CLIP_BY_CHILDREN, INCLUDE_INFERIORS = 0, 1
+
+
+def _embedding(xserver, cookie):
+    """a mapped window of a client of *cookie*, with a mapped child of
+    another client of the same namespace inside it (like an embedded
+    tray icon)"""
+    embedder = _connect(xserver, cookie)
+    wid = embedder.create_window(width=50, height=50)
+    assert _errors_of(embedder, struct.pack("<BxHI", X_MAP_WINDOW, 2, wid)) == []
+    other = _connect(xserver, cookie)
+    child = other.create_window(width=10, height=10, parent=wid)
+    assert _errors_of(other, struct.pack("<BxHI", X_MAP_WINDOW, 2, child)) == []
+    return embedder, wid, other, child
+
+
+def _copy(conn, src, mode):
+    pixmap = conn.create_pixmap(50, 50, drawable=src)
+    gc = conn.alloc_id()
+    errs = _errors_of(conn, struct.pack("<BxHIIII", X_CREATE_GC, 5, gc, pixmap,
+                                        GC_SUBWINDOW_MODE, mode))
+    return errs + _errors_of(conn, struct.pack("<BxHIIIhhhhHH", X_COPY_AREA, 7, src, pixmap,
+                                               gc, 0, 0, 0, 0, 50, 50))
+
+
+RENDER_QUERY_VERSION, RENDER_QUERY_PICT_FORMATS = 0, 1
+RENDER_CREATE_PICTURE, RENDER_COMPOSITE = 4, 8
+CP_SUBWINDOW_MODE = 1 << 8
+PICT_OP_SRC = 1
+
+
+def _render_copy(conn, src, mode):
+    """Render Composite from a picture of window *src* with *mode*"""
+    from proto import render
+    op = conn.query_extension("RENDER").opcode
+    conn.send_request(render.QueryVersionRequest(opcode=op))
+    conn.recv_response(timeout=5.0)
+    conn.send_request(render.QueryPictFormatsRequest(opcode=op))
+    reply = render.QueryPictFormatsReply.from_reply(conn.recv_response(timeout=5.0).data, "<")
+    fmt = next(f.id for f in reply.formats
+               if f.type == 1 and f.depth == conn.root_depth and f.alpha_mask == 0)
+    pixmap = conn.create_pixmap(50, 50, drawable=src)
+    spic, dpic = conn.alloc_id(), conn.alloc_id()
+    errs = _errors_of(conn, struct.pack("<BBHIIIII", op, RENDER_CREATE_PICTURE, 6, spic, src,
+                                        fmt, CP_SUBWINDOW_MODE, mode))
+    errs += _errors_of(conn, struct.pack("<BBHIIII", op, RENDER_CREATE_PICTURE, 5, dpic, pixmap,
+                                         fmt, 0))
+    return errs + _errors_of(conn, struct.pack("<BBHB3xIIIhhhhhhHH", op, RENDER_COMPOSITE, 9,
+                                               PICT_OP_SRC, spic, 0, dpic, 0, 0, 0, 0, 0, 0,
+                                               50, 50))
+
+
+class TestInferiors:
+    """Reading one's own window with its inferiors reads the windows
+    other clients made inside it: capture.window (gap G1)."""
+
+    @pytest.fixture
+    def capmode(self):
+        return "enforce"
+
+    def test_get_image_with_another_clients_child(self, xserver):
+        embedder, wid, other, child = _embedding(xserver, SANDBOX_COOKIE)
+        assert _get_image(embedder, wid) == [BAD_ACCESS]
+        # its own children are its own
+        own = embedder.create_window(width=10, height=10, parent=wid, x=20)
+        assert _errors_of(embedder, struct.pack("<BxHI", X_MAP_WINDOW, 2, own)) == []
+        assert _get_image(embedder, own) == []
+        # and with the other's child unmapped, nothing else shows
+        assert _errors_of(other, struct.pack("<BxHI", 10, 2, child)) == []   # UnmapWindow
+        assert _get_image(embedder, wid) == []
+
+    def test_copy_area(self, xserver):
+        embedder, wid, other, child = _embedding(xserver, SANDBOX_COOKIE)
+        assert _copy(embedder, wid, CLIP_BY_CHILDREN) == []
+        assert _copy(embedder, wid, INCLUDE_INFERIORS) == [BAD_ACCESS]
+
+    def test_render_source(self, xserver):
+        embedder, wid, other, child = _embedding(xserver, SANDBOX_COOKIE)
+        assert _render_copy(embedder, wid, CLIP_BY_CHILDREN) == []
+        assert _render_copy(embedder, wid, INCLUDE_INFERIORS) == [BAD_ACCESS]
+
+    def test_unconfined(self, xserver):
+        embedder, wid, other, child = _embedding(xserver, ROOT_COOKIE)
+        assert _get_image(embedder, wid) == []
+        assert _copy(embedder, wid, INCLUDE_INFERIORS) == []
+        assert _render_copy(embedder, wid, INCLUDE_INFERIORS) == []
+
+
 class TestCapabilityOff:
     @pytest.fixture
     def capmode(self):

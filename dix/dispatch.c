@@ -1685,6 +1685,9 @@ ProcCopyArea(ClientPtr client)
     }
     else
         pSrc = pDst;
+    if (pGC->subWindowMode == IncludeInferiors &&
+        (rc = XpCapCheckInferiors(client, pSrc)) != Success)
+        return rc;
 
     pRgn = (*pGC->ops->CopyArea) (pSrc, pDst, pGC, stuff->srcX, stuff->srcY,
                                   stuff->width, stuff->height,
@@ -1724,6 +1727,9 @@ ProcCopyPlane(ClientPtr client)
     }
     else
         psrcDraw = pdstDraw;
+    if (pGC->subWindowMode == IncludeInferiors &&
+        (rc = XpCapCheckInferiors(client, psrcDraw)) != Success)
+        return rc;
 
     /* Check to see if stuff->bitPlane has exactly ONE good bit set */
     if (stuff->bitPlane == 0 || (stuff->bitPlane & (stuff->bitPlane - 1)) ||
@@ -2055,6 +2061,9 @@ DoGetImage(ClientPtr client, int format, Drawable drawable,
         return BadValue;
     }
     rc = dixLookupDrawable(&pDraw, drawable, client, 0, DixReadAccess);
+    if (rc != Success)
+        return rc;
+    rc = XpCapCheckInferiors(client, pDraw);
     if (rc != Success)
         return rc;
 

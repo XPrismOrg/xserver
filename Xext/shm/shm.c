@@ -43,6 +43,7 @@ in this Software without prior written authorization from The Open Group.
 #include <X11/extensions/shmproto.h>
 #include <X11/Xfuncproto.h>
 
+#include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
 #include "dix/request_priv.h"
 #include "dix/screenint_priv.h"
@@ -592,6 +593,7 @@ ShmGetImage(ClientPtr client, xShmGetImageReq *stuff)
     }
 
     X_CALL_CHECK_ERR(dixLookupDrawable(&pDraw, stuff->drawable, client, 0, DixReadAccess));
+    X_CALL_CHECK_ERR(XpCapCheckInferiors(client, pDraw));
 
     VERIFY_SHMPTR(stuff->shmseg, stuff->offset, TRUE, shmdesc, client);
     if (pDraw->type == DRAWABLE_WINDOW) {
@@ -789,6 +791,7 @@ ProcShmGetImage(ClientPtr client)
         return ShmGetImage(client, stuff);
 
     X_CALL_CHECK_ERR(dixLookupDrawable(&pDraw, stuff->drawable, client, 0, DixReadAccess));
+    X_CALL_CHECK_ERR(XpCapCheckInferiors(client, pDraw));
 
     VERIFY_SHMPTR(stuff->shmseg, stuff->offset, TRUE, shmdesc, client);
 

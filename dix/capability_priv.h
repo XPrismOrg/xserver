@@ -146,6 +146,15 @@ int XpCapInjectDevice(ClientPtr client, DeviceIntPtr *dev);
     scope */
 int XpCapInjectTarget(ClientPtr client, DeviceIntPtr dev, int type, CARD32 *wait_ms);
 
+/**
+ * Reading a window's contents together with its inferiors (GetImage,
+ * ShmGetImage, CopyArea and CopyPlane with IncludeInferiors) also reads
+ * windows other clients made inside it. A client's own window then needs
+ * capture.window if a viewable window of another client is inside it;
+ * others' windows were checked when they were looked up.
+ */
+int XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw);
+
 /** register the checks; once per server generation, before extensions */
 void XpCapInit(void);
 

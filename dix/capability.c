@@ -45,8 +45,9 @@
  *                        without the focus, passive key grabs on others'
  *                        windows (XpCapCheckKeyboardGrab, cap_device)
  *
- * Known gap, see docs/audit-phase1.md: CopyArea with IncludeInferiors from
- * one's own window (G1).
+ *   capture.window (inferiors) other clients' windows inside one's own,
+ *                        read with GetImage or IncludeInferiors copies
+ *                        (XpCapCheckInferiors)
  */
 #include <dix-config.h>
 
@@ -125,6 +126,8 @@ XpCapSetProvider(XpCapGrantsProc grants, XpCapLabelProc label)
 }
 
 static Bool prompt_cap_ok(enum xp_cap cap);
+static Bool is_root(WindowPtr pWin);
+static Bool not_own(ClientPtr client, XID id);
 
 /* per client */
 typedef struct {
@@ -370,6 +373,36 @@ XpCapRefuseAll(void)
         if (c && c->prompt)
             XpCapAnswer(c->prompt, XP_CAP_DENY_ONCE);
     }
+}
+
+/* a viewable window of another client inside pWin, or NULL */
+static WindowPtr
+foreign_inferior(ClientPtr client, WindowPtr pWin)
+{
+    for (WindowPtr child = pWin->firstChild; child; child = child->nextSib) {
+        if (!child->viewable)
+            continue;
+        int owner = dixClientIdForXID(child->drawable.id);
+        if (owner != 0 && owner != client->index)
+            return child;
+        WindowPtr found = foreign_inferior(client, child);
+        if (found)
+            return found;
+    }
+    return NULL;
+}
+
+int
+XpCapCheckInferiors(ClientPtr client, DrawablePtr pDraw)
+{
+    if (!client || client == serverClient || !pDraw || pDraw->type != DRAWABLE_WINDOW ||
+        xpCapMode == XP_CAP_MODE_OFF || !provider_grants)
+        return Success;
+    WindowPtr pWin = (WindowPtr) pDraw;
+    if (is_root(pWin) || not_own(client, pWin->drawable.id))
+        return Success;             /* checked at the lookup */
+    WindowPtr other = foreign_inferior(client, pWin);
+    return other ? XpCapCheck(client, XP_CAP_CAPTURE_WINDOW, other->drawable.id) : Success;
 }
 
 /* ------------------------------------------------------------------ *

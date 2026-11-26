@@ -12,17 +12,27 @@
 #include "resource.h"
 #include "privates.h"
 
+#include "dix/capability_priv.h"
+
 #define PICT_GRADIENT_STOPTABLE_SIZE 1024
 
 extern RESTYPE PictureType;
 extern RESTYPE PictFormatType;
 extern RESTYPE GlyphSetType;
 
+/* XPrism: a source read with its inferiors reads other clients' windows
+   inside it (XpCapCheckInferiors) */
 #define VERIFY_PICTURE(pPicture, pid, client, mode) {\
     int tmprc = dixLookupResourceByType((void *)&(pPicture), (pid),\
                                         PictureType, (client), (mode));\
     if (tmprc != Success)\
 	return tmprc;\
+    if (((mode) & DixReadAccess) && (pPicture)->pDrawable &&\
+        (pPicture)->subWindowMode == IncludeInferiors) {\
+        tmprc = XpCapCheckInferiors((client), (pPicture)->pDrawable);\
+        if (tmprc != Success)\
+            return tmprc;\
+    }\
 }
 
 #define VERIFY_ALPHA(pPicture, pid, client, mode) {\
