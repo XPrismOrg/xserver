@@ -10,8 +10,9 @@
  *
  * The capability mode (-capmode) decides what a missing capability does:
  *   off      no checks at all
- *   audit    log what would be denied, deny nothing (default)
- *   enforce  deny with BadAccess (or drop the event); experimental
+ *   audit    log what would be denied, deny nothing
+ *   enforce  deny with BadAccess (or drop the event), or ask the permission
+ *            agent (default)
  */
 #ifndef XSERVER_DIX_CAPABILITY_PRIV_H
 #define XSERVER_DIX_CAPABILITY_PRIV_H

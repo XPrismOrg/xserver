@@ -281,6 +281,19 @@ class TestKeyboardScope:
         assert _grab_key(root, root.root_window) == []
 
 
+class TestDefaultMode:
+    """Without -capmode, capabilities are enforced."""
+
+    @pytest.fixture
+    def xserver_args(self, xserver_args):
+        i = xserver_args.index("-capmode")
+        return xserver_args[:i] + xserver_args[i + 2:]
+
+    def test_enforced(self, xserver):
+        assert _inspect_other_window(xserver, SANDBOX_COOKIE) == [BAD_ACCESS]
+        assert _inspect_other_window(xserver, GRANTED_COOKIE) == []
+
+
 class TestCapabilityOff:
     @pytest.fixture
     def capmode(self):

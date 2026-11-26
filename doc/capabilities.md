@@ -16,16 +16,13 @@ capability:
 | Mode | Effect |
 |---|---|
 | `off` | No checks are made. |
-| `audit` | The missing capability is logged and the request proceeds. This is the default. |
-| `enforce` | The request fails with `BadAccess`, or the event is dropped. Experimental. |
-
-Enforcement is planned to become the default in Phase V. It is available
-now so that the checks can be tested.
+| `audit` | The missing capability is logged and the request proceeds. Useful to find out what an application needs before granting it. |
+| `enforce` | The request fails with `BadAccess`, or the event is dropped, unless a permission agent allows it (below). This is the default. |
 
 A missing capability is logged once per client and capability:
 
 ```
-(WW) capability: would deny window.inspect to client 5 (namespace "sandbox", app "org.example.Editor", pid 4242) for GetWindowAttributes on 0x200001 [audit]
+(WW) capability: denied window.inspect to client 5 (namespace "sandbox", app "org.example.Editor", pid 4242) for GetWindowAttributes on 0x200001
 ```
 
 If the build has no request-name registry, the request is shown as

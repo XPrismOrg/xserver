@@ -115,12 +115,15 @@ namespace sandbox
 Start a virtual server with it:
 
 ```sh
-./build/hw/vfb/Xvfb :5 -namespace ns.conf -capmode audit
+./build/hw/vfb/Xvfb :5 -namespace ns.conf
 ```
 
 Clients that authenticate with the second cookie run in `sandbox`. They can
 paste from the session clipboard but cannot access anything else, and the
-server log lists each capability they would need. For running real
+server log lists each capability they were refused. Add `-capmode audit`
+to let them through and only log what they would need, or run
+[xprism-permission-agent](utils/xprism-permission-agent/README.md) to be
+asked. For running real
 applications in a sandbox, see the bubblewrap example in
 [utils/xns-listen](utils/xns-listen/README.md).
 
@@ -132,7 +135,7 @@ applications in a sandbox, see the bubblewrap example in
 | II | Atomic modesetting, per-output scheduling, hotplug, variable refresh rate, multi-GPU | In progress: atomic modesetting on by default (mode changes, DPMS, screen saver, rotation and gamma tested on vkms in CI), each output composed at most once per refresh, variable refresh rate tested on real hardware (FreeSync); hotplug and multi-GPU not yet tested |
 | III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | Nearly complete: tested on real hardware (composition, effects, VT switches, direct scanout with page flips and FreeSync); direct scanout per monitor waits for Phase II |
 | IV | Per-output color management, wide gamut and HDR | Nearly complete: windows' colour spaces ([XPRISM-COLOR](doc/xprism-color-protocol.md)) shown on sRGB, wide-gamut and HDR (PQ and HLG) outputs, one space per monitor, converted on the GPU and composed in linear light in half float; the modesetting driver drives HDR monitors from their EDID (`Option "HDR"` and an `HDR` output property, not yet tried on an HDR monitor) and converts hardware cursors, and shows wide-gamut SDR monitors in their EDID primaries (`Option "WideGamut"`); clients hear when an output's space changes. Remaining: fp16 scanout ([doc/color.md](doc/color.md)) |
-| V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | In progress: permission prompts ([xprism-permission-agent](utils/xprism-permission-agent/README.md)), the keyboard scoped to the focused application |
+| V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | In progress: capabilities enforced by default, permission prompts ([xprism-permission-agent](utils/xprism-permission-agent/README.md)), the keyboard scoped to the focused application |
 | VI | Running Wayland applications as X11 windows (WX11) | Planned |
 | VII | Completing the BSD backends, hardware validation | Planned |
 | VIII | Stabilization, security review, packaging, first release | Planned |

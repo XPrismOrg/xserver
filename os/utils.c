@@ -269,8 +269,7 @@ UseMsg(void)
     ErrorF("-byteswappedclients    Prohibit clients with endianness different to that of the server\n");
     ErrorF("-c                     turns off key-click\n");
     ErrorF("-capmode off|audit|enforce  capability checks: none, log what\n"
-           "                       would be denied (default), or deny\n"
-           "                       (experimental)\n");
+           "                       would be denied, or deny (default)\n");
     ErrorF("c #                    key-click volume (0-100)\n");
     ErrorF("-compositor on|off     built-in compositor (default set at build\n"
            "                       time, normally on)\n");

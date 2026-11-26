@@ -78,7 +78,7 @@
 #include "Xext/xace.h"
 #include "Xext/xacestr.h"
 
-enum xp_cap_mode xpCapMode = XP_CAP_MODE_AUDIT;
+enum xp_cap_mode xpCapMode = XP_CAP_MODE_ENFORCE;
 
 static const char *const cap_names[XP_CAP_COUNT] = {
     [XP_CAP_CAPTURE_SCREEN]     = "capture.screen",
