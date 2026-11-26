@@ -1,7 +1,8 @@
 # Colour management, wide gamut and HDR (Phase IV design)
 
-Status: design. Nothing here is implemented yet unless a section says
-so.
+Status: design, being implemented. Step 1 (the colour library,
+`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`) is done;
+nothing else is implemented yet unless a section says so.
 
 ## Goals
 
@@ -103,9 +104,12 @@ Each step is tested on Xvfb (software and glamor on a render node),
 apart from the KMS parts, which need a display device and wait, like
 Phase II, for vkms in CI or real hardware.
 
-1. The colour model and conversions as a library with unit tests
+1. Done: the colour model and conversions as a library with unit tests
    (descriptions, matrices, transfer functions, tone mapping), checked
-   against reference values.
+   against reference values: the sRGB and Bradford-adapted D50 matrices,
+   BT.2087's BT.709 to BT.2020, ST 2084's PQ curve and BT.2408's
+   reference white for PQ and HLG, and the BT.2390 EETF's knee and
+   peak.
 2. XPRISM-COLOR window descriptions; the compositor converts tagged
    windows to sRGB outputs (gamut mapping), composing in linear light
    only when some window or output needs it.
