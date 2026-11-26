@@ -129,6 +129,8 @@ extern _X_EXPORT PixmapPtr glamor_create_pixmap(ScreenPtr screen, int w, int h,
 #define GLAMOR_CREATE_NO_LARGE          0x105
 #define GLAMOR_CREATE_PIXMAP_NO_TEXTURE 0x106
 #define GLAMOR_CREATE_FORMAT_CBCR       0x107
+/* XPrism: depth 32, 16-bit floating point channels (glamor_color.c) */
+#define GLAMOR_CREATE_FORMAT_FLOAT      0x108
 
 /* @glamor_egl_exchange_buffers: Exchange the underlying buffers(KHR image,fbo).
  *

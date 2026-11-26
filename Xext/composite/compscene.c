@@ -697,7 +697,8 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
             if (node->shadow) {
                 node->shadowBlur = attrs->shadowBlur;
                 node->shadowColor = attrs->shadowColor;
-                if (!compColorOutputIsSRGB(pScreen))
+                /* in linear light, converted when painted */
+                if (!compColorOutputIsSRGB(pScreen) && !compColorLinear(pScreen))
                     node->shadowColor = (attrs->shadowColor & 0xff000000) |
                         (compColorConvertPixel(pScreen,
                                                PictureMatchFormat(pScreen, 24, PICT_x8r8g8b8),
@@ -819,12 +820,15 @@ sceneSnapshot(ScreenPtr pScreen, SceneScreenPtr ss, WindowPtr **pWins,
 /*
  * Where layers are painted: the screen, or a scratch picture covering part
  * of it (background blur renders the layers below a window there). ox, oy
- * are the screen coordinates of the picture's origin.
+ * are the screen coordinates of the picture's origin. linear: a floating
+ * point picture in the output's linear light (compColorLinear), and so
+ * are the scratch pictures painted for it.
  */
 typedef struct {
     PicturePtr pict;
     int ox, oy;
     bool screen;
+    bool linear;
 } SceneTarget;
 
 /* Clip the target to pRegion (screen coordinates). */
@@ -853,6 +857,23 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
 {
     WindowPtr pRoot = pScreen->root;
 
+    if (t->linear && pRoot->backgroundState != BackgroundPixmap) {
+        /* a GC's pixel would be 8 bits of linear light: too coarse */
+        CARD32 pixel = pRoot->backgroundState == BackgroundPixel ?
+            pRoot->background.pixel : pScreen->blackPixel;
+        PicturePtr pSrc = compColorLinearSolid(pScreen, PictureWindowFormat(pRoot),
+                                               pixel, 1.0);
+        if (pSrc) {
+            sceneTargetClip(t, pRegion);
+            const BoxRec *e = RegionExtents(pRegion);
+            CompositePicture(PictOpSrc, pSrc, NULL, t->pict, 0, 0, 0, 0,
+                             e->x1 - t->ox, e->y1 - t->oy,
+                             e->x2 - e->x1, e->y2 - e->y1);
+            FreePicture(pSrc, 0);
+        }
+        return;
+    }
+
     /* On the screen, the root window's children clip it: draw through
        them, they are painted afterwards. */
     DrawablePtr pDrawable = t->screen ? &pRoot->drawable : t->pict->pDrawable;
@@ -873,8 +894,12 @@ scenePaintRootBackground(ScreenPtr pScreen, const SceneTarget *t, RegionPtr pReg
                                                     PictureWindowFormat(pRoot));
                 ss->bgTileSrc = pTile;
             }
-            if (ss->bgTile)
+            if (ss->bgTile) {
                 pTile = ss->bgTile;
+            } else if (t->linear) {
+                FreeScratchGC(pGC);     /* not of the buffer's depth */
+                return;
+            }
         }
         mask = GCFillStyle | GCTile | GCTileStipXOrigin | GCTileStipYOrigin;
         vals[0].val = FillTiled;
@@ -929,6 +954,16 @@ sceneSolidARGB(CARD32 c)
     return CreateSolidPicture(0, &color, &error);
 }
 
+/* The source of a shadow of colour c (ARGB, not premultiplied) on t */
+static PicturePtr
+sceneShadowSource(ScreenPtr pScreen, const SceneTarget *t, CARD32 c)
+{
+    if (t->linear)
+        return compColorLinearSolid(pScreen, PictureMatchFormat(pScreen, 24, PICT_x8r8g8b8),
+                                    c & 0xffffff, (c >> 24) / 255.0);
+    return sceneSolidARGB(c);
+}
+
 static void
 scenePaintShadow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
                  SceneAttrsPtr attrs, const SceneNodeRec *node, RegionPtr pRegion)
@@ -974,7 +1009,7 @@ scenePaintShadow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
         RegionDestroy(pBody);
     }
     if (RegionNotEmpty(&clip)) {
-        PicturePtr pSrc = sceneSolidARGB(node->shadowColor);
+        PicturePtr pSrc = sceneShadowSource(pScreen, t, node->shadowColor);
         if (pSrc) {
             sceneTargetClip(t, &clip);
             const BoxRec *b = &node->shadowBox;
@@ -1012,8 +1047,10 @@ scenePaintWindow(ScreenPtr pScreen, const SceneTarget *t, WindowPtr pWin,
     PixmapPtr pPixmap = (*pScreen->GetWindowPixmap) (pWin);
     /* converted for the output, if its colour space asks for it */
     PixmapPtr pShown = compColorSource(pWin, pPixmap);
-    PicturePtr pSrc = CreatePicture(0, &pShown->drawable,
-                                    PictureWindowFormat(pWin), 0, NULL,
+    /* in linear light, a floating point copy */
+    PictFormatPtr format = pShown != pPixmap && t->linear ?
+        compColorFloatFormat(pScreen) : PictureWindowFormat(pWin);
+    PicturePtr pSrc = CreatePicture(0, &pShown->drawable, format, 0, NULL,
                                     serverClient, &error);
     if (!pSrc) {
         RegionUninit(&clip);
@@ -1143,12 +1180,15 @@ sceneGaussKernel(int radius, bool horizontal, int *nparams)
     return params;
 }
 
+/* linear: a floating point picture, format ignored */
 static PicturePtr
-sceneScratchPicture(ScreenPtr pScreen, int w, int h, PictFormatPtr format)
+sceneScratchPicture(ScreenPtr pScreen, int w, int h, PictFormatPtr format, bool linear)
 {
     int error;
-    PixmapPtr pPixmap = (*pScreen->CreatePixmap) (pScreen, max(w, 1), max(h, 1),
-                                                  format->depth, 0);
+    if (linear)
+        format = compColorFloatFormat(pScreen);
+    PixmapPtr pPixmap = linear ? compColorFloatPixmap(pScreen, w, h) :
+        (*pScreen->CreatePixmap) (pScreen, max(w, 1), max(h, 1), format->depth, 0);
     if (!pPixmap)
         return NULL;
     XID repeat = RepeatPad;
@@ -1190,8 +1230,8 @@ scenePaintShadowTransformed(ScreenPtr pScreen, const SceneTarget *t, WindowPtr p
     PicturePtr pBody = sceneCornerMask(pScreen, &attrs->backdrop, node->radius,
                                        ow, oh, 0xff);
     PictFormatPtr a8 = PictureMatchFormat(pScreen, 8, PICT_a8);
-    PicturePtr pAlpha = a8 ? sceneScratchPicture(pScreen, sw, sh, a8) : NULL;
-    PicturePtr pSrc = sceneSolidARGB(node->shadowColor);
+    PicturePtr pAlpha = a8 ? sceneScratchPicture(pScreen, sw, sh, a8, false) : NULL;
+    PicturePtr pSrc = sceneShadowSource(pScreen, t, node->shadowColor);
 
     if (pShape && pBody && pAlpha && pSrc) {
         /* screen, relative to the window's outer corner -> shadow mask:
@@ -1237,14 +1277,15 @@ sceneScaleTransform(PictTransform *t, xFixed scale)
     t->matrix[2][2] = xFixed1;
 }
 
-/* Gaussian blur of pPict (w x h) by radius r, in place. */
+/* Gaussian blur of pPict (w x h, linear: floating point) by radius r, in
+   place. */
 static void
-sceneBlurPicture(ScreenPtr pScreen, PicturePtr pPict, int w, int h, int r)
+sceneBlurPicture(ScreenPtr pScreen, PicturePtr pPict, int w, int h, int r, bool linear)
 {
     int nh = 0, nv = 0;
     xFixed *kh = sceneGaussKernel(r, true, &nh);
     xFixed *kv = sceneGaussKernel(r, false, &nv);
-    PicturePtr pTmp = sceneScratchPicture(pScreen, w, h, pPict->pFormat);
+    PicturePtr pTmp = sceneScratchPicture(pScreen, w, h, pPict->pFormat, linear);
 
     if (kh && kv && pTmp) {
         SetPictureFilter(pPict, (char *) "convolution", 11, kh, nh);
@@ -1315,14 +1356,16 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
     PicturePtr levels[8] = { 0 };
     int lw[8], lh[8], nlevels = 0;
 
-    levels[0] = sceneScratchPicture(pScreen, ew, eh, format);
+    levels[0] = sceneScratchPicture(pScreen, ew, eh, format, t->linear);
     if (!levels[0])
         goto out;
     lw[0] = ew;
     lh[0] = eh;
     nlevels = 1;
 
-    SceneTarget below = { .pict = levels[0], .ox = e.x1, .oy = e.y1 };
+    SceneTarget below = {
+        .pict = levels[0], .ox = e.x1, .oy = e.y1, .linear = t->linear,
+    };
     RegionRec area;
     RegionInit(&area, &e, 1);
     sceneRenderLayers(pScreen, &below, wins, nodes, i, &area, depth + 1);
@@ -1338,7 +1381,7 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
         int k = nlevels;
         lw[k] = (lw[k - 1] + 1) / 2;
         lh[k] = (lh[k - 1] + 1) / 2;
-        levels[k] = sceneScratchPicture(pScreen, lw[k], lh[k], format);
+        levels[k] = sceneScratchPicture(pScreen, lw[k], lh[k], format, t->linear);
         if (!levels[k])
             goto out;
         SetPictureTransform(levels[k - 1], &half);
@@ -1350,7 +1393,7 @@ scenePaintBackdrop(ScreenPtr pScreen, const SceneTarget *t, WindowPtr *wins,
     }
     PicturePtr pSmall = levels[nlevels - 1];
     sceneBlurPicture(pScreen, pSmall, lw[nlevels - 1], lh[nlevels - 1],
-                     max(1, (r + scale / 2) / scale));
+                     max(1, (r + scale / 2) / scale), t->linear);
 
     PicturePtr pMask = NULL;
     if (node->radius || node->transformed) {
@@ -1428,7 +1471,28 @@ scenePaint(ScreenPtr pScreen, WindowPtr *wins, const SceneNodeRec *nodes,
         .pict = pDst, .ox = pRoot->drawable.x, .oy = pRoot->drawable.y,
         .screen = true,
     };
-    sceneRenderLayers(pScreen, &screen, wins, nodes, n, pDamage, 0);
+
+    /* in linear light: blend in a floating point buffer over the damage,
+       then encode it for the output */
+    const BoxRec *e = RegionExtents(pDamage);
+    PixmapPtr pLin = compColorLinear(pScreen) ?
+        compColorFloatPixmap(pScreen, e->x2 - e->x1, e->y2 - e->y1) : NULL;
+    PicturePtr pLinPict = pLin ?
+        CreatePicture(0, &pLin->drawable, compColorFloatFormat(pScreen), 0, NULL,
+                      serverClient, &error) : NULL;
+    if (pLinPict) {
+        SceneTarget lin = {
+            .pict = pLinPict, .ox = e->x1, .oy = e->y1, .linear = true,
+        };
+        sceneRenderLayers(pScreen, &lin, wins, nodes, n, pDamage, 0);
+        compColorEncodeLinear(pScreen, pLin, e->x1, e->y1, pDst,
+                              pRoot->drawable.x, pRoot->drawable.y, pDamage);
+        FreePicture(pLinPict, 0);
+    } else {
+        sceneRenderLayers(pScreen, &screen, wins, nodes, n, pDamage, 0);
+    }
+    if (pLin)
+        dixDestroyPixmap(pLin, 0);
     FreePicture(pDst, 0);
 }
 
@@ -1582,7 +1646,7 @@ sceneCanScanOut(WindowPtr pWin)
 
     if (attrs->mask & (XpSceneNodeTransform | XpSceneNodeDecoration))
         return false;
-    if (compColorState(pWin))
+    if (!compColorShownAsIs(pWin))
         return false;           /* its pixels need converting */
     CARD32 opacity = (attrs->mask & XpSceneNodeOpacity) ?
         attrs->opacity : sceneWindowOpacity(pWin);

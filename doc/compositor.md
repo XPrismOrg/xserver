@@ -119,7 +119,7 @@ Taking over requires the `compositor.legacy` capability, see
 | `Xext/composite/xprismsceneproto.h` | XPRISM-SCENE wire format |
 | `Xext/composite/compcolor.c` | Colour spaces and conversions (no server state) |
 | `Xext/composite/compcolorext.c` | The XPRISM-COLOR extension and conversion of windows' contents (CPU) |
-| `glamor/glamor_color.c` | The same conversion on the GPU |
+| `glamor/glamor_color.c` | The same conversion on the GPU, and half float pixmaps for composition in linear light |
 | `Xext/composite/xprismcolorproto.h` | XPRISM-COLOR wire format |
 | `Xext/composite/compalloc.c` | Hooks for external compositors taking over and releasing a screen |
 | `Xext/composite/compinit.c` | Initialization; composing pending changes before a root window is read |
@@ -127,6 +127,8 @@ Taking over requires the `compositor.legacy` capability, see
 | `test/pyxtest/test_compositor.py` | Compositor tests |
 | `test/pyxtest/test_scene_protocol.py` | XPRISM-SCENE tests |
 | `test/pyxtest/test_color.py` | XPRISM-COLOR tests |
+| `test/pyxtest/test_color_output.py` | Output colour spaces |
+| `test/pyxtest/test_color_linear.py` | Composition in linear light (GPU) |
 | `test/compcolor.c` | Unit tests of the colour library |
 
 ## Limitations

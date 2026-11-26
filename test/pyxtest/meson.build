@@ -57,6 +57,7 @@ if pytest.found()
      'test_compositor.py',
      'test_color.py',
      'test_color_output.py',
+     'test_color_linear.py',
      'test_scene_protocol.py',
      'test_scene_input.py',
         'test_explicit_sync.py',

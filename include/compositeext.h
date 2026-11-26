@@ -38,8 +38,9 @@ extern _X_EXPORT RESTYPE CompositeClientWindowType;
  * XPrism: colour conversion of window contents for the built-in
  * compositor (XPRISM-COLOR, doc/color.md), done by the acceleration
  * architecture when it can. Pixels of src within region (pixmap
- * coordinates; src and dst have the same size and depth) are converted
- * into dst, per pixel:
+ * coordinates; src and dst have the same size and, unless one of them is
+ * a floating point pixmap below, the same depth) are converted into dst,
+ * per pixel:
  *
  *   un-premultiply, decode transfer (to linear light, 1.0 = refWhite),
  *   multiply by matrix (to the output's primaries; 1.0 is now the
@@ -67,6 +68,10 @@ typedef struct {
     int outTransfer;            /* sRGB, gamma 2.2, linear or PQ */
     float outRefWhite;          /* cd/m^2 */
     float outPeak;              /* relative to outRefWhite; 1 for SDR */
+    /* composition in linear light: src is a floating point pixmap, its
+       channels not limited to 1 (then transfer is linear); dst is one,
+       given linear values up to outPeak (then outTransfer is linear) */
+    Bool srcFloat, dstFloat;
 } CompositeColorConvertRec;
 
 typedef Bool (*CompositeColorConvertProcPtr) (PixmapPtr src, PixmapPtr dst,
@@ -76,6 +81,18 @@ typedef Bool (*CompositeColorConvertProcPtr) (PixmapPtr src, PixmapPtr dst,
 /* Set (or with NULL, remove) the screen's conversion function. */
 extern _X_EXPORT void CompositeSetColorConvert(ScreenPtr pScreen,
                                                CompositeColorConvertProcPtr proc);
+
+/*
+ * XPrism: a pixmap for composition in linear light, by the acceleration
+ * architecture: depth 32, used with Render's a8r8g8b8 format, but its
+ * channels are 16-bit floating point and keep values above 1 (HDR). NULL
+ * if it cannot make one. Clients never see these pixmaps.
+ */
+typedef PixmapPtr (*CompositeCreateFloatPixmapProcPtr) (ScreenPtr pScreen,
+                                                        int width, int height);
+
+extern _X_EXPORT void CompositeSetFloatPixmap(ScreenPtr pScreen,
+                                              CompositeCreateFloatPixmapProcPtr proc);
 
 /*
  * XPrism: the colour space the screen's output shows (doc/color.md).

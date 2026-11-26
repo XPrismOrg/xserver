@@ -132,9 +132,19 @@ The window's own contents are not changed: `GetImage` on the window
 returns the pixels the application drew. `GetImage` on the root window
 returns what the screen shows.
 
-Composition (blending of translucent windows) happens in the output's
-encoding, as composition in sRGB did before;
-[color.md](color.md) describes composition in linear light.
+Composition (blending of translucent windows, shadows and background
+blur): with glamor, on outputs other than sRGB, in the output's linear
+light, in half float: every window is converted to linear light, the
+compositor blends there, and each frame is encoded for the output.
+Half of white over black is then half the light (sRGB 188, not 128),
+light above SDR white blends as light, and ARGB windows on HDR outputs
+keep more than 8 bits per channel. Windows in the output's own space
+come back exactly, from the output's black level up (below it, half
+float keeps too little, and the display shows black anyway).
+Otherwise (without glamor, or on sRGB outputs) composition happens in
+the output's encoding, as composition in sRGB did before. Setting
+`XPRISM_NO_LINEAR_COMPOSITION` in the server's environment turns
+composition in linear light off. See [color.md](color.md).
 
 ## Requests
 
@@ -248,14 +258,21 @@ none either. Described windows are converted where they are drawn on:
 
 On an output that is not sRGB, every top-level window whose pixels
 are not in the output's space has a converted copy of its contents,
-which doubles their memory.
+which doubles their memory. Composing in linear light, every window
+has one, in half float: 8 bytes per pixel, three times the memory of
+the window alone; each frame also uses a half float buffer as large as
+what changed. A frame costs within 1 ms of composing in the output's
+encoding (a full 1280×1024 screen on NVIDIA and AMD render nodes).
 
 ## Limitations of version 0.2
 
-- Composition is not yet in linear light (see above).
-- Converted copies have the window's depth: ARGB (depth 32) windows on
-  HDR outputs are converted at 8 bits per channel, which bands in
-  gradients. Opaque windows on a depth-30 screen have 10 bits.
+- Composition in linear light needs glamor on desktop GL. Otherwise
+  composition is in the output's encoding, and converted copies have
+  the window's depth: ARGB (depth 32) windows on HDR outputs are
+  converted at 8 bits per channel, which bands in gradients.
+- Windows of depths other than 24, 30 and 32 (16-bit visuals) are not
+  converted, as before; composing in linear light, their pixels are
+  taken as linear.
 - One colour space per screen: on the modesetting driver, screens with
   several monitors will need one per CRTC.
 - Outputs with the HLG transfer function are not supported (content

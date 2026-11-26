@@ -1,11 +1,11 @@
 # Colour management, wide gamut and HDR (Phase IV design)
 
-Status: being implemented. Steps 1 to 3 are done: the colour library
+Status: being implemented. Steps 1 to 4 are done: the colour library
 (`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
 [XPRISM-COLOR 0.2](xprism-color-protocol.md) with window descriptions,
-and output colour spaces in Xvfb, including HDR (PQ) outputs; the
-conversion runs on the GPU with glamor. Composition in linear light and
-the modesetting driver remain, see Steps.
+output colour spaces in Xvfb, including HDR (PQ) outputs, and, with
+glamor, composition in linear light in half float; the conversion runs
+on the GPU with glamor. The modesetting driver remains, see Steps.
 
 ## Goals
 
@@ -38,13 +38,19 @@ without exchanging profiles:
 - luminance: reference white, and for HDR the mastering range
   (min/max luminance, MaxCLL, MaxFALL).
 
-The compositor works in linear light with BT.2020 primaries, scaled so
-that 1.0 is SDR reference white. Each window is converted into it
-(decode the transfer function, 3x3 primaries matrix), composed (blending
-in linear light, which also fixes the darkened edges of today's
-blending in sRGB), and encoded for each output (3x3 matrix, gamut and
-tone mapping where the output cannot show the content, encode the
-output's transfer function).
+The compositor works in linear light, scaled so that 1.0 is SDR
+reference white. Each window is converted into it (decode the transfer
+function, 3x3 primaries matrix), composed (blending in linear light,
+which also fixes the darkened edges of today's blending in sRGB), and
+encoded for each output (3x3 matrix, gamut and tone mapping where the
+output cannot show the content, encode the output's transfer function).
+
+As built (step 4), with one colour space per screen, that linear light
+has the output's primaries, and gamut and tone mapping happen when each
+window is converted into it, so that blending (which only mixes colours
+the output can show) needs none and the encoding of each frame is the
+transfer function alone. With an output per CRTC (step 5), the
+compositor would work in BT.2020 and map for each output when encoding.
 
 For outputs that are all SDR sRGB and windows that are all sRGB, the
 compositor keeps composing exactly as now, so the pixels are identical
@@ -89,15 +95,16 @@ The compositor chooses its target for each output from these.
 The composition path needs pixel formats beyond Render's 8 and 10 bits
 per channel:
 
-1. Software and glamor composition in linear BT.2020 at 16 bits per
-   channel, first with integer formats, which is enough for SDR wide
-   gamut. pixman has a16b16g16r16, but X pixmaps and Render pictures stop
-   at 32 bits per pixel, so these are buffers internal to the
-   compositor: fb and glamor both need 64-bit-per-pixel pixmaps that
-   clients never see.
-2. Half-float formats for HDR headroom, in glamor first (GL renders to
-   RGBA16F everywhere glamor runs); software composition of HDR stays
-   possible but slow.
+1. Done, with glamor: half float (RGBA16F) pixmaps, internal to the
+   compositor (clients never see them). For Render they are depth-32
+   a8r8g8b8 pictures; glamor stores them as half float, and code that
+   reads or writes their pixels as 8-bit ARGB (software fallbacks)
+   still works, at 8 bits. Desktop GL 3.0 renders to them; GLES would
+   need half float pixel transfers, and keeps composing in the output's
+   encoding.
+2. Software composition in linear light (fb would need 64-bit-per-pixel
+   pixmaps; pixman has a16b16g16r16 and rgba_float) is not done: without
+   glamor, the compositor composes in the output's encoding.
 3. KMS scanout of 10-bit and fp16 framebuffers, with direct scanout of
    windows whose colour space matches the output.
 
@@ -125,8 +132,14 @@ Phase II, for vkms in CI or real hardware.
    HDR (PQ) outputs: every window is converted into the output's space
    and composed in its encoding; windows already in it are shown as
    they are, and can be shown directly.
-4. HDR: half-float composition with glamor, in linear light (the
-   blending of translucent windows); PQ encoding and tone mapping are
-   done (steps 2 and 3).
+4. Done: composition in linear light with glamor, on outputs other
+   than sRGB: windows, the root background and shadows are converted to
+   the output's linear light in half float, blended there (translucent
+   windows, shadows, background blur), and each frame is encoded for
+   the output once. Values above SDR white are kept (HDR), and ARGB
+   windows on HDR outputs keep more than 8 bits. Windows in the
+   output's own space come back exactly from its black level up, so
+   they look the same composited or shown directly. sRGB outputs still
+   compose in sRGB, unchanged.
 5. modesetting: `Colorspace`, `HDR_OUTPUT_METADATA`, `max bpc`, 10-bit
    and fp16 scanout (needs a display device).

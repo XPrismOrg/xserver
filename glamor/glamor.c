@@ -258,6 +258,8 @@ glamor_create_pixmap(ScreenPtr screen, int w, int h, int depth,
     BUG_RETURN_VAL(!pixmap_priv, NULL);
 
     pixmap_priv->is_cbcr = (GLAMOR_CREATE_FORMAT_CBCR & usage) == GLAMOR_CREATE_FORMAT_CBCR;
+    pixmap_priv->is_float = usage == GLAMOR_CREATE_FORMAT_FLOAT && depth == 32 &&
+        glamor_priv->float_format.depth;
 
     pitch = (((w * pixmap->drawable.bitsPerPixel + 7) / 8) + 3) & ~3;
     screen->ModifyPixmapHeader(pixmap, w, h, 0, 0, pitch, NULL);
@@ -463,6 +465,8 @@ glamor_format_for_pixmap(PixmapPtr pixmap)
 
     if (pixmap_priv->is_cbcr)
         return &glamor_priv->cbcr_format;
+    else if (pixmap_priv->is_float)
+        return &glamor_priv->float_format;
     else
         return &glamor_priv->formats[pixmap->drawable.depth];
 }
@@ -644,6 +648,22 @@ glamor_setup_formats(ScreenPtr screen)
     glamor_priv->cbcr_format.type = GL_UNSIGNED_BYTE;
     glamor_priv->cbcr_format.rendering_supported = TRUE;
     glamor_priv->cbcr_format.texture_only = FALSE;
+
+    /* XPrism: half float, for composition in linear light. Pixels move
+       in and out as 8-bit BGRA, converted by GL, so that the code that
+       reads and writes depth-32 pixmaps works unchanged (GLES would need
+       the half float type for those). Rendering to it is core since GL
+       3.0. */
+    if (!glamor_priv->is_gles && epoxy_gl_version() >= 30) {
+        glamor_priv->float_format = (struct glamor_format) {
+            .depth = 32,
+            .internalformat = GL_RGBA16F,
+            .format = GL_BGRA,
+            .type = GL_UNSIGNED_INT_8_8_8_8_REV,
+            .render_format = PIXMAN_a8r8g8b8,
+            .rendering_supported = TRUE,
+        };
+    }
 }
 
 static void glamor_pixmap_destroy(CallbackListPtr *pcbl, ScreenPtr pScreen, PixmapPtr pPixmap)

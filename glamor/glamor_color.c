@@ -6,6 +6,9 @@
  * the CPU (Xext/composite/compcolorext.c) where this declines; the
  * steps and constants are those of include/compositeext.h and
  * Xext/composite/compcolor.c.
+ *
+ * Also the half float pixmaps the compositor blends in, in linear light
+ * (glamor.c: float_format), and the conversions into and out of them.
  */
 #include <dix-config.h>
 
@@ -17,6 +20,7 @@
 struct color_args {
     glamor_pixmap_fbo *src;
     int src_w, src_h;
+    float dst_max;              /* largest code of dst's channels, 0: float */
     const CompositeColorConvertRec *conv;
 };
 
@@ -51,6 +55,9 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     glUniform1f(glGetUniformLocation(prog->prog, "color_ks"), c->toneKS);
     glUniform3f(glGetUniformLocation(prog->prog, "color_out"),
                 c->outTransfer, c->outRefWhite, c->outPeak);
+    glUniform2f(glGetUniformLocation(prog->prog, "color_float"),
+                c->srcFloat ? 1.0f : 0.0f, c->dstFloat ? 1.0f : 0.0f);
+    glUniform1f(glGetUniformLocation(prog->prog, "color_dst_max"), args->dst_max);
     return TRUE;
 }
 
@@ -65,6 +72,8 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "uniform vec4 color_tone;\n" /* on, knee, PQ(maxLum), maxL */      \
     "uniform float color_ks;\n"                                         \
     "uniform vec3 color_out;\n" /* transfer, refWhite, peak */         \
+    "uniform vec2 color_float;\n" /* src, dst: half float, unclamped */ \
+    "uniform float color_dst_max;\n" /* 255, 1023; 0: float */         \
     "float pq_to_nits(float v) {\n"                                     \
     "  float p = pow(clamp(v, 0.0, 1.0), 1.0 / 78.84375);\n"            \
     "  float num = max(p - 0.8359375, 0.0);\n"                          \
@@ -117,7 +126,9 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "  if (a <= 0.0) {\n"                                               \
     "    frag_color = vec4(0.0);\n"                                     \
     "  } else {\n"                                                      \
-    "    vec3 o = color_mat * color_decode(min(s.rgb / a, vec3(1.0)));\n" \
+    "    vec3 c = s.rgb / a;\n"                                          \
+    "    if (color_float.x < 0.5) c = min(c, vec3(1.0));\n"             \
+    "    vec3 o = color_mat * color_decode(c);\n"                        \
     "    float y = dot(color_out_luma, o);\n"                           \
     "    if (color_tone.x > 0.5 && y > color_tone.y) {\n"               \
     "      float ks = color_ks;\n"                                      \
@@ -132,8 +143,14 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "    y = clamp(y, 0.0, color_out.z);\n"                             \
     "    float sc = gamut_scale(o.r, y, gamut_scale(o.g, y, gamut_scale(o.b, y, 1.0)));\n" \
     "    o = clamp(vec3(y) + sc * (o - vec3(y)), 0.0, color_out.z);\n"  \
-    "    vec3 enc = clamp(color_encode(o), 0.0, 1.0);\n"                \
-    "    frag_color = vec4(enc * a, a);\n"                              \
+    "    vec3 enc = color_encode(o);\n"                                  \
+    "    if (color_float.y < 0.5) enc = clamp(enc, 0.0, 1.0);\n"        \
+    "    enc *= a;\n"                                                    \
+    /* to the nearest code: GL leaves the rounding to the driver, and    \
+       some truncate */                                                  \
+    "    if (color_dst_max > 0.0)\n"                                     \
+    "      enc = floor(enc * color_dst_max + 0.5) / color_dst_max;\n"   \
+    "    frag_color = vec4(enc, a);\n"                                   \
     "  }\n"
 
 static const glamor_facet glamor_facet_color = {
@@ -159,9 +176,19 @@ glamor_color_convert(PixmapPtr src, PixmapPtr dst, RegionPtr region,
     glamor_program *prog;
     GLshort *v;
     char *vbo_offset;
+    glamor_pixmap_private *src_priv = glamor_get_pixmap_private(src);
+    glamor_pixmap_private *dst_priv = glamor_get_pixmap_private(dst);
 
+    /* into or out of half float, else the same depth */
+    if (!src_priv || !dst_priv ||
+        src_priv->is_float != !!conv->srcFloat || dst_priv->is_float != !!conv->dstFloat ||
+        (conv->srcFloat && conv->dstFloat))
+        return FALSE;
     if ((depth != 24 && depth != 30 && depth != 32) ||
-        dst->drawable.depth != depth || src == dst || src->drawable.width != dst->drawable.width ||
+        (dst->drawable.depth != 24 && dst->drawable.depth != 30 &&
+         dst->drawable.depth != 32) ||
+        (!conv->srcFloat && !conv->dstFloat && dst->drawable.depth != depth) ||
+        src == dst || src->drawable.width != dst->drawable.width ||
         src->drawable.height != dst->drawable.height ||
         !glamor_pixmap_has_fbo(src) || !glamor_pixmap_has_fbo(dst) ||
         glamor_pixmap_is_large(src) || glamor_pixmap_is_large(dst))
@@ -186,6 +213,7 @@ glamor_color_convert(PixmapPtr src, PixmapPtr dst, RegionPtr region,
         .src = glamor_pixmap_fbo_at(glamor_get_pixmap_private(src), 0),
         .src_w = src->drawable.width,
         .src_h = src->drawable.height,
+        .dst_max = conv->dstFloat ? 0.0f : dst->drawable.depth == 30 ? 1023.0f : 255.0f,
         .conv = conv,
     };
     if (!glamor_use_program(&dst->drawable, NULL, prog, &args))
@@ -213,18 +241,74 @@ glamor_color_convert(PixmapPtr src, PixmapPtr dst, RegionPtr region,
     return TRUE;
 }
 
+/* A half float pixmap in GL, or NULL */
+static PixmapPtr
+glamor_color_create_float(ScreenPtr screen, int w, int h)
+{
+    PixmapPtr pixmap = glamor_create_pixmap(screen, w, h, 32,
+                                            GLAMOR_CREATE_FORMAT_FLOAT);
+    if (!pixmap)
+        return NULL;
+    glamor_pixmap_private *priv = glamor_get_pixmap_private(pixmap);
+    if (!priv || !priv->is_float || !glamor_pixmap_has_fbo(pixmap) ||
+        glamor_pixmap_is_large(pixmap)) {
+        /* fell back to memory, or too large to convert */
+        dixDestroyPixmap(pixmap, 0);
+        return NULL;
+    }
+    return pixmap;
+}
+
+/* Whether GL renders into half float textures; the probe uses GL only,
+   pixmaps are not ready while the screen is being set up. */
+static Bool
+glamor_color_float_works(ScreenPtr screen)
+{
+    glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
+    const struct glamor_format *f = &glamor_priv->float_format;
+    GLuint tex, fb;
+    GLenum status;
+
+    if (!f->depth)
+        return FALSE;
+    glamor_make_current(glamor_priv);
+    while (glGetError() != GL_NO_ERROR)
+        ;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, f->internalformat, 4, 4, 0, f->format, f->type, NULL);
+    glGenFramebuffers(1, &fb);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fb);
+    glDeleteTextures(1, &tex);
+    if (glGetError() != GL_NO_ERROR || status != GL_FRAMEBUFFER_COMPLETE) {
+        glamor_priv->float_format.depth = 0;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 void
 glamor_color_init(ScreenPtr screen)
 {
     glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
 
     if (!(glamor_priv->flags & GLAMOR_NO_RENDER_ACCEL) &&
-        !getenv("XPRISM_NO_GPU_COLOR"))
+        !getenv("XPRISM_NO_GPU_COLOR")) {
         CompositeSetColorConvert(screen, glamor_color_convert);
+        /* composition in linear light */
+        if (!getenv("XPRISM_NO_LINEAR_COMPOSITION") &&
+            glamor_color_float_works(screen))
+            CompositeSetFloatPixmap(screen, glamor_color_create_float);
+    }
 }
 
 void
 glamor_color_fini(ScreenPtr screen)
 {
     CompositeSetColorConvert(screen, NULL);
+    CompositeSetFloatPixmap(screen, NULL);
 }

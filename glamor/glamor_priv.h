@@ -255,6 +255,9 @@ typedef struct glamor_screen_private {
      */
     struct glamor_format formats[33];
     struct glamor_format cbcr_format;
+    /* XPrism: RGBA16F for composition in linear light; depth 0 if the GL
+       cannot render to it */
+    struct glamor_format float_format;
 
     /* glamor point shader */
     glamor_program point_prog;
@@ -441,6 +444,7 @@ typedef struct glamor_pixmap_private {
     glamor_pixmap_fbo **fbo_array;
 
     Bool is_cbcr;
+    Bool is_float;              /* float_format */
 } glamor_pixmap_private;
 
 extern DevPrivateKeyRec glamor_pixmap_private_key;

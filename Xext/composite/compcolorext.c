@@ -4,23 +4,32 @@
  * space of their windows' pixels, and the scene compositor shows them
  * converted for the output.
  *
- * Outputs are sRGB for now. A top-level window whose contents are, in
- * whole or in part, described as anything else gets a second pixmap
- * holding its contents converted to sRGB, kept up to date where the
- * window is drawn on; the compositor shows that one instead. Each pixel
- * is in the colour space of the innermost window that covers it and has
- * a description (child windows inherit their parent's), sRGB without
- * one.
+ * Each screen's output shows a colour space, sRGB unless the DDX sets
+ * another (CompositeSetOutputColorSpace). A top-level window whose
+ * contents are, in whole or in part, in a space other than the output's
+ * gets a second pixmap holding its contents converted for the output,
+ * kept up to date where the window is drawn on; the compositor shows that
+ * one instead. Each pixel is in the colour space of the innermost window
+ * that covers it and has a description (child windows inherit their
+ * parent's), sRGB without one.
  *
  * Conversion: decode the transfer function to linear light, convert the
- * primaries (3x3 matrix), tone map HDR content down to SDR white,
- * bring colours outside the sRGB gamut into it by desaturating towards
- * their luminance (which keeps the hue), encode sRGB. The pixels are
- * converted by the CPU, through GetImage and PutImage, so this works with
- * every DDX; GPU conversion comes with HDR composition.
+ * primaries (3x3 matrix), tone map content brighter than the output can
+ * show, bring colours outside the output's gamut into it by desaturating
+ * towards their luminance (which keeps the hue), encode the output's
+ * transfer function. The acceleration architecture does it when it can
+ * (glamor), the CPU otherwise, through GetImage and PutImage.
  *
- * Windows without a description cost nothing, and as long as no window
- * has one the compositor does exactly what it did before.
+ * Composition in linear light (compColorLinear): on outputs other than
+ * sRGB, where the acceleration architecture also makes floating point
+ * pixmaps, every window is converted to linear light in the output's
+ * primaries instead (1.0 = its reference white, up to its peak), the
+ * compositor blends in a floating point buffer, and that is encoded for
+ * the output once per frame (compColorEncodeLinear).
+ *
+ * On sRGB outputs, windows without a description cost nothing, and as
+ * long as no window has one the compositor does exactly what it did
+ * before.
  */
 
 #include <dix-config.h>
@@ -55,6 +64,7 @@ typedef struct {
 
 static DevPrivateKeyRec colorWinKeyRec;
 static CompositeColorConvertProcPtr colorAccel[MAXSCREENS];
+static CompositeCreateFloatPixmapProcPtr colorFloat[MAXSCREENS];
 static unsigned colorTagged;    /* windows with a non-sRGB description */
 static unsigned colorSerial = 1;        /* changes with any description */
 
@@ -179,6 +189,15 @@ colorNext(WindowPtr top, WindowPtr pWin)
         pWin = pWin->parent;
     }
     return NULL;
+}
+
+/* Composition in linear light: on outputs other than sRGB, when the
+   acceleration architecture converts and has floating point pixmaps. */
+bool
+compColorLinear(ScreenPtr pScreen)
+{
+    int s = pScreen->myNum;
+    return outputSet[s] && colorAccel[s] && colorFloat[s];
 }
 
 static bool
@@ -448,13 +467,32 @@ colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
     return true;
 }
 
+/* The output's linear light: its primaries, 1.0 = its reference white */
+static XpColorSpace
+colorLinearOf(const XpColorSpace *out)
+{
+    XpColorSpace lin = *out;
+    lin.transfer = XpColorTransferLinear;
+    return lin;
+}
+
+enum {
+    COLOR_ENCODED,              /* from cs to out's encoding */
+    COLOR_TO_LINEAR,            /* from cs to out's linear light, dst float */
+    COLOR_FROM_LINEAR,          /* src float, out's linear light, to out */
+};
+
 /* Convert pRegion (pixmap coordinates) of src, in layout srcFormat, into
-   dst, in dstFormat. cs NULL: shown as it is, copied. */
+   dst, in dstFormat. cs NULL: shown as it is, copied. Without the
+   acceleration architecture, floating point pixmaps are read and written
+   as 8 bits per channel, within [0, 1]. */
 static void
 colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
                    PictFormatPtr dstFormat, const XpColorSpace *cs,
-                   const XpColorSpace *out, RegionPtr pRegion)
+                   const XpColorSpace *out, RegionPtr pRegion, int mode)
 {
+    XpColorSpace lin = colorLinearOf(out);
+
     ScreenPtr pScreen = src->drawable.pScreen;
     int n = RegionNumRects(pRegion);
     BoxPtr b = RegionRects(pRegion);
@@ -463,7 +501,9 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
 
     if (!n)
         return;
-    if (!cs && src->drawable.depth == dst->drawable.depth) {
+    if (mode == COLOR_FROM_LINEAR)
+        cs = &lin;
+    if (!cs && mode == COLOR_ENCODED && src->drawable.depth == dst->drawable.depth) {
         GCPtr pGC = GetScratchGC(dst->drawable.depth, pScreen);
         if (!pGC)
             return;
@@ -480,13 +520,29 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
 
     CompositeColorConvertProcPtr accel = colorAccel[pScreen->myNum];
     CompositeColorConvertRec params;
-    if (accel && colorAccelParams(cs, out, &params) &&
-        (*accel) (src, dst, pRegion, &params))
-        return;
+    if (accel && colorAccelParams(cs, out, &params)) {
+        if (mode == COLOR_TO_LINEAR) {
+            params.outTransfer = XpColorTransferLinear;
+            params.dstFloat = TRUE;
+        }
+        params.srcFloat = mode == COLOR_FROM_LINEAR;
+        /* Content in the output's own space is shown as it is, as when
+           the window is shown directly: not brought within the peak. So
+           the encoding of the blended light does not clamp to it either
+           (the rest is within it). */
+        if (mode == COLOR_FROM_LINEAR ||
+            (mode == COLOR_TO_LINEAR && colorShownAsIs(cs, out)))
+            params.outPeak = (float) (out->transfer == XpColorTransferPQ ?
+                                      XpColorMaxLuminance / out->refWhite : 1);
+        if ((*accel) (src, dst, pRegion, &params))
+            return;
+    }
 
+    /* on the CPU, linear light is within [0, 1] */
     cv = calloc(1, sizeof(*cv));
     if (!cv || !colorLayout(srcFormat, &inLayout) ||
-        !colorLayout(dstFormat, &outLayout) || !colorConvInit(cv, cs, out)) {
+        !colorLayout(dstFormat, &outLayout) ||
+        !colorConvInit(cv, cs, mode == COLOR_TO_LINEAR ? &lin : out)) {
         free(cv);
         return;
     }
@@ -522,7 +578,16 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
 unsigned
 compColorState(WindowPtr top)
 {
-    return colorNeedsConversion(top) ? colorSerial : 0;
+    /* composing in linear light, every window is converted */
+    return compColorLinear(top->drawable.pScreen) || colorNeedsConversion(top) ?
+        colorSerial : 0;
+}
+
+/* Whether top-level window top's pixels are what the output shows. */
+bool
+compColorShownAsIs(WindowPtr top)
+{
+    return !colorNeedsConversion(top);
 }
 
 void
@@ -542,21 +607,25 @@ compColorSource(WindowPtr top, PixmapPtr content)
 {
     ColorWinPtr cw = colorWin(top);
     ScreenPtr pScreen = top->drawable.pScreen;
+    bool linear = compColorLinear(pScreen);
 
-    if (!colorNeedsConversion(top) || content->drawable.bitsPerPixel != 32) {
+    if (!(linear || colorNeedsConversion(top)) ||
+        content->drawable.bitsPerPixel != 32) {
         colorRelease(cw);
         return content;
     }
 
-    int depth = content->drawable.depth;
+    int depth = linear ? 32 : content->drawable.depth;
     if (cw->content != content ||
         cw->converted->drawable.width != content->drawable.width ||
         cw->converted->drawable.height != content->drawable.height ||
         cw->converted->drawable.depth != depth) {
         colorRelease(cw);
-        cw->converted = (*pScreen->CreatePixmap) (pScreen, content->drawable.width,
-                                                  content->drawable.height,
-                                                  depth, 0);
+        cw->converted = linear ?
+            compColorFloatPixmap(pScreen, content->drawable.width,
+                                 content->drawable.height) :
+            (*pScreen->CreatePixmap) (pScreen, content->drawable.width,
+                                      content->drawable.height, depth, 0);
         if (!cw->converted)
             return content;
         cw->content = content;
@@ -575,12 +644,14 @@ compColorSource(WindowPtr top, PixmapPtr content)
        over its own part: inner windows come later in preorder */
     const XpColorSpace *out = colorOutput(pScreen);
     PictFormatPtr srcFormat = PictureWindowFormat(top);
-    PictFormatPtr dstFormat = srcFormat;
+    PictFormatPtr dstFormat = linear ? compColorFloatFormat(pScreen) : srcFormat;
+    int mode = linear ? COLOR_TO_LINEAR : COLOR_ENCODED;
     const XpColorSpace *own = colorOwn(top);
     if (!own)
         own = &xpColorSpaceSRGB;
     colorConvertRegion(content, srcFormat, cw->converted, dstFormat,
-                       colorShownAsIs(own, out) ? NULL : own, out, &cw->dirty);
+                       !linear && colorShownAsIs(own, out) ? NULL : own, out,
+                       &cw->dirty, mode);
     RegionRec part;
     RegionNull(&part);
     for (WindowPtr pWin = colorNext(top, top); pWin; pWin = colorNext(top, pWin)) {
@@ -591,7 +662,8 @@ compColorSource(WindowPtr top, PixmapPtr content)
         RegionTranslate(&part, -content->screen_x, -content->screen_y);
         RegionIntersect(&part, &part, &cw->dirty);
         colorConvertRegion(content, srcFormat, cw->converted, dstFormat,
-                           colorShownAsIs(own, out) ? NULL : own, out, &part);
+                           !linear && colorShownAsIs(own, out) ? NULL : own, out,
+                           &part, mode);
     }
     RegionUninit(&part);
     RegionEmpty(&cw->dirty);
@@ -604,25 +676,30 @@ compColorSerial(void)
     return colorSerial;
 }
 
-/* A copy of src (sRGB, in format) as the output shows it, or NULL. */
+/* A copy of src (sRGB, in format) as the output shows it, or NULL;
+   composing in linear light, a floating point pixmap in linear light. */
 PixmapPtr
 compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr format)
 {
     const XpColorSpace *out = colorOutput(pScreen);
+    bool linear = compColorLinear(pScreen);
     PixmapPtr dst;
 
     if (src->drawable.bitsPerPixel != 32)
         return NULL;
-    dst = (*pScreen->CreatePixmap) (pScreen, src->drawable.width,
-                                    src->drawable.height, src->drawable.depth, 0);
+    dst = linear ?
+        compColorFloatPixmap(pScreen, src->drawable.width, src->drawable.height) :
+        (*pScreen->CreatePixmap) (pScreen, src->drawable.width,
+                                  src->drawable.height, src->drawable.depth, 0);
     if (!dst)
         return NULL;
     BoxRec all = { 0, 0, src->drawable.width, src->drawable.height };
     RegionRec r;
     RegionInit(&r, &all, 1);
-    colorConvertRegion(src, format, dst, format,
-                       colorShownAsIs(&xpColorSpaceSRGB, out) ? NULL : &xpColorSpaceSRGB,
-                       out, &r);
+    colorConvertRegion(src, format, dst, linear ? compColorFloatFormat(pScreen) : format,
+                       !linear && colorShownAsIs(&xpColorSpaceSRGB, out) ?
+                       NULL : &xpColorSpaceSRGB,
+                       out, &r, linear ? COLOR_TO_LINEAR : COLOR_ENCODED);
     RegionUninit(&r);
     return dst;
 }
@@ -649,6 +726,89 @@ compColorConvertPixel(ScreenPtr pScreen, PictFormatPtr format, CARD32 pixel)
     colorConvertSpan(cv, &opaque, &opaque, &pixel, 1);
     free(cv);
     return pixel | (l.mask[3] << l.shift[3]);
+}
+
+/* ---- composition in linear light ---------------------------------------- */
+
+void
+CompositeSetFloatPixmap(ScreenPtr pScreen, CompositeCreateFloatPixmapProcPtr proc)
+{
+    colorFloat[pScreen->myNum] = proc;
+}
+
+PixmapPtr
+compColorFloatPixmap(ScreenPtr pScreen, int w, int h)
+{
+    CompositeCreateFloatPixmapProcPtr proc = colorFloat[pScreen->myNum];
+    return proc ? (*proc) (pScreen, max(w, 1), max(h, 1)) : NULL;
+}
+
+/* Render's format for floating point pixmaps */
+PictFormatPtr
+compColorFloatFormat(ScreenPtr pScreen)
+{
+    return PictureMatchFormat(pScreen, 32, PICT_a8r8g8b8);
+}
+
+/* A solid picture of an sRGB colour (pixel, in format's layout) with
+   alpha, in the output's linear light, premultiplied. */
+PicturePtr
+compColorLinearSolid(ScreenPtr pScreen, PictFormatPtr format, CARD32 pixel, double alpha)
+{
+    XpColorSpace lin = colorLinearOf(colorOutput(pScreen));
+    ColorLayout l;
+    double in[3], out[3];
+    int error;
+
+    if (!colorLayout(format, &l))
+        return NULL;
+    ColorConv *cv = calloc(1, sizeof(*cv));
+    if (!cv || !colorConvInit(cv, &xpColorSpaceSRGB, &lin)) {
+        free(cv);
+        return NULL;
+    }
+    for (int c = 0; c < 3; c++)
+        in[c] = (double) ((pixel >> l.shift[c]) & l.mask[c]) / l.mask[c];
+    colorConvertPixel(cv, in, out);
+    free(cv);
+    xRenderColor color = {
+        .red = (CARD16) lrint(fmin(fmax(out[0], 0), 1) * alpha * 0xffff),
+        .green = (CARD16) lrint(fmin(fmax(out[1], 0), 1) * alpha * 0xffff),
+        .blue = (CARD16) lrint(fmin(fmax(out[2], 0), 1) * alpha * 0xffff),
+        .alpha = (CARD16) lrint(alpha * 0xffff),
+    };
+    return CreateSolidPicture(0, &color, &error);
+}
+
+/* Encode pRegion (screen coordinates) of pLin, a floating point pixmap
+   in linear light whose origin is at ox, oy on the screen, for the
+   output, into pDst, whose origin is at dx, dy. */
+void
+compColorEncodeLinear(ScreenPtr pScreen, PixmapPtr pLin, int ox, int oy,
+                      PicturePtr pDst, int dx, int dy, RegionPtr pRegion)
+{
+    int w = pLin->drawable.width, h = pLin->drawable.height, error;
+    PictFormatPtr format = pDst->pFormat;
+    /* through a pixmap of the screen's depth: drawing into pDst through
+       Render keeps damage and the DDX informed */
+    PixmapPtr pEnc = (*pScreen->CreatePixmap) (pScreen, w, h, format->depth, 0);
+    if (!pEnc)
+        return;
+    RegionTranslate(pRegion, -ox, -oy);
+    colorConvertRegion(pLin, compColorFloatFormat(pScreen), pEnc, format, NULL,
+                       colorOutput(pScreen), pRegion, COLOR_FROM_LINEAR);
+    RegionTranslate(pRegion, ox, oy);
+    PicturePtr pSrc = CreatePicture(0, &pEnc->drawable, format, 0, NULL,
+                                    serverClient, &error);
+    if (pSrc) {
+        RegionTranslate(pRegion, -dx, -dy);
+        SetPictureClipRegion(pDst, 0, 0, pRegion);
+        RegionTranslate(pRegion, dx, dy);
+        CompositePicture(PictOpSrc, pSrc, NULL, pDst, 0, 0, 0, 0,
+                         ox - dx, oy - dy, w, h);
+        FreePicture(pSrc, 0);
+    }
+    dixDestroyPixmap(pEnc, 0);
 }
 
 void
