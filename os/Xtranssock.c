@@ -82,6 +82,8 @@ from the copyright holders.
 #if defined(UNIXCONN)
 #include <sys/un.h>
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #endif
@@ -902,17 +904,34 @@ static int _XSERVTransSocketUNIXCreateListener (
      * Don't blindly unlink a pre-existing socket file: it may belong to a
      * server that's still running (see unix_socket_is_live()). Only clean
      * up and rebind if nobody answers there.
+     *
+     * Servers starting at the same time (-displayfd scans displays) hold
+     * the socket directory locked from the check until they listen: a
+     * socket that is bound but not listening yet refuses connections,
+     * and would look stale to another server, which would unlink it and
+     * take the display too.
      */
+    int dirfd = -1;
+#ifdef UNIX_DIR
+    dirfd = open (UNIX_DIR, O_RDONLY | O_CLOEXEC);
+    if (dirfd >= 0)
+	(void) flock (dirfd, LOCK_EX);
+#endif
     if (unix_socket_is_live(sockname.sun_path)) {
 	prmsg (1, "SocketUNIXCreateListener: %s already in use\n",
 	       sockname.sun_path);
+	if (dirfd >= 0)
+	    close (dirfd);
 	(void) umask (oldUmask);
 	return TRANS_ADDR_IN_USE;
     }
     unlink (sockname.sun_path);
 
-    if ((status = _XSERVTransSocketCreateListener (ciptr,
-	(struct sockaddr *) &sockname, namelen, flags)) < 0)
+    status = _XSERVTransSocketCreateListener (ciptr,
+	(struct sockaddr *) &sockname, namelen, flags);
+    if (dirfd >= 0)
+	close (dirfd);              /* and so unlocked */
+    if (status < 0)
     {
 	prmsg (1,
     "SocketUNIXCreateListener: ...SocketCreateListener() failed\n");
@@ -1391,8 +1410,14 @@ static int _XSERVTransSocketUNIXClose (XtransConnInfo ciptr)
 #if XTRANS_SEND_FDS
     cleanupFds(ciptr);
 #endif
-    ret = ossock_close(ciptr->fd);
 
+    /*
+     * Unlink before closing: while the socket still listens, a server
+     * starting on the same display finds it live and leaves the path
+     * alone (unix_socket_is_live), so the path is still ours. Closed
+     * first, another server could take the path over in between, and
+     * unlinking would then remove its socket.
+     */
     if (ciptr->flags
        && sockname
        && sockname->sun_family == AF_UNIX
@@ -1401,6 +1426,8 @@ static int _XSERVTransSocketUNIXClose (XtransConnInfo ciptr)
 	if (!(ciptr->flags & TRANS_NOUNLINK))
 		unlink (sockname->sun_path);
     }
+
+    ret = ossock_close(ciptr->fd);
 
     return ret;
 }
