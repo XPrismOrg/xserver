@@ -153,12 +153,18 @@ class Proc:
 
 
 @pytest.fixture
-def wx11(xserver):
+def wx11_env():
+    """extra environment for wx11 (tests parametrize it)"""
+    return {}
+
+
+@pytest.fixture
+def wx11(xserver, wx11_env):
     """wx11 on the test server; yields the environment for clients"""
     runtime = tempfile.mkdtemp(prefix="wx11-")      # short: AF_UNIX paths
     env = dict(os.environ, DISPLAY=f":{xserver.display_num}", XDG_RUNTIME_DIR=runtime)
     env.pop("WAYLAND_DISPLAY", None)
-    proc = Proc([str(WX11)], env)
+    proc = Proc([str(WX11)], dict(env, **wx11_env))
     line = proc.line()
     assert line and line.startswith("WAYLAND_DISPLAY="), (line, proc.stderr())
     env["WAYLAND_DISPLAY"] = line.split("=", 1)[1]
@@ -706,6 +712,67 @@ def test_large_x_copy_pastes_in_wayland(xserver, client):
     chunks = [b"a" * 20000, b"b" * 20000, b"c" * 20000]
     _answer_incr(owner, chunks, utf8, incr)
     c.wait_for("pasted " + b"".join(chunks).decode(), timeout=15)
+
+
+# WX11 gives up on a clipboard transfer that makes no progress for this
+# long (10 s by default)
+SHORT_STALL = {"WX11_CLIPBOARD_STALL_MS": "500"}
+
+
+def _pasted_late(c, timeout=15.0):
+    """the length a --paste-late client read"""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        line = c.line(end - time.monotonic())
+        if line and line.startswith("pasted-late "):
+            return int(line.split()[1])
+    raise AssertionError(f"no paste (stderr: {c.stderr()})")
+
+
+@pytest.mark.parametrize("wx11_env", [SHORT_STALL])
+@pytest.mark.parametrize("late", [100, 2500])
+def test_paste_that_is_not_read(xserver, client, late):
+    """A Wayland client that does not read a paste: WX11 writes what the
+    pipe takes, and after the stall closes it, without blocking anything.
+    One that reads within the stall gets all of it."""
+    from test_clipboard_grants import _set_owner
+    owner = RawX11Connection(xserver.display_num)
+    utf8, incr = owner.intern_atom("UTF8_STRING"), owner.intern_atom("INCR")
+    _set_owner(owner, owner.create_window(), owner.intern_atom("CLIPBOARD"))
+    c, win = _shown(xserver, client, "late paster", "--paste", "--paste-late", str(late))
+    Input(xserver).focus(win)
+    c.wait_for("keyboard enter")
+    chunks = [bytes([0x61 + i]) * 20000 for i in range(10)]     # more than a pipe holds
+    _answer_incr(owner, chunks, utf8, incr)
+    n = _pasted_late(c)
+    if late < 500:
+        assert n == 200000
+    else:
+        assert 0 < n < 200000, n
+
+
+@pytest.mark.parametrize("wx11_env", [SHORT_STALL])
+def test_copy_that_is_never_written(xserver, client):
+    """A Wayland client that never writes what it copied: the X client's
+    paste is refused after the stall instead of waiting for ever, and
+    the next paste is asked again."""
+    from test_clipboard_grants import SELECTION_NOTIFY, _event
+    c, win = _shown(xserver, client, "stalled copier", "--copy", "never", "--copy-stall")
+    Input(xserver).focus(win)
+    c.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_owner(conn), "WX11 did not take CLIPBOARD"
+    for _ in range(2):
+        req = conn.create_window()
+        clip, utf8 = conn.intern_atom("CLIPBOARD"), conn.intern_atom("UTF8_STRING")
+        prop = conn.intern_atom("WX11_TEST")
+        start = time.monotonic()
+        conn.send_request(struct.pack("<BxHIIIII", 24, 6, req, clip, utf8, prop, 0))
+        ev = _event(conn, SELECTION_NOTIFY, timeout=8.0)
+        assert ev is not None, "the paste was never answered"
+        assert struct.unpack_from("<I", ev.data, 20)[0] == 0, "not refused"
+        assert time.monotonic() - start >= 0.4
+        c.wait_for("send stalled")
 
 
 def _selection_text(conn, selection, target_name="UTF8_STRING"):

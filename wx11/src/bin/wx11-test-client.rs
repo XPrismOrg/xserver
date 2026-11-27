@@ -23,10 +23,14 @@
 // ("copied"; "sent" when someone pasted it); --paste prints every clipboard
 // text it is offered ("pasted TEXT"). With --primary both use the primary
 // selection (zwp_primary_selection_v1) instead of the clipboard.
+// --paste-late MS waits MS milliseconds before reading a paste and then
+// prints only its length ("pasted-late N"); --copy-stall never writes
+// what it is asked to send, nor closes the pipe ("send stalled").
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]]
-//                    [--copy TEXT] [--paste] [--primary] [--alpha]
+//                    [--copy TEXT [--copy-stall]] [--paste [--paste-late MS]]
+//                    [--primary] [--alpha]
 //                    [--security-context APP_ID]
 
 use std::fs::File;
@@ -91,6 +95,23 @@ struct App {
 }
 
 const TEXT: &str = "text/plain;charset=utf-8";
+
+/// --paste-late: milliseconds before reading a paste, 0 for at once
+static PASTE_LATE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// --copy-stall
+static COPY_STALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// a source's Send: write the text, or with --copy-stall keep the pipe
+/// open without writing
+fn send_copy(fd: std::os::fd::OwnedFd, text: &str) {
+    if COPY_STALL.load(std::sync::atomic::Ordering::Relaxed) {
+        std::mem::forget(fd);
+        say("send stalled".into());
+        return;
+    }
+    let _ = File::from(fd).write_all(text.as_bytes());
+    say("sent".into());
+}
 
 fn say(line: String) {
     let mut out = std::io::stdout();
@@ -475,8 +496,7 @@ impl Dispatch<wl_data_source::WlDataSource, String> for App {
         _: &QueueHandle<App>,
     ) {
         if let wl_data_source::Event::Send { fd, .. } = event {
-            let _ = File::from(fd).write_all(text.as_bytes());
-            say("sent".into());
+            send_copy(fd, text);
         }
     }
 }
@@ -569,10 +589,18 @@ fn sandboxed(first: &Connection, app_id: &str) -> (Connection, std::io::PipeWrit
 fn print_pasted(reader: std::io::PipeReader) {
     std::thread::spawn(move || {
         use std::io::Read;
-        let mut text = String::new();
+        let late = PASTE_LATE_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if late > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(late));
+        }
+        let mut text = Vec::new();
         let mut reader = reader;
-        let _ = reader.read_to_string(&mut text);
-        say(format!("pasted {text}"));
+        let _ = reader.read_to_end(&mut text);
+        if late > 0 {
+            say(format!("pasted-late {}", text.len()));
+        } else {
+            say(format!("pasted {}", String::from_utf8_lossy(&text)));
+        }
     });
 }
 
@@ -614,8 +642,7 @@ impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, Stri
         _: &QueueHandle<App>,
     ) {
         if let zwp_primary_selection_source_v1::Event::Send { fd, .. } = event {
-            let _ = File::from(fd).write_all(text.as_bytes());
-            say("sent".into());
+            send_copy(fd, text);
         }
     }
 }
@@ -645,8 +672,15 @@ fn main() {
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
-        let v = if ["--grab", "--popup-slide", "--paste", "--alpha", "--primary"]
-            .contains(&a.as_str())
+        let v = if [
+            "--grab",
+            "--popup-slide",
+            "--paste",
+            "--alpha",
+            "--primary",
+            "--copy-stall",
+        ]
+        .contains(&a.as_str())
         {
             String::new()
         } else {
@@ -677,6 +711,14 @@ fn main() {
                     u32::from_str_radix(&v, 16).expect("--popup-color RRGGBB")
             }
             "--copy" => copy = Some(v),
+            "--paste-late" => PASTE_LATE_MS.store(
+                v.parse().expect("--paste-late MS"),
+                std::sync::atomic::Ordering::Relaxed,
+            ),
+            "--copy-stall" => {
+                COPY_STALL.store(true, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             "--security-context" => security_context = Some(v),
             "--paste" => {
                 paste = true;
@@ -699,7 +741,7 @@ fn main() {
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT] [--paste] [--primary] [--alpha] [--security-context APP_ID]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT [--copy-stall]] [--paste [--paste-late MS]] [--primary] [--alpha] [--security-context APP_ID]");
                 std::process::exit(2);
             }
         }

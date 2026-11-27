@@ -755,14 +755,8 @@ impl State {
                         .entry((which, key(conn)))
                         .or_default()
                         .pop_front();
-                    if let Some(fd) = waiting {
-                        if let Some(data) = data {
-                            // a thread: the client may read slowly
-                            std::thread::spawn(move || {
-                                use std::io::Write;
-                                let _ = std::fs::File::from(fd).write_all(&data);
-                            });
-                        }
+                    if let (Some(fd), Some(data)) = (waiting, data) {
+                        self.write_paste(fd, data);
                     }
                 }
                 x::Event::Expose(win) => self.repaint(win),
@@ -795,6 +789,41 @@ impl SeatHandler for State {
         let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
         set_data_device_focus(&self.dh, seat, client.clone());
         set_primary_focus(&self.dh, seat, client);
+    }
+}
+
+/// how long a clipboard transfer may make no progress before WX11 gives
+/// up on it: a Wayland client that never reads a paste, or never finishes
+/// writing a copy. 10 s; WX11_CLIPBOARD_STALL_MS changes it (for tests).
+fn clipboard_stall() -> Duration {
+    static STALL: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *STALL.get_or_init(|| {
+        std::env::var("WX11_CLIPBOARD_STALL_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(10))
+    })
+}
+
+/// when a clipboard transfer last moved; None once it is over
+#[derive(Clone)]
+struct Progress(Rc<std::cell::Cell<Option<Instant>>>);
+
+impl Progress {
+    fn new() -> Self {
+        Progress(Rc::new(std::cell::Cell::new(Some(Instant::now()))))
+    }
+    fn moved(&self) {
+        if self.0.get().is_some() {
+            self.0.set(Some(Instant::now()));
+        }
+    }
+    fn done(&self) {
+        self.0.set(None);
+    }
+    fn since(&self) -> Option<Duration> {
+        self.0.get().map(|t| t.elapsed())
     }
 }
 
@@ -880,8 +909,11 @@ impl State {
             return conn.answer_clipboard(&req, None);
         }
         let conn = conn.clone();
+        let req_conn = conn.clone();
         let mut data = Vec::new();
-        let mut req = Some(req);
+        let req = Rc::new(std::cell::RefCell::new(Some(req)));
+        let progress = Progress::new();
+        let (r, p) = (req.clone(), progress.clone());
         let source = Generic::new(reader, Interest::READ, Mode::Level);
         let added = self.handle.insert_source(source, move |_, reader, _state| {
             use std::io::Read;
@@ -891,14 +923,99 @@ impl State {
             // 16 MiB is plenty for text; more is cut off
             if n > 0 && data.len() < 16 << 20 {
                 data.extend_from_slice(&chunk[..n]);
+                p.moved();
                 return Ok(PostAction::Continue);
             }
-            if let Some(req) = req.take() {
+            p.done();
+            if let Some(req) = r.borrow_mut().take() {
                 conn.answer_clipboard(&req, Some(&data));
                 conn.flush();
             }
             Ok(PostAction::Remove)
         });
+        match added {
+            // a Wayland client that never finishes writing: the X client
+            // is refused instead of waiting forever
+            Ok(token) => self.give_up_when_stalled(token, progress, move || {
+                if let Some(req) = req.borrow_mut().take() {
+                    let conn = &req_conn;
+                    conn.answer_clipboard(&req, None);
+                    conn.flush();
+                }
+            }),
+            Err(e) => eprintln!("wx11: clipboard: {e}"),
+        }
+    }
+
+    /// Writes a paste to a Wayland client as its pipe takes it, from the
+    /// event loop: a client may read slowly, or never. One that takes
+    /// nothing for clipboard_stall() loses the rest (its pipe is closed).
+    fn write_paste(&mut self, fd: OwnedFd, data: Vec<u8>) {
+        use smithay::reexports::rustix::fs::{fcntl_getfl, fcntl_setfl, OFlags};
+
+        if data.is_empty() {
+            return; // closing the pipe is the whole paste
+        }
+        if let Ok(flags) = fcntl_getfl(&fd) {
+            let _ = fcntl_setfl(&fd, flags | OFlags::NONBLOCK);
+        }
+        let progress = Progress::new();
+        let p = progress.clone();
+        let mut off = 0;
+        let source = Generic::new(std::fs::File::from(fd), Interest::WRITE, Mode::Level);
+        let added = self.handle.insert_source(source, move |_, file, _state| {
+            use std::io::{ErrorKind, Write};
+            loop {
+                // SAFETY: the file is not replaced or dropped here
+                match unsafe { file.get_mut() }.write(&data[off..]) {
+                    Ok(n) if n > 0 => {
+                        off += n;
+                        p.moved();
+                        if off < data.len() {
+                            continue;
+                        }
+                    }
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(PostAction::Continue),
+                    _ => {} // written, or the client closed its end
+                }
+                p.done();
+                return Ok(PostAction::Remove);
+            }
+        });
+        match added {
+            Ok(token) => self.give_up_when_stalled(token, progress, || {}),
+            Err(e) => eprintln!("wx11: clipboard: {e}"),
+        }
+    }
+
+    /// Removes the source token once progress has not moved for
+    /// clipboard_stall() (and runs gave_up), unless it finished first.
+    fn give_up_when_stalled(
+        &mut self,
+        token: RegistrationToken,
+        progress: Progress,
+        gave_up: impl FnOnce() + 'static,
+    ) {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+
+        let mut gave_up = Some(gave_up);
+        let stall = clipboard_stall();
+        let timer = Timer::from_duration(stall);
+        let added = self
+            .handle
+            .insert_source(timer, move |_, _, state| match progress.since() {
+                None => TimeoutAction::Drop,
+                Some(idle) if idle < stall => TimeoutAction::ToDuration(stall - idle),
+                Some(_) => {
+                    progress.done();
+                    state.handle.remove(token);
+                    if let Some(f) = gave_up.take() {
+                        f();
+                    }
+                    TimeoutAction::Drop
+                }
+            });
         if let Err(e) = added {
             eprintln!("wx11: clipboard: {e}");
         }

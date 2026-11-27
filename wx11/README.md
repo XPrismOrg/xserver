@@ -62,7 +62,11 @@ grants decide whether they reach the session's clipboard.
   copy or selection owns X's CLIPBOARD or PRIMARY (UTF8_STRING, TEXT,
   STRING as Latin-1, TARGETS), and X's are offered to the Wayland client
   with the keyboard (`wl_data_device`, `zwp_primary_selection_v1`);
-  large X selections arrive in chunks (INCR)
+  large X selections arrive in chunks (INCR). Transfers never block
+  WX11: a paste is written as the client reads it, and a transfer that
+  makes no progress for 10 seconds (a client that never reads its paste,
+  or never finishes writing its copy) is given up, the X client's paste
+  then refused
 - transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
   compositing manager (or XPrism's compositor) blends
 - windows X lost while covered (no compositor) are repainted on Expose
