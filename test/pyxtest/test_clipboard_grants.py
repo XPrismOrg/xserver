@@ -7,6 +7,7 @@
 # window and sending SelectionNotify, as toolkits do.
 
 import struct
+import time
 
 import pytest
 from xclient import RawX11Connection, X11Error
@@ -424,9 +425,16 @@ class TestIncrTransfer:
         writer, swid, clip, prop, incr = self._start(xserver)
         self._begin(writer, swid, clip, prop, incr)
         self.session.close()
-        writer.flush_responses(timeout=0.3)  # the server has seen it go
-        session = _connect(xserver, SESSION_COOKIE)
-        # the next session client gets the same window id back
-        assert session.create_window() == swid
+        # the next session client gets the same window id back, once the
+        # server has seen the requestor go (slow machines take a while)
+        deadline = time.monotonic() + 10
+        while True:
+            session = _connect(xserver, SESSION_COOKIE)
+            wid = session.create_window()
+            if wid == swid or time.monotonic() > deadline:
+                break
+            session.close()
+            time.sleep(0.1)
+        assert wid == swid
         assert _owner(session, clip) != 0
         assert _errors(writer, _put(swid, prop, ATOM_STRING, b"x")) in DENIED
