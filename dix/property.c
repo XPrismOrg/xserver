@@ -147,8 +147,8 @@ notifyVRRMode(ClientPtr pClient, WindowPtr pWindow, int state, PropertyPtr pProp
             if (rc == Success)
                 setVRRMode(pWin, mode);
         });
+        return;
     }
-    return;
 no_panoramix:
 #endif
     setVRRMode(pWindow, mode);

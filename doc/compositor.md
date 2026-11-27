@@ -170,6 +170,22 @@ with FreeSync (48 to 240 Hz). The following worked:
   capped at 100 the monitor reported 100 Hz under FreeSync, without
   tearing; leaving fullscreen restored the composed desktop.
 
+On 2026-11-27 it ran on a laptop: AMD Rembrandt (Radeon 660M, radeonsi)
+driving the internal 1920x1080 panel at 60 and 144 Hz (VRR 60 to 144 Hz),
+with TearFree. A script checked each result against the kernel's own DRM
+state (debugfs and the CRTC's `VRR_ENABLED` property), not the X server's
+word: composed windows; mode and resolution changes; a fullscreen window
+scanned out directly (the plane switching to its framebuffer) and
+composed again when it went; switching VTs and back; OpenGL through
+glamor; a Wayland client through WX11; and VRR on while a fullscreen GL
+client flipped and off afterwards.
+
+That last check found a bug inherited from XLibre (dix/property.c,
+since 2024): with Xinerama compiled in but not in use, setting
+`_VARIABLE_REFRESH` on a window never reached the driver, so VRR was
+never turned on. The monitor's OSD reading above could not show that;
+`VRR_ENABLED` did.
+
 The compositor uses glamor and the modesetting driver like any other X
 server, so other GPUs that work with Xorg and XLibre (NVIDIA's open
 kernel driver included) are expected to work the same way.
