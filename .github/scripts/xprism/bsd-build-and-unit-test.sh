@@ -1,11 +1,11 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 #
-# XPrism CI, inside a FreeBSD or OpenBSD VM: upstream's package install,
+# XPrism CI, inside a FreeBSD, OpenBSD, NetBSD or DragonFly BSD VM: upstream's package install,
 # then build and run the unit tests (PAL generic backend, peer identity,
 # capabilities). The pytest suite needs Xvfb plumbing upstream hasn't got
 # working on the BSDs yet, so only "unit" runs here (where it is built).
-#   $1 = freebsd | openbsd
+#   $1 = freebsd | openbsd | netbsd | DragonFlyBSD (upstream's script dirs)
 set -e
 
 os=$1
@@ -13,6 +13,17 @@ os=$1
 # the unit tests compile XKB keymaps; upstream's FreeBSD list lacks the data
 if [ "$os" = freebsd ]; then
     pkg install -y xkeyboard-config
+fi
+
+if [ "$os" = netbsd ]; then
+    # upstream's install script puts pkgsrc in /usr/pkg and X in /usr/X11R7
+    PATH="$PATH:/usr/pkg/bin:/usr/pkg/sbin"
+    PKG_CONFIG_PATH="/usr/X11R7/lib/pkgconfig:/usr/pkg/lib/pkgconfig:/usr/pkg/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export PATH PKG_CONFIG_PATH
+fi
+if [ "$os" = DragonFlyBSD ]; then
+    CFLAGS="${CFLAGS:-} -Wno-typedef-redefinition"
+    export CFLAGS
 fi
 
 if [ "$os" = openbsd ]; then
