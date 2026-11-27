@@ -447,6 +447,15 @@ impl XSide {
     }
 
     /// where window's origin is on the root window
+    /// the screen's size in pixels
+    pub fn screen_size(&self) -> (i32, i32) {
+        let screen = &self.conn.setup().roots[0];
+        (
+            screen.width_in_pixels as i32,
+            screen.height_in_pixels as i32,
+        )
+    }
+
     pub fn root_position(&self, win: u32) -> (i32, i32) {
         self.conn
             .translate_coordinates(win, self.root, 0, 0)

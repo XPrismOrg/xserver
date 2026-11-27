@@ -25,7 +25,7 @@
 // selection (zwp_primary_selection_v1) instead of the clipboard.
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
-//                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]]
+//                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]]
 //                    [--copy TEXT] [--paste] [--primary] [--alpha]
 //                    [--security-context APP_ID]
 
@@ -57,6 +57,8 @@ struct PopupSpec {
     at: (i32, i32),
     color: u32,
     grab: bool,
+    /// may be slid to stay on the screen (--popup-slide)
+    slide: bool,
 }
 
 struct App {
@@ -151,6 +153,12 @@ impl App {
         positioner.set_anchor_rect(spec.at.0, spec.at.1, 1, 1);
         positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
         positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+        if spec.slide {
+            positioner.set_constraint_adjustment(
+                xdg_positioner::ConstraintAdjustment::SlideX
+                    | xdg_positioner::ConstraintAdjustment::SlideY,
+            );
+        }
         let surface = self.compositor.as_ref().unwrap().create_surface(qh, ());
         let xs = wm.get_xdg_surface(&surface, qh, true);
         let popup = xs.get_popup(self.xdg_surface.as_ref(), &positioner, qh, ());
@@ -637,7 +645,9 @@ fn main() {
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
-        let v = if ["--grab", "--paste", "--alpha", "--primary"].contains(&a.as_str()) {
+        let v = if ["--grab", "--popup-slide", "--paste", "--alpha", "--primary"]
+            .contains(&a.as_str())
+        {
             String::new()
         } else {
             args.next().unwrap_or_default()
@@ -659,6 +669,7 @@ fn main() {
                     at: (x.parse().expect("x"), y.parse().expect("y")),
                     color: 0x0000_00ff,
                     grab: false,
+                    slide: false,
                 });
             }
             "--popup-color" => {
@@ -683,8 +694,12 @@ fn main() {
                 popup_spec.as_mut().expect("--popup first").grab = true;
                 continue;
             }
+            "--popup-slide" => {
+                popup_spec.as_mut().expect("--popup first").slide = true;
+                continue;
+            }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab]] [--copy TEXT] [--paste] [--primary] [--alpha] [--security-context APP_ID]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT] [--paste] [--primary] [--alpha] [--security-context APP_ID]");
                 std::process::exit(2);
             }
         }

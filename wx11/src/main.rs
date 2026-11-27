@@ -44,7 +44,7 @@ use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Serial, SERIAL_COUNTER};
+use smithay::utils::{Logical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
@@ -321,6 +321,31 @@ impl State {
                 conn.ungrab_pointer();
             }
         }
+    }
+
+    /// where a popup goes, relative to its parent: the positioner's place,
+    /// adjusted (flip, slide, resize as the client allows) to stay on the
+    /// screen once the parent's position is known
+    fn place_popup(
+        &self,
+        surface: &PopupSurface,
+        positioner: PositionerState,
+    ) -> Rectangle<i32, Logical> {
+        let parent = surface.get_parent_surface().and_then(|s| {
+            let id = s.id();
+            self.toplevels
+                .get(&id)
+                .and_then(|t| t.window.zip(t.x.clone()))
+                .or_else(|| self.popups.get(&id).and_then(|p| p.window.zip(p.x.clone())))
+        });
+        let Some((window, conn)) = parent else {
+            return positioner.get_geometry();
+        };
+        let (px, py) = conn.root_position(window);
+        let (sw, sh) = conn.screen_size();
+        // the screen, in the parent's coordinates
+        let screen = Rectangle::new((-px, -py).into(), (sw, sh).into());
+        positioner.get_unconstrained_geometry(screen)
     }
 
     /// the toplevel a popup (chain) belongs to
@@ -943,9 +968,8 @@ impl XdgShellHandler for State {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        // placed where the positioner says, relative to the parent; it is
-        // not moved to stay on screen (yet)
-        surface.with_pending_state(|s| s.geometry = positioner.get_geometry());
+        let geometry = self.place_popup(&surface, positioner);
+        surface.with_pending_state(|s| s.geometry = geometry);
         let id = surface.wl_surface().id();
         self.popups.insert(
             id,
@@ -984,8 +1008,9 @@ impl XdgShellHandler for State {
         positioner: PositionerState,
         token: u32,
     ) {
+        let geometry = self.place_popup(&surface, positioner);
         surface.with_pending_state(|s| {
-            s.geometry = positioner.get_geometry();
+            s.geometry = geometry;
             s.positioner = positioner;
         });
         surface.send_repositioned(token);

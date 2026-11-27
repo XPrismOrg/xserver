@@ -55,7 +55,8 @@ contexts themselves.
   capability checks); WX11 only passes it on
 - popups (menus, tooltips) as override-redirect windows placed by their
   positioner; a grabbing popup gets the keyboard and an X pointer grab,
-  and a click outside it closes it
+  and a click outside it closes it; popups are kept on the screen as far
+  as the client allows (flip, slide, resize)
 - the clipboard and the primary selection (text) both ways: a Wayland
   copy or selection owns X's CLIPBOARD or PRIMARY (UTF8_STRING, TEXT,
   STRING as Latin-1, TARGETS), and X's are offered to the Wayland client
@@ -71,7 +72,7 @@ Buffers are copied into the window with `PutImage` for now.
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
-- subsurfaces, keeping popups on screen (positioner constraints)
+- subsurfaces
 - clipboard types other than text, large X transfers (INCR), and drag
   and drop (XDND)
 - one namespace per sandboxed application (today all sandboxed clients

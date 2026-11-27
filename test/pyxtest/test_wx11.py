@@ -37,6 +37,7 @@ X_SHIFT_L = 50
 Z_PIXMAP = 2
 CW_WIDTH, CW_HEIGHT = 1 << 2, 1 << 3
 CW_STACK_MODE, STACK_ABOVE = 1 << 6, 0
+CW_X, CW_Y = 1 << 0, 1 << 1
 
 
 def _reply(conn, seq):
@@ -625,3 +626,27 @@ def test_x_primary_selection_pastes_in_wayland(xserver, client):
     Input(xserver).focus(win)
     assert _answer(owner, b"from X primary"), "WX11 did not ask the PRIMARY owner"
     c.wait_for("pasted from X primary")
+
+
+@pytest.mark.parametrize("slide", [True, False])
+def test_menu_at_the_screen_edge(xserver, client, slide):
+    """a 100-wide menu opened 60 px into a window 70 px from the right edge
+    would end 90 px off screen: slid back if the client allows it"""
+    args = ["--popup", "100x20+60+5", "--grab"] + (["--popup-slide"] if slide else [])
+    c, host = _shown(xserver, client, "edge", *args)
+    conn = RawX11Connection(xserver.display_num)
+    screen_w, _ = _geometry(conn, conn.root_window)
+    conn.send_request(struct.pack("<BxHIHxxii", X_CONFIGURE_WINDOW, 5, host,
+                                  CW_X | CW_Y, screen_w - 70, 0))
+    end = time.monotonic() + 5
+    while _place(conn, host)[0] != screen_w - 70 and time.monotonic() < end:
+        time.sleep(0.05)
+    inp = Input(xserver)
+    inp.fake(MOTION_NOTIFY, x=screen_w - 65, y=5)
+    inp.fake(BUTTON_PRESS, 1)
+    inp.fake(BUTTON_RELEASE, 1)
+    c.wait_for("popup drawn")
+    popup = _popup_window(conn, host)
+    x, y, w, h = _place(conn, popup)
+    assert (y, w, h) == (5, 100, 20)
+    assert x == (screen_w - 100 if slide else screen_w - 10)
