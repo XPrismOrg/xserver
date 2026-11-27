@@ -716,10 +716,14 @@ note_unconfined(ClientPtr client)
     pid_t pid = GetClientPid(client);
     const char *cmd = GetClientCmdName(client);
     Bool local = ClientIsLocal(client);
+    /* the pid is unknown where the platform can't tell (DragonFly) */
+    char pidstr[32] = "";
+    if (pid > 0)
+        snprintf(pidstr, sizeof(pidstr), ", pid %ld", (long) pid);
     LogMessageVerb(local ? X_INFO : X_WARNING, 0,
-                   "capability: client %d (%s, pid %ld, %s) is unconfined: unrestricted "
+                   "capability: client %d (%s%s, %s) is unconfined: unrestricted "
                    "X11 access%s\n", client->index, label[0] ? label : "unlabeled",
-                   (long) pid, cmd ? cmd : "unknown command",
+                   pidstr, cmd ? cmd : "unknown command",
                    local ? "" : ", from another host");
 }
 

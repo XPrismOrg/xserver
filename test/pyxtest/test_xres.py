@@ -8,7 +8,7 @@ import struct
 import pytest
 from proto import xres
 from proto.x11 import BadLength
-from xclient import Extension, X11Error, X11Reply
+from xclient import PEER_PID_KNOWN, Extension, X11Error, X11Reply
 
 # numSpecs just past UINT32_MAX / sizeof(xXResClientIdSpec|xXResResourceIdSpec)
 # (both specs are 8 bytes). On 32-bit this wraps the request-size multiply.
@@ -215,6 +215,7 @@ XRES_CLIENT_ID_PID_MASK = 1 << 1
 
 
 class TestXResClientPid:
+    @pytest.mark.skipif(not PEER_PID_KNOWN, reason="the platform tells no peer pid")
     def test_query_client_ids_reports_connecting_pid(self, xserver, xres_xclient):
         """
         The PID reported for a client is the identity the server recorded

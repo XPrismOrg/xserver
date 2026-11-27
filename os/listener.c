@@ -27,29 +27,35 @@ struct labeled_listener {
     labeled_listener_closed_proc on_closed;
 };
 
-static Bool
-is_listening_unix_stream_socket(int fd)
+/* NULL if fd is a listening Unix stream socket, else what it isn't */
+static const char *
+not_a_listening_unix_stream_socket(int fd)
 {
     int val;
     socklen_t len;
     struct sockaddr_storage addr;
 
     len = sizeof(val);
-    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &val, &len) != 0 || val != SOCK_STREAM)
-        return FALSE;
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &val, &len) != 0)
+        return strerror(errno);
+    if (val != SOCK_STREAM)
+        return "not a stream socket";
 
 #ifdef SO_ACCEPTCONN
     len = sizeof(val);
-    if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &val, &len) != 0 || !val)
-        return FALSE;
+    if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &val, &len) != 0)
+        return strerror(errno);
+    if (!val)
+        return "not listening";
 #endif
 
     len = sizeof(addr);
-    if (getsockname(fd, (struct sockaddr *) &addr, &len) != 0 ||
-        addr.ss_family != AF_UNIX)
-        return FALSE;
+    if (getsockname(fd, (struct sockaddr *) &addr, &len) != 0)
+        return strerror(errno);
+    if (addr.ss_family != AF_UNIX)
+        return "not a Unix socket";
 
-    return TRUE;
+    return NULL;
 }
 
 static void
@@ -111,7 +117,9 @@ struct labeled_listener *
 labeled_listener_add(int listen_fd, int close_fd, void *label,
                      labeled_listener_closed_proc on_closed, int *err)
 {
-    if (!is_listening_unix_stream_socket(listen_fd)) {
+    const char *why = not_a_listening_unix_stream_socket(listen_fd);
+    if (why) {
+        LogMessage(X_WARNING, "labeled listener: fd %d refused: %s\n", listen_fd, why);
         *err = BadValue;
         return NULL;
     }

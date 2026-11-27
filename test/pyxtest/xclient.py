@@ -48,6 +48,21 @@ def peer_pid(sock):
     return None
 
 
+def _peer_pid_known():
+    import socket as _s
+    a, b = _s.socketpair()
+    try:
+        return peer_pid(a) is not None
+    finally:
+        a.close()
+        b.close()
+
+
+# whether this platform tells a Unix socket's peer pid (the server uses the
+# same kind of call); DragonFly's credentials carry none
+PEER_PID_KNOWN = _peer_pid_known()
+
+
 class X11ConnectionError(Exception):
     """Raised when the X11 connection fails."""
 

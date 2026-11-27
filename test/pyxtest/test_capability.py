@@ -110,7 +110,7 @@ class TestCapabilityAudit:
         log = _cap_log(xserver)
         assert len(log) == 1, log
         assert re.search(r'would deny window\.inspect to client \d+ '
-                         r'\(namespace "sandbox", pid \d+\) for '
+                         r'\(namespace "sandbox"(, pid \d+)?\) for '
                          r'(GetWindowAttributes|request 3\.0) '
                          r'on 0x[0-9a-f]+ \[audit\]', log[0]), log[0]
 
@@ -325,7 +325,7 @@ class TestLegacyAccess:
         _focus(sandboxed)
         log = _unconfined_log(xserver)[before:]
         assert len(log) == 1, log
-        assert re.search(r'client \d+ \(namespace "root", pid \d+, .+\) is unconfined', log[0]), \
+        assert re.search(r'client \d+ \(namespace "root"(, pid \d+)?, .+\) is unconfined', log[0]), \
             log[0]
 
     def test_unrecognised_cookies_are_confined(self, xserver):

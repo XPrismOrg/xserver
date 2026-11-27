@@ -10,7 +10,7 @@ import struct
 import time
 
 import pytest
-from xclient import RawX11Connection, X11ConnectionError, X11Error
+from xclient import PEER_PID_KNOWN, RawX11Connection, X11ConnectionError, X11Error
 
 COOKIE_PROTO = b"MIT-MAGIC-COOKIE-1"
 ROOT_COOKIE = bytes.fromhex("11111111111111111111111111111111")
@@ -261,7 +261,8 @@ class TestNamespaceListener:
         assert info["ns"] == "root"
         assert not info["flags"] & INFO_SOCKET_BOUND
         assert (info["app_id"], info["instance_id"], info["engine"]) == (b"", b"", b"")
-        assert info["pid"] == os.getpid()
+        if PEER_PID_KNOWN:
+            assert info["pid"] == os.getpid()
 
     def test_app_info_outlives_listener(self, xserver, bound):
         manager, opcode, listener, _ = bound

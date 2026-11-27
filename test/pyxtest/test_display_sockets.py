@@ -12,6 +12,7 @@
 
 import os
 import resource
+import select
 import subprocess
 import threading
 import time
@@ -29,7 +30,14 @@ def _start(xvfb):
                          preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
     os.close(w)
     data = b""
+    end = time.monotonic() + 30
     while not data.endswith(b"\n"):
+        # a server that neither starts nor exits is reported, not waited for
+        if not select.select([r], [], [], max(0, end - time.monotonic()))[0]:
+            p.kill()
+            p.wait()
+            os.close(r)
+            return p, "silent"
         chunk = os.read(r, 16)
         if not chunk:
             break
@@ -42,11 +50,14 @@ def test_concurrent_starts_keep_their_sockets():
     xvfb = os.environ.get("XVFB_PATH")
     if not xvfb:
         pytest.skip("XVFB_PATH not set")
-    lost, failed = [], []
+    lost, failed, silent, stuck = [], [], [], []
 
     def loop():
         for _ in range(SERVERS):
             p, display = _start(xvfb)
+            if display == "silent":
+                silent.append(p.pid)
+                continue
             if display is None:
                 failed.append(p.wait())
                 continue
@@ -56,12 +67,19 @@ def test_concurrent_starts_keep_their_sockets():
                     lost.append(display)
                     break
             p.terminate()
-            p.wait()
+            try:
+                p.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                stuck.append(display)
+                p.kill()
+                p.wait()
 
     threads = [threading.Thread(target=loop) for _ in range(THREADS)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    assert not silent, f"servers that never reported a display: {len(silent)}"
+    assert not stuck, f"servers that ignored SIGTERM: displays {stuck}"
     assert not failed, f"servers that did not start: {failed}"
     assert not lost, f"running servers lost their sockets: displays {lost}"

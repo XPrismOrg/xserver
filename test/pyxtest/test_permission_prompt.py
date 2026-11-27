@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from test_capability import (BAD_ACCESS, ROOT_COOKIE, SANDBOX_COOKIE, X_GET_INPUT_FOCUS,
                              X_GET_WINDOW_ATTRIBUTES, _connect, _errors_of, xserver_args)
-from xclient import X11Error
+from xclient import PEER_PID_KNOWN, X11Error
 
 __all__ = ["xserver_args"]
 
@@ -288,7 +288,7 @@ class TestAgentTool:
         cap, ns, prompt, pid = seen.read_text().split("|")
         assert (cap, ns) == ("window.inspect", "sandbox")
         assert "in sandbox wants to read details of other applications' windows" in prompt
-        assert pid == str(os.getpid())
+        assert pid == (str(os.getpid()) if PEER_PID_KNOWN else "")
         seen.unlink()
         assert _outcome(spy, _inspect(spy, wid)) == "reply"
         assert not seen.exists()                    # not asked again
@@ -300,6 +300,7 @@ class TestAgentTool:
         spy = _connect(xserver, SANDBOX_COOKIE)
         assert _outcome(spy, _inspect(spy, wid)) == BAD_ACCESS
 
+    @pytest.mark.skipif(not PEER_PID_KNOWN, reason="the agent script needs the client's pid")
     def test_prompts_in_parallel(self, xserver, agent_tool, tmp_path):
         """A dialog left open does not hold up another client's prompt."""
         gate = tmp_path / "gate"

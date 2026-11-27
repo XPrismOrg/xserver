@@ -401,8 +401,12 @@ ProcXnsAddListener(ClientPtr client)
     }
 
     rc = BadValue;
-    if (listen_fd < 0 || close_fd < 0)
-        goto fail;          /* both fds are required */
+    if (listen_fd < 0 || close_fd < 0) {
+        /* both fds are required */
+        XNS_LOG("AddListener: %s fd missing (passing fds unsupported here?)\n",
+                listen_fd < 0 ? "listening" : "close");
+        goto fail;
+    }
     if (!XnsValidAppString(appId, stuff->appIdLen) ||
         !XnsValidAppString(instanceId, stuff->instanceIdLen) ||
         !XnsValidAppString(engine, stuff->engineLen))

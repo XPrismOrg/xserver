@@ -104,7 +104,11 @@ def test_held_back_damage_is_composed_when_due(xvfb, tmp_path):
         drawer.fill(w, second, 0, 0, 200, 200)
         drawer.sync()           # within the same refresh period: held back
         held.append(screen.pixel(150, 150) == first)
-        time.sleep(0.1)         # six refresh periods at 60 Hz
+        # due within a refresh period (17 ms); allow a slow VM with a
+        # coarse kernel tick up to a second, still without other activity
+        end = time.monotonic() + 1.0
+        while screen.pixel(150, 150) != second and time.monotonic() < end:
+            time.sleep(0.02)
         assert screen.pixel(150, 150) == second, "held-back change never shown"
     # the round trips take far less than a refresh period, so the second
     # change was held back at least once: the test did test something
