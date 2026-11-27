@@ -63,4 +63,9 @@ meson test -C _build --print-errorlogs --suite pyxtest || status=1
 if [ -f _build/meson-logs/testlog.txt ]; then
     grep -E '^ *[0-9]+/[0-9]+ .*(FAIL|TIMEOUT)' _build/meson-logs/testlog.txt || true
 fi
+# the servers' own warnings about refused listeners (their stderr files)
+if [ $status -ne 0 ]; then
+    cat "${TMPDIR:-/tmp}"/xserver-*-stderr-*.log 2>/dev/null |
+        grep -E 'labeled listener|AddListener' | sort | uniq -c | head -20 || true
+fi
 exit $status

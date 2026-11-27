@@ -133,6 +133,8 @@ typedef struct {
     CloseScreenProcPtr closeScreen;
 
 #ifdef HAVE_MMAP
+    ScreenBlockHandlerProcPtr blockHandler;
+    Bool mmapped;
     int mmap_fd;
     char mmap_file[MAXPATHLEN];
 #endif
@@ -734,31 +736,37 @@ vfbStoreColors(ColormapPtr pmap, int ndef, xColorItem * pdefs)
 
 #ifdef HAVE_MMAP
 
-/* this flushes any changes to the screens out to the mmapped file */
+/*
+ * Flush the screen's changes out to the mmapped file. This is a screen
+ * block handler: those run after all registered ones, some of which
+ * still draw (the scene compositor composes held-back frames there).
+ * Where read() does not see a shared mapping's pages until msync
+ * (OpenBSD), a frame drawn after the flush stayed invisible in the file
+ * until something else happened.
+ */
 static void
-vfbBlockHandler(void *blockData, void *timeout)
+vfbScreenBlockHandler(ScreenPtr pScreen, void *timeout)
 {
-    int i;
+    vfbScreenInfoPtr pvfb = vfbGetScreenPriv(pScreen);
 
-    for (i = 0; i < vfbNumScreens; i++) {
+    pScreen->BlockHandler = pvfb->blockHandler;
+    if (pScreen->BlockHandler)
+        pScreen->BlockHandler(pScreen, timeout);
+    pvfb->blockHandler = pScreen->BlockHandler;
+    pScreen->BlockHandler = vfbScreenBlockHandler;
+
+    if (!pvfb->mmapped)
+        return;
 #ifdef MS_ASYNC
-        if (-1 == msync((caddr_t) vfbScreens[i].pXWDHeader,
-                        (size_t) vfbScreens[i].sizeInBytes, MS_ASYNC))
+    if (-1 == msync((caddr_t) pvfb->pXWDHeader, (size_t) pvfb->sizeInBytes, MS_ASYNC))
 #else
-        /* silly NetBSD and who else? */
-        if (-1 == msync((caddr_t) vfbScreens[i].pXWDHeader,
-                        (size_t) vfbScreens[i].sizeInBytes))
+    /* silly NetBSD and who else? */
+    if (-1 == msync((caddr_t) pvfb->pXWDHeader, (size_t) pvfb->sizeInBytes))
 #endif
-        {
-            perror("msync");
-            ErrorF("msync failed, %s", strerror(errno));
-        }
+    {
+        perror("msync");
+        ErrorF("msync failed, %s", strerror(errno));
     }
-}
-
-static void
-vfbWakeupHandler(void *blockData, int result)
-{
 }
 
 static void
@@ -803,11 +811,7 @@ vfbAllocateMmappedFramebuffer(vfbScreenInfoPtr pvfb)
         pvfb->pXWDHeader = NULL;
         return;
     }
-
-    if (!RegisterBlockAndWakeupHandlers(vfbBlockHandler, vfbWakeupHandler,
-                                        NULL)) {
-        pvfb->pXWDHeader = NULL;
-    }
+    pvfb->mmapped = TRUE;
 }
 #endif                          /* HAVE_MMAP */
 
@@ -984,6 +988,9 @@ vfbCloseScreen(ScreenPtr pScreen)
     vfbScreenInfoPtr pvfb = vfbGetScreenPriv(pScreen);
 
     pScreen->CloseScreen = pvfb->closeScreen;
+#ifdef HAVE_MMAP
+    pScreen->BlockHandler = pvfb->blockHandler;
+#endif
 
     /*
      * fb overwrites miCloseScreen, so do this here
@@ -1360,6 +1367,10 @@ static bool vfbScreenInit(ScreenPtr pScreen, int argc, char **argv, void *closur
 
     pvfb->closeScreen = pScreen->CloseScreen;
     pScreen->CloseScreen = vfbCloseScreen;
+#ifdef HAVE_MMAP
+    pvfb->blockHandler = pScreen->BlockHandler;
+    pScreen->BlockHandler = vfbScreenBlockHandler;
+#endif
 
     return ret;
 
