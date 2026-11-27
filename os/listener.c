@@ -119,7 +119,7 @@ labeled_listener_add(int listen_fd, int close_fd, void *label,
 {
     const char *why = not_a_listening_unix_stream_socket(listen_fd);
     if (why) {
-        LogMessage(X_WARNING, "labeled listener: fd %d refused: %s\n", listen_fd, why);
+        LogMessageVerb(X_WARNING, 0, "labeled listener: fd %d refused: %s\n", listen_fd, why);
         *err = BadValue;
         return NULL;
     }
