@@ -49,13 +49,27 @@ def peer_pid(sock):
 
 
 def _peer_pid_known():
+    # a connected pair, as the server sees it: some systems (NetBSD) tell
+    # the peer of an accepted connection but not of a socketpair's end
+    import os
     import socket as _s
-    a, b = _s.socketpair()
-    try:
-        return peer_pid(a) is not None
-    finally:
-        a.close()
-        b.close()
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "s")
+        srv = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
+        cli = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM)
+        try:
+            srv.bind(path)
+            srv.listen(1)
+            cli.connect(path)
+            conn, _ = srv.accept()
+            with conn:
+                return peer_pid(conn) is not None
+        except OSError:
+            return False
+        finally:
+            cli.close()
+            srv.close()
 
 
 # whether this platform tells a Unix socket's peer pid (the server uses the

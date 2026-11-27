@@ -454,6 +454,7 @@ def test_x_copy_pastes_in_wayland(xserver, client):
     _set_owner(owner, owner_win, owner.intern_atom("CLIPBOARD"))
     c, win = _shown(xserver, client, "paster", "--paste")
     Input(xserver).focus(win)           # the focused client sees the clipboard
+    c.wait_for("keyboard enter")
     assert _answer(owner, "hello from X ✓".encode()), "WX11 did not ask the X owner"
     c.wait_for("pasted hello from X ✓")
 
@@ -699,6 +700,7 @@ def test_large_x_copy_pastes_in_wayland(xserver, client):
     _set_owner(owner, owner.create_window(), owner.intern_atom("CLIPBOARD"))
     c, win = _shown(xserver, client, "big paster", "--paste")
     Input(xserver).focus(win)
+    c.wait_for("keyboard enter")
     chunks = [b"a" * 20000, b"b" * 20000, b"c" * 20000]
     _answer_incr(owner, chunks)
     c.wait_for("pasted " + b"".join(chunks).decode(), timeout=15)
