@@ -67,7 +67,7 @@ contexts themselves.
 
 Buffers are copied into the window with `PutImage` for now.
 
-## Still to do (Phase VI)
+## Not yet done (later releases)
 
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback

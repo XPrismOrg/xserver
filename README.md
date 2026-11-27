@@ -21,9 +21,10 @@ keystrokes and send input to other applications. XPrism keeps those
 abilities available, but the server decides which clients hold them, based
 on a policy set by the user or the sandbox that launched the application.
 
-The project is in early development. It runs as a regular X server with
-everything XLibre provides. The features below are usable for testing, but
-the protocols added by XPrism may still change.
+XPrism runs as a regular X server with everything XLibre provides, and
+adds the features below. It is young: the protocols it adds may still
+change, and the hardware paths have been tried on few machines (see
+[Status](#status)).
 
 The current version is **26.11.01**. Versions are `YY.MM.NN`, the NNth
 release of that month, with `.PP` added for patch releases (`26.11.01.01`).
@@ -50,20 +51,41 @@ and [utils/xns-listen](utils/xns-listen/README.md).
 XPrism defines twelve permissions, such as `capture.screen`,
 `input.inject` and `clipboard.read`, each checked at the point where the
 protocol performs the action. They are granted per namespace, can be
-limited per launcher socket, and can be changed at runtime. By default the server only logs
-what would be denied. See [doc/capabilities.md](doc/capabilities.md).
+limited per launcher socket, and can be changed at runtime. They are
+enforced by default; `-capmode audit` only logs what would be denied, and
+a permission agent can ask the user. See [doc/capabilities.md](doc/capabilities.md).
 
 ### Server-side compositing
 
 By default the server composites windows itself (`-compositor off`
-disables it). ARGB
-windows and window opacity work without an external compositor, and
+disables it). ARGB windows and window opacity work without an external compositor, and
 fullscreen windows bypass composition. The window manager can set
 per-window opacity, transforms, rounded corners, shadows and background
 blur through the XPRISM-SCENE extension.
 External compositors such as picom still work. See
 [doc/compositor.md](doc/compositor.md) and
 [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md).
+
+### Colour management and HDR
+
+Windows can declare their colour space
+([XPRISM-COLOR](doc/xprism-color-protocol.md)); the compositor converts
+them on the GPU and composes in linear light, for sRGB, wide-gamut and
+HDR (PQ, HLG) monitors, one space per monitor. See [doc/color.md](doc/color.md).
+
+### Modern display handling
+
+Atomic modesetting is on by default, each output is composed at most
+once per refresh, and variable refresh rate (FreeSync) works.
+
+### Wayland applications
+
+[WX11](wx11/README.md) runs Wayland applications as ordinary X windows,
+managed by any X11 window manager: toplevels, popups, keyboard and
+pointer, clipboard and primary selection, transparency. Each Wayland
+application gets an X connection of its own, so XPrism's permissions
+apply to it like to any X client, and sandboxed ones (via
+`wp_security_context_v1`) land in a namespace.
 
 ### Platform abstraction layer
 
@@ -78,7 +100,7 @@ a backend per OS. See [doc/pal.md](doc/pal.md).
 | Linux | Built and tested in CI |
 | FreeBSD | Built and unit-tested in CI |
 | OpenBSD | Built in CI |
-| NetBSD, DragonFly BSD | Build support inherited from XLibre, untested |
+| NetBSD, DragonFly BSD | Built and unit-tested in CI |
 
 ## Building
 
@@ -91,6 +113,7 @@ git clone https://github.com/XPrismOrg/xserver.git
 cd xserver
 meson setup build -Dxvfb=true
 ninja -C build
+(cd wx11 && cargo build --release)   # WX11, optional
 ```
 
 Run the test suite with:
@@ -130,18 +153,21 @@ asked. For running real
 applications in a sandbox, see the bubblewrap example in
 [utils/xns-listen](utils/xns-listen/README.md).
 
-## Roadmap
+## Status
 
-| Phase | Scope | Status |
+The first release is **26.11.01**. The eight development phases are
+complete for it; what they leave for later releases is listed with each.
+
+| Phase | Done in 26.11.01 | Later |
 |---|---|---|
-| I | Codebase audit, security hooks, launcher-assigned identity, capabilities in audit mode, platform abstraction layer, CI on Linux, FreeBSD and OpenBSD | Nearly complete |
-| II | Atomic modesetting, per-output scheduling, hotplug, variable refresh rate, multi-GPU | In progress: atomic modesetting on by default (mode changes, DPMS, screen saver, rotation and gamma tested on vkms in CI), each output composed at most once per refresh, variable refresh rate tested on real hardware (FreeSync); hotplug and multi-GPU not yet tested |
-| III | Server-side compositor controlled by the window manager, explicit sync, direct scanout | Nearly complete: tested on real hardware (composition, effects, VT switches, direct scanout with page flips and FreeSync); direct scanout per monitor waits for Phase II |
-| IV | Per-output color management, wide gamut and HDR | Nearly complete: windows' colour spaces ([XPRISM-COLOR](doc/xprism-color-protocol.md)) shown on sRGB, wide-gamut and HDR (PQ and HLG) outputs, one space per monitor, converted on the GPU and composed in linear light in half float; the modesetting driver drives HDR monitors from their EDID (`Option "HDR"` and an `HDR` output property, not yet tried on an HDR monitor) and converts hardware cursors, and shows wide-gamut SDR monitors in their EDID primaries (`Option "WideGamut"`); clients hear when an output's space changes. Remaining: fp16 scanout ([doc/color.md](doc/color.md)) |
-| V | Capability enforcement by default, permission prompts, virtual seats, application-scoped input | Done: capabilities enforced by default, permission prompts ([xprism-permission-agent](utils/xprism-permission-agent/README.md)), the keyboard, held modifiers and focus scoped to the focused application, scoped automation with a seat of its own that gives way to the user, pointer warps and raw input for the active application, seats that go with their client, legacy access logged, extension audit with unreviewed extensions hidden ([doc/capabilities.md](doc/capabilities.md)) |
-| VI | Running Wayland applications as X11 windows (WX11) | In progress: [wx11](wx11/README.md) shows xdg-shell toplevels as X windows (shm buffers, title, app id, resize, close) |
-| VII | Completing the BSD backends, hardware validation | Planned |
-| VIII | Stabilization, security review, packaging, first release | Planned |
+| I. Foundation | Codebase audit, security hooks, launcher-assigned identity, capabilities, platform abstraction layer, CI | Large clipboard transfers (INCR) between namespaces, Flatpak integration |
+| II. Display | Atomic modesetting by default (mode changes, DPMS, screen saver, rotation and gamma tested in CI), per-output scheduling, variable refresh rate (tested on FreeSync) | Testing hotplug and multi-GPU on hardware |
+| III. Compositor | Server-side compositor controlled by the window manager ([XPRISM-SCENE](doc/xprism-scene-protocol.md)), explicit sync, direct scanout with page flips; tested on hardware | Direct scanout per monitor |
+| IV. Colour | Per-window colour spaces, sRGB, wide-gamut and HDR (PQ, HLG) outputs, HDR and wide gamut driven from the EDID, colour-converted cursors | fp16 scanout; trying an HDR monitor |
+| V. Permissions | Capabilities enforced by default, permission prompts ([xprism-permission-agent](utils/xprism-permission-agent/README.md)), application-scoped keyboard, focus and input, virtual seats, extension audit ([doc/capabilities.md](doc/capabilities.md)) | |
+| VI. Wayland | [WX11](wx11/README.md): toplevels, popups kept on screen, input, clipboard and primary selection, transparency, one X connection per application, sandboxes through security contexts | Zero-copy dma-buf and Present, touch, subsurfaces, drag and drop |
+| VII. Portability | Linux, FreeBSD, OpenBSD, NetBSD and DragonFly BSD built and unit-tested in CI | The test suite on the BSDs, hardware validation on more GPUs |
+| VIII. Release | Versioning, Code of Conduct, contributing guide, Arch packaging (`.github/arch`), full test suite green | |
 
 ## Documentation
 
@@ -153,6 +179,7 @@ applications in a sandbox, see the bubblewrap example in
 - [doc/xprism-color-protocol.md](doc/xprism-color-protocol.md): the XPRISM-COLOR extension
 - [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md): the XPRISM-SCENE extension
 - [doc/pal.md](doc/pal.md): the platform abstraction layer
+- [wx11/README.md](wx11/README.md): WX11, Wayland applications on XPrism
 - [CODE_OVERVIEW.md](CODE_OVERVIEW.md): layout of the source tree
 
 ## Contributing
@@ -176,7 +203,7 @@ form](https://github.com/XPrismOrg/xserver/security/advisories/new).
 ## License
 
 XPrism is distributed under the MIT/X11 license, as are the X.Org Server
-and XLibre. XPrism's own work is Copyright © 2026 Nexoniarz and XPrismOrg. See [COPYING](COPYING) for the full terms and copyright
-notices.
+and XLibre. XPrism's own work is Copyright © 2026 Nexoniarz and XPrismOrg. See
+[COPYING](COPYING) for the full terms and copyright notices.
 
 X Window System is a trademark of The Open Group.
