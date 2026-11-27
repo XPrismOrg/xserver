@@ -5,6 +5,7 @@
 # Skipped unless wx11 is built (cargo build in wx11/, or WX11_DIR set to
 # its target directory).
 
+import contextlib
 import os
 import shutil
 import struct
@@ -255,8 +256,8 @@ def test_two_clients_two_windows(xserver, client):
 class Input:
     """XTest input from a separate (unconfined) client"""
 
-    def __init__(self, xserver):
-        self.c = RawX11Connection(xserver.display_num)
+    def __init__(self, xserver, auth=None):
+        self.c = RawX11Connection(xserver.display_num, auth=auth)
         self.op = self.c.query_extension("XTEST").opcode
 
     def fake(self, type_, detail=0, x=0, y=0):
@@ -594,6 +595,115 @@ class TestSandbox:
             shutil.rmtree(runtime, ignore_errors=True)
 
 
+    @contextlib.contextmanager
+    def _sandbox(self, xserver, tmp_path, *listen_args):
+        """wx11 with --sandbox-display on a new xns-listen namespace
+        "sandbox2" (listen_args: its grants); yields the client env"""
+        from test_xns_listen import _start, _xauth_file
+        os.environ.setdefault("XSERVER_BUILDDIR", str(Path(__file__).parents[2] / "build"))
+        env = dict(os.environ, DISPLAY=f":{xserver.display_num}",
+                   XAUTHORITY=_xauth_file(tmp_path / "xauth", xserver.display_num))
+        sock = tmp_path / "sandbox2.sock"
+        xns = _start(["-n", "sandbox2", "--create", "--app-id", "org.example.Boxed",
+                      *listen_args, str(sock)], env)
+        runtime = tempfile.mkdtemp(prefix="wx11-")
+        env["XDG_RUNTIME_DIR"] = runtime
+        env.pop("WAYLAND_DISPLAY", None)
+        self.procs = [Proc([str(WX11), "--sandbox-display", str(sock)], env)]
+        try:
+            line = self.procs[0].line()
+            assert line and line.startswith("WAYLAND_DISPLAY="), (line, self.procs[0].stderr())
+            env["WAYLAND_DISPLAY"] = line.split("=", 1)[1]
+            yield env
+        finally:
+            for p in reversed(self.procs):
+                p.stop()
+            xns.terminate()
+            xns.wait(timeout=5)
+            shutil.rmtree(runtime, ignore_errors=True)
+
+    def _boxed(self, xserver, env, title, *args):
+        c = Proc([str(CLIENT), "--title", title,
+                  "--security-context", "org.example.Boxed", *args], env)
+        self.procs.append(c)
+        c.wait_for("drawn 64 48")
+        from test_xns_listen import COOKIE_PROTO, ROOT_COOKIE
+        auth = (COOKIE_PROTO, ROOT_COOKIE)
+        win = _window_named(RawX11Connection(xserver.display_num, auth=auth), title)
+        assert win
+        Input(xserver, auth).focus(win)
+        return c
+
+    def test_sandboxed_copy_stays_in_the_namespace(self, xserver, tmp_path):
+        """without clipboard.write, a sandboxed Wayland client's copy is
+        the namespace's, not the session's"""
+        from test_clipboard_grants import _owner
+        from test_xns_listen import COOKIE_PROTO, ROOT_COOKIE
+        with self._sandbox(xserver, tmp_path) as env:
+            c = self._boxed(xserver, env, "boxed copier", "--copy", "boxed secret")
+            c.wait_for("copied")
+            time.sleep(0.5)
+            session = RawX11Connection(xserver.display_num, auth=(COOKIE_PROTO, ROOT_COOKIE))
+            assert _owner(session, session.intern_atom("CLIPBOARD")) == 0
+
+    def test_sandboxed_paste_gets_no_session_clipboard(self, xserver, tmp_path):
+        """without clipboard.read, the session's clipboard owner is never
+        asked, and the paste is empty"""
+        from test_clipboard_grants import _answer, _set_owner
+        from test_xns_listen import COOKIE_PROTO, ROOT_COOKIE
+        with self._sandbox(xserver, tmp_path) as env:
+            owner = RawX11Connection(xserver.display_num, auth=(COOKIE_PROTO, ROOT_COOKIE))
+            _set_owner(owner, owner.create_window(), owner.intern_atom("CLIPBOARD"))
+            c = self._boxed(xserver, env, "boxed paster", "--paste")
+            assert not _answer(owner, b"session secret"), "the session owner was asked"
+            c.wait_for("pasted")
+
+    def test_granted_sandbox_shares_the_clipboard(self, xserver, tmp_path):
+        """with clipboard.read and clipboard.write it works both ways"""
+        from test_clipboard_grants import _answer, _set_owner
+        from test_xns_listen import COOKIE_PROTO, ROOT_COOKIE
+        with self._sandbox(xserver, tmp_path, "--grant", "clipboard.read,clipboard.write") as env:
+            session = RawX11Connection(xserver.display_num, auth=(COOKIE_PROTO, ROOT_COOKIE))
+            c = self._boxed(xserver, env, "boxed sharer", "--copy", "from the box")
+            c.wait_for("copied")
+            assert _wait_owner(session)
+            assert _clipboard_text(session, "UTF8_STRING") == b"from the box"
+            _set_owner(session, session.create_window(), session.intern_atom("CLIPBOARD"))
+            p = self._boxed(xserver, env, "boxed paster", "--paste")
+            assert _answer(session, b"into the box"), "the session owner was not asked"
+            p.wait_for("pasted into the box")
+
+
+def _answer_incr(conn, chunks):
+    """X owner side: answer the next SelectionRequest in INCR chunks"""
+    from test_clipboard_grants import (SELECTION_REQUEST, PROPERTY_CHANGE_MASK,
+                                       PROPERTY_DELETE, _event, _notify, _property_event,
+                                       _put, _select)
+    utf8, incr = conn.intern_atom("UTF8_STRING"), conn.intern_atom("INCR")
+    ev = _event(conn, SELECTION_REQUEST, timeout=5.0)
+    assert ev is not None, "WX11 did not ask the X owner"
+    _t, _w, requestor, sel, _target, prop = struct.unpack_from("<IIIIII", ev.data, 4)
+    conn.send_request(_select(requestor, PROPERTY_CHANGE_MASK))
+    conn.send_request(_put(requestor, prop, incr, struct.pack("<I", sum(map(len, chunks))), 32))
+    conn.send_request(_notify(requestor, sel, prop))
+    for chunk in chunks + [b""]:
+        assert _property_event(conn, requestor, prop, PROPERTY_DELETE, timeout=5.0), \
+            "WX11 did not take the chunk"
+        conn.send_request(_put(requestor, prop, utf8, chunk))
+
+
+def test_large_x_copy_pastes_in_wayland(xserver, client):
+    """large X selections come in chunks (INCR)"""
+    from test_clipboard_grants import _set_owner
+    owner = RawX11Connection(xserver.display_num)
+    _set_owner(owner, owner.create_window(), owner.intern_atom("CLIPBOARD"))
+    c, win = _shown(xserver, client, "big paster", "--paste")
+    Input(xserver).focus(win)
+    chunks = [b"a" * 20000, b"b" * 20000, b"c" * 20000]
+    _answer_incr(owner, chunks)
+    c.wait_for("pasted " + b"".join(chunks).decode(), timeout=15)
+
+
 def _selection_text(conn, selection, target_name="UTF8_STRING"):
     """paste selection (an atom name) as target_name from an X client"""
     from test_clipboard_grants import _received
@@ -650,3 +760,12 @@ def test_menu_at_the_screen_edge(xserver, client, slide):
     x, y, w, h = _place(conn, popup)
     assert (y, w, h) == (5, 100, 20)
     assert x == (screen_w - 100 if slide else screen_w - 10)
+
+
+def test_buffer_too_large_for_x_is_not_shown(xserver, client):
+    """X sizes are 16-bit: a 40000 px wide buffer gets no window (it used
+    to be cut to 16 bits), and WX11 carries on"""
+    big = client("--title", "too wide", "--size", "40000x2")
+    big.wait_for("drawn 40000 2")
+    c, _ = _shown(xserver, client, "normal")
+    assert not _window_named(RawX11Connection(xserver.display_num), "too wide")

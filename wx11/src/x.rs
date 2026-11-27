@@ -3,15 +3,15 @@
 // The X side of WX11: one X window per Wayland toplevel.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsFd, OwnedFd};
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
     AtomEnum, ColormapAlloc, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
-    EventMask, GrabMode, GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, VisualClass,
-    WindowClass,
+    EventMask, GrabMode, GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, Property,
+    VisualClass, WindowClass,
 };
 use x11rb::protocol::xproto::{SelectionNotifyEvent, SELECTION_NOTIFY_EVENT};
 use x11rb::protocol::Event as XEvent;
@@ -43,6 +43,8 @@ pub enum Event {
     ClipboardRequest(SelectionRequest),
     /// the X clipboard we asked for (None: refused)
     ClipboardData(Sel, Option<Vec<u8>>),
+    /// another X client took a selection we owned (SelectionClear)
+    ClipboardLost(Sel),
     /// an X pointer button went down (true) or up, at x, y in the window
     Button(u32, u8, bool, f64, f64, u32),
 }
@@ -129,7 +131,14 @@ pub struct XSide {
     wx11_primary: u32,
     /// an InputOnly window that owns and requests selections
     sel_win: u32,
+    incr: u32,
+    /// INCR transfers coming in (ICCCM 2.7.2): by property, the selection
+    /// and the chunks so far
+    incoming: RefCell<HashMap<u32, (Sel, Vec<u8>)>>,
 }
+
+/// most a pasted X selection may hold; a larger one is cut off
+const MAX_INCOMING: usize = 64 << 20;
 
 impl XSide {
     /// connect to display (a display name or a socket path); with
@@ -168,6 +177,7 @@ impl XSide {
         let text = atom("TEXT")?;
         let wx11_selection = atom("WX11_SELECTION")?;
         let wx11_primary = atom("WX11_PRIMARY")?;
+        let incr = atom("INCR")?;
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
         let argb = match argb_visual {
@@ -195,7 +205,8 @@ impl XSide {
             0,
             WindowClass::INPUT_ONLY,
             0,
-            &CreateWindowAux::new(),
+            // the chunks of INCR transfers arrive as property changes
+            &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
         )?;
         // hear about every change of the CLIPBOARD and PRIMARY owners
         if watch_clipboard {
@@ -230,7 +241,24 @@ impl XSide {
             wx11_selection,
             wx11_primary,
             sel_win,
+            incr,
+            incoming: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// the window this connection owns and requests selections with
+    pub fn sel_win(&self) -> u32 {
+        self.sel_win
+    }
+
+    /// read and delete property on sel_win: (type, value)
+    fn take_property(&self, property: u32) -> Option<(u32, Vec<u8>)> {
+        self.conn
+            .get_property(true, self.sel_win, property, AtomEnum::ANY, 0, u32::MAX / 4)
+            .ok()?
+            .reply()
+            .ok()
+            .map(|r| (r.type_, r.value))
     }
 
     fn selection_atom(&self, which: Sel) -> u32 {
@@ -668,23 +696,49 @@ impl XSide {
                     if n.requestor == self.sel_win && self.which(n.selection).is_some() =>
                 {
                     let which = self.which(n.selection).unwrap();
-                    let data = (n.property != x11rb::NONE)
-                        .then(|| {
-                            self.conn
-                                .get_property(
-                                    true,
-                                    self.sel_win,
-                                    n.property,
-                                    AtomEnum::ANY,
-                                    0,
-                                    u32::MAX / 4,
-                                )
-                                .ok()
-                                .and_then(|c| c.reply().ok())
-                                .map(|r| r.value)
-                        })
+                    let got = (n.property != x11rb::NONE)
+                        .then(|| self.take_property(n.property))
                         .flatten();
-                    out.push(Event::ClipboardData(which, data));
+                    match got {
+                        // large: chunks follow, each as a new value of the
+                        // property (deleting it, above, asked for the first)
+                        Some((ty, _)) if ty == self.incr => {
+                            self.incoming
+                                .borrow_mut()
+                                .insert(n.property, (which, Vec::new()));
+                        }
+                        got => out.push(Event::ClipboardData(which, got.map(|(_, v)| v))),
+                    }
+                }
+                XEvent::PropertyNotify(p)
+                    if p.window == self.sel_win
+                        && p.state == Property::NEW_VALUE
+                        && self.incoming.borrow().contains_key(&p.atom) =>
+                {
+                    let chunk = self.take_property(p.atom).map(|(_, v)| v);
+                    let mut incoming = self.incoming.borrow_mut();
+                    let (which, data) = incoming.get_mut(&p.atom).unwrap();
+                    let which = *which;
+                    match chunk {
+                        // the empty chunk ends the transfer
+                        Some(c) if !c.is_empty() => {
+                            let room = MAX_INCOMING.saturating_sub(data.len());
+                            data.extend_from_slice(&c[..c.len().min(room)]);
+                        }
+                        Some(_) => {
+                            let (_, data) = incoming.remove(&p.atom).unwrap();
+                            out.push(Event::ClipboardData(which, Some(data)));
+                        }
+                        None => {
+                            incoming.remove(&p.atom);
+                            out.push(Event::ClipboardData(which, None));
+                        }
+                    }
+                }
+                XEvent::SelectionClear(c) if c.owner == self.sel_win => {
+                    if let Some(which) = self.which(c.selection) {
+                        out.push(Event::ClipboardLost(which));
+                    }
                 }
                 XEvent::ClientMessage(m)
                     if m.type_ == self.wm_protocols

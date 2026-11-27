@@ -113,9 +113,9 @@ pub struct State {
     handle: LoopHandle<'static, State>,
     /// the text type a Wayland client's selection offers, while it owns
     /// that X selection (CLIPBOARD, PRIMARY)
-    wayland_selection: HashMap<Sel, String>,
+    wayland_selection: HashMap<Sel, (String, Rc<XSide>)>,
     /// Wayland clients' pipes waiting for an X selection, in order
-    to_wayland: HashMap<Sel, VecDeque<OwnedFd>>,
+    to_wayland: HashMap<(Sel, ConnKey), VecDeque<OwnedFd>>,
     primary_selection: PrimarySelectionState,
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
@@ -138,6 +138,13 @@ struct ClientState {
     compositor: CompositorClientState,
     /// set for clients that came through a security context (a sandbox)
     sandbox: Option<SecurityContext>,
+}
+
+/// which X connection (by address): pastes are answered on the one that
+/// asked
+type ConnKey = usize;
+fn key(conn: &Rc<XSide>) -> ConnKey {
+    Rc::as_ptr(conn) as usize
 }
 
 impl ClientData for ClientState {
@@ -194,7 +201,8 @@ fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>, bool)> {
     let mut image = None;
     let _ = with_buffer_contents(buffer, |ptr, len, data| {
         let (w, h, stride, off) = (data.width, data.height, data.stride, data.offset);
-        if w <= 0 || h <= 0 || stride < w * 4 || off < 0 {
+        // X sizes and positions are 16-bit
+        if w <= 0 || h <= 0 || w > 32767 || h > 32767 || stride < w * 4 || off < 0 {
             return;
         }
         let need = off as usize + stride as usize * h as usize;
@@ -687,12 +695,12 @@ impl State {
         conns.extend(self.clients.values().map(|(c, _)| c.clone()));
         for conn in conns {
             for ev in conn.events() {
-                self.handle_x_event(ev);
+                self.handle_x_event(&conn, ev);
             }
         }
     }
 
-    fn handle_x_event(&mut self, ev: x::Event) {
+    fn handle_x_event(&mut self, conn: &Rc<XSide>, ev: x::Event) {
         {
             match ev {
                 x::Event::Close(win) => {
@@ -731,9 +739,22 @@ impl State {
                     }
                 }
                 x::Event::ClipboardOwner(which, owner) => self.x_clipboard_owner(which, owner),
-                x::Event::ClipboardRequest(req) => self.x_clipboard_request(req),
+                x::Event::ClipboardLost(which) => {
+                    if self
+                        .wayland_selection
+                        .get(&which)
+                        .is_some_and(|(_, c)| Rc::ptr_eq(c, conn))
+                    {
+                        self.wayland_selection.remove(&which);
+                    }
+                }
+                x::Event::ClipboardRequest(req) => self.x_clipboard_request(conn, req),
                 x::Event::ClipboardData(which, data) => {
-                    let waiting = self.to_wayland.entry(which).or_default().pop_front();
+                    let waiting = self
+                        .to_wayland
+                        .entry((which, key(conn)))
+                        .or_default()
+                        .pop_front();
                     if let Some(fd) = waiting {
                         if let Some(data) = data {
                             // a thread: the client may read slowly
@@ -786,9 +807,39 @@ const TEXT_TYPES: [&str; 4] = [
 ];
 
 impl State {
+    /// the X connection the clipboard of the focused Wayland client goes
+    /// through: a sandboxed client's own (on --sandbox-display), so that
+    /// XPrism applies its namespace's clipboard grants; WX11's for the
+    /// rest. None: a sandboxed client without a connection.
+    fn clipboard_conn(&mut self) -> Option<Rc<XSide>> {
+        let focus = self.keyboard.current_focus();
+        let sandboxed = focus
+            .as_ref()
+            .and_then(|s| s.client())
+            .and_then(|c| c.get_data::<ClientState>().map(|d| d.sandbox.is_some()))
+            .unwrap_or(false);
+        match focus {
+            Some(surface) if sandboxed && self.sandbox_display.is_some() => self.conn_for(&surface),
+            _ => Some(self.x.clone()),
+        }
+    }
+
     /// another X client took a selection (or nobody has it)
     fn x_clipboard_owner(&mut self, which: Sel, owner: Option<u32>) {
-        self.wayland_selection.remove(&which);
+        // one of our own connections took it (a sandboxed client's copy,
+        // with clipboard.write): still the Wayland selection
+        if owner.is_some_and(|w| self.clients.values().any(|(c, _)| c.sel_win() == w)) {
+            return;
+        }
+        // (a selection a sandboxed client holds through its own
+        // connection ends with ClipboardLost there)
+        if self
+            .wayland_selection
+            .get(&which)
+            .is_some_and(|(_, c)| Rc::ptr_eq(c, &self.x))
+        {
+            self.wayland_selection.remove(&which);
+        }
         let types: Vec<String> = TEXT_TYPES.iter().map(|s| s.to_string()).collect();
         match (which, owner.is_some()) {
             (Sel::Clipboard, true) => set_data_device_selection(&self.dh, &self.seat, types, ()),
@@ -800,19 +851,22 @@ impl State {
 
     /// an X client pastes what a Wayland client copied: read it from the
     /// Wayland client through a pipe, then answer
-    fn x_clipboard_request(&mut self, req: x::SelectionRequest) {
-        let mime = match (
-            self.wayland_selection.get(&req.which),
-            self.x.clipboard_target(&req),
-        ) {
+    fn x_clipboard_request(&mut self, conn: &Rc<XSide>, req: x::SelectionRequest) {
+        // only the connection that holds the selection answers with it
+        let held = self
+            .wayland_selection
+            .get(&req.which)
+            .filter(|(_, c)| Rc::ptr_eq(c, conn))
+            .map(|(mime, _)| mime.clone());
+        let mime = match (held, conn.clipboard_target(&req)) {
             (None, _) | (_, x::ClipboardTarget::Other) => {
-                return self.x.answer_clipboard(&req, None);
+                return conn.answer_clipboard(&req, None);
             }
-            (_, x::ClipboardTarget::Targets) => return self.x.answer_clipboard(&req, None),
-            (Some(mime), _) => mime.clone(),
+            (_, x::ClipboardTarget::Targets) => return conn.answer_clipboard(&req, None),
+            (Some(mime), _) => mime,
         };
         let Ok((reader, writer)) = std::io::pipe() else {
-            return self.x.answer_clipboard(&req, None);
+            return conn.answer_clipboard(&req, None);
         };
         let asked = match req.which {
             Sel::Clipboard => {
@@ -823,12 +877,13 @@ impl State {
             }
         };
         if !asked {
-            return self.x.answer_clipboard(&req, None);
+            return conn.answer_clipboard(&req, None);
         }
+        let conn = conn.clone();
         let mut data = Vec::new();
         let mut req = Some(req);
         let source = Generic::new(reader, Interest::READ, Mode::Level);
-        let added = self.handle.insert_source(source, move |_, reader, state| {
+        let added = self.handle.insert_source(source, move |_, reader, _state| {
             use std::io::Read;
             let mut chunk = [0u8; 65536];
             // SAFETY: the reader is not replaced or dropped here
@@ -839,8 +894,8 @@ impl State {
                 return Ok(PostAction::Continue);
             }
             if let Some(req) = req.take() {
-                state.x.answer_clipboard(&req, Some(&data));
-                state.x.flush();
+                conn.answer_clipboard(&req, Some(&data));
+                conn.flush();
             }
             Ok(PostAction::Remove)
         });
@@ -879,12 +934,22 @@ impl SelectionHandler for State {
             .iter()
             .find(|t| mimes.iter().any(|m| m == *t))
             .map(|t| t.to_string());
+        // the selection is held through the connection of the client
+        // that set it (only the focused client can)
+        let conn = self.clipboard_conn();
+        if let Some((_, old)) = self.wayland_selection.remove(&which) {
+            if conn.as_ref().is_none_or(|c| !Rc::ptr_eq(c, &old)) {
+                old.disown_clipboard(which);
+            }
+        }
+        let Some(conn) = conn else {
+            return;
+        };
         if let Some(text) = text {
-            self.wayland_selection.insert(which, text);
-            self.x.own_clipboard(which);
+            conn.own_clipboard(which);
+            self.wayland_selection.insert(which, (text, conn));
         } else {
-            self.wayland_selection.remove(&which);
-            self.x.disown_clipboard(which);
+            conn.disown_clipboard(which);
         }
     }
 
@@ -898,8 +963,15 @@ impl SelectionHandler for State {
         _user_data: &(),
     ) {
         let which = sel(ty);
-        self.to_wayland.entry(which).or_default().push_back(fd);
-        self.x.request_clipboard(which);
+        // asked through the pasting client's connection; none: the fd
+        // closes, an empty paste
+        if let Some(conn) = self.clipboard_conn() {
+            self.to_wayland
+                .entry((which, key(&conn)))
+                .or_default()
+                .push_back(fd);
+            conn.request_clipboard(which);
+        }
     }
 }
 

@@ -38,7 +38,9 @@ so XPrism confines them as it confines sandboxed X11 applications. The
 socket is used with the session's credentials (`XAUTHORITY`); it decides
 the namespace. Without `--sandbox-display` such clients get an ordinary
 connection, and WX11 says so. Sandboxed clients cannot create security
-contexts themselves.
+contexts themselves. Their copy and paste go through their own X
+connection too, so the namespace's `clipboard.read` and `clipboard.write`
+grants decide whether they reach the session's clipboard.
 
 ## What works
 
@@ -60,7 +62,8 @@ contexts themselves.
 - the clipboard and the primary selection (text) both ways: a Wayland
   copy or selection owns X's CLIPBOARD or PRIMARY (UTF8_STRING, TEXT,
   STRING as Latin-1, TARGETS), and X's are offered to the Wayland client
-  with the keyboard (`wl_data_device`, `zwp_primary_selection_v1`)
+  with the keyboard (`wl_data_device`, `zwp_primary_selection_v1`);
+  large X selections arrive in chunks (INCR)
 - transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
   compositing manager (or XPrism's compositor) blends
 - windows X lost while covered (no compositor) are repainted on Expose
@@ -73,8 +76,7 @@ Buffers are copied into the window with `PutImage` for now.
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
 - subsurfaces
-- clipboard types other than text, large X transfers (INCR), and drag
-  and drop (XDND)
+- clipboard types other than text, and drag and drop (XDND)
 - one namespace per sandboxed application (today all sandboxed clients
   share `--sandbox-display`)
 
