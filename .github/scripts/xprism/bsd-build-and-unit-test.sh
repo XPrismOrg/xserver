@@ -16,7 +16,8 @@ fi
 
 # the pytest suite (test/pyxtest), run against Xvfb
 case "$os" in
-    freebsd|DragonFlyBSD) pkg install -y py311-pytest ;;
+    # whichever Python the repository builds pytest for
+    freebsd|DragonFlyBSD) pkg install -y -g 'py3*-pytest' ;;
     openbsd) pkg_add -I py3-test ;;
     netbsd)
         PATH="$PATH:/usr/pkg/bin:/usr/pkg/sbin"

@@ -583,10 +583,8 @@ class ExternalXServer:
                 ucred = _ucred.getpeer(sock.fileno())
                 pid = ucred.getpid()
             else:
-                cred = sock.getsockopt(
-                    _socket.SOL_SOCKET, _socket.SO_PEERCRED, _struct.calcsize("iii")
-                )
-                pid, _, _ = _struct.unpack("iii", cred)
+                from xclient import peer_pid
+                pid = peer_pid(sock)
             sock.close()
             return pid
         except (OSError, _struct.error):

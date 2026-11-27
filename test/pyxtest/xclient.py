@@ -4,6 +4,7 @@
 
 import select
 import socket
+import sys
 import struct
 import time
 from dataclasses import dataclass
@@ -19,6 +20,32 @@ from proto.x11 import (
     InternAtomRequest,
     QueryExtensionRequest,
 )
+
+
+def peer_pid(sock):
+    """The pid of the process at the other end of a connected Unix socket,
+    or None if the platform can't tell."""
+    import struct as _struct
+    try:
+        if sys.platform.startswith("linux"):
+            # struct ucred: pid, uid, gid
+            cred = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            return _struct.unpack("iii", cred)[0]
+        if sys.platform.startswith("openbsd"):
+            # SO_PEERCRED, struct sockpeercred: uid, gid, pid
+            cred = sock.getsockopt(socket.SOL_SOCKET, 0x1022, 12)
+            return _struct.unpack("iii", cred)[2]
+        if sys.platform.startswith("netbsd"):
+            # LOCAL_PEEREID, struct unpcbid: pid, euid, egid
+            cred = sock.getsockopt(0, 3, 12)
+            return _struct.unpack("iii", cred)[0]
+        if sys.platform.startswith("freebsd"):
+            # LOCAL_PEERCRED, struct xucred (FreeBSD 13+: cr_pid at 80)
+            cred = sock.getsockopt(0, 1, 88)
+            return _struct.unpack_from("i", cred, 80)[0] or None
+    except (OSError, _struct.error):
+        pass
+    return None
 
 
 class X11ConnectionError(Exception):
@@ -201,14 +228,7 @@ class RawX11Connection:
         # display socket can be taken over by another server, in which case the
         # client ends up talking to the wrong server and sees its connection
         # die mid-test (BrokenPipeError).
-        try:
-            import struct as _struct
-            cred = self.sock.getsockopt(
-                socket.SOL_SOCKET, socket.SO_PEERCRED, _struct.calcsize("iii")
-            )
-            self._peer_pid, _, _ = _struct.unpack("iii", cred)
-        except OSError:
-            self._peer_pid = None
+        self._peer_pid = peer_pid(self.sock)
         try:
             self._handshake()
         except Exception:

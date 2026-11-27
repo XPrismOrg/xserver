@@ -290,6 +290,7 @@ class TestNamespaceListener:
         assert isinstance(r, X11Error) and r.error_code == 16   # BadLength
         assert _client_namespace(manager, opcode, manager) == "root"
 
+    @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
     def test_rejected_requests_do_not_leak_fds(self, xserver, tmp_path):
         manager, opcode = _manager(xserver)
         _client_namespace(manager, opcode, manager)     # warm up

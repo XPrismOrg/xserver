@@ -1,16 +1,22 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Helper script used by meson to ensure each test_foo.py file has
-# a corresponding entry in the tests_pyxtest array
+# a corresponding entry in the tests_pyxtest array. POSIX sh and tools:
+# the BSDs have neither bash nor GNU find.
 
 SOURCEDIR="${1:-@SOURCEDIR@}"
-shift
+[ $# -gt 0 ] && shift
 
 TESTS="${*:-@TESTS@}"
-FILES=$(find "$SOURCEDIR" -name "test_*.py" -printf "%f\n")
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
 
-DIFF=$(diff -u <(echo "$TESTS" | tr " " "\n" | sort) <(echo "$FILES" | sort))
-if [[ $? -ne 0 ]]; then
+echo "$TESTS" | tr ' ' '\n' | grep -v '^$' | sort > "$tmp/listed"
+for f in "$SOURCEDIR"/test_*.py; do
+    [ -e "$f" ] && basename "$f"
+done | sort > "$tmp/files"
+
+if ! DIFF=$(diff -u "$tmp/listed" "$tmp/files"); then
     echo "ERROR: Missing test file in meson tests list:" >&2
     echo "$DIFF" >&2
     exit 1
