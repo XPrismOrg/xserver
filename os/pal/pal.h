@@ -3,8 +3,8 @@
  * XPrism Platform Abstraction Layer (PAL).
  *
  * Everything the server needs from the operating system that differs
- * between Linux and the BSDs goes through this interface (SchBSD is
- * built on FreeBSD and uses the FreeBSD backends). Backends
+ * between Linux and the BSDs goes through this interface (SchOS uses the
+ * Linux ABI and therefore the Linux backends). Backends
  * live in os/pal/<os>/ and are chosen at build time (os/pal/meson.build);
  * there is no runtime switching and no OS #ifdef outside os/pal (checked
  * by test/check-os-ifdefs.sh). See doc/pal.md for the design and the
