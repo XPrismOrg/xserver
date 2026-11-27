@@ -66,6 +66,7 @@ if pytest.found()
      'test_display_sockets.py',
      'test_color_linear.py',
      'test_color_cursor.py',
+     'test_color_edr.py',
      'test_scene_protocol.py',
      'test_scene_input.py',
      'test_scene_pacing.py',

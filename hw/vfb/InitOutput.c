@@ -31,6 +31,7 @@ from The Open Group.
 #if defined(WIN32)
 #include <X11/Xwinsock.h>
 #endif
+#include <math.h>
 #include <stdio.h>
 #include <X11/X.h>
 #include <X11/Xproto.h>
@@ -124,6 +125,7 @@ typedef struct {
     Bool originSet;             /* -origin, else right of the previous screen */
     Bool colorSet;              /* -colorspace, else sRGB */
     CompositeColorSpaceRec color;
+    double edr;                 /* -edr: EDR headroom of its CRTCs, 0: none */
     char *pfbMemory;
     XWDColor *pXWDCmap;
     XWDFileHeader *pXWDHeader;
@@ -402,6 +404,8 @@ ddxUseMsg(void)
            "                       primaries srgb, p3 or bt2020; transfer srgb,\n"
            "                       gamma22, linear, pq or hlg; peak N cd/m^2\n"
            "                       (pq, hlg)\n");
+    ErrorF("-edr H                 the last -screen's outputs can show H times\n"
+           "                       SDR white (extended dynamic range, EDR)\n");
     ErrorF("-crtccolorspace C:P[,T[,N]] colour space CRTC C (from 0, after\n"
            "                       -crtcs) of the last -screen shows, as -colorspace\n");
     ErrorF("-pixdepths list-of-int support given pixmap depths\n");
@@ -506,6 +510,18 @@ ddxProcessArgument(int argc, char *argv[], int i)
             FatalError("Invalid -colorspace argument '%s'\n", argv[i + 1]);
         }
         currentScreen->colorSet = TRUE;
+        return 2;
+    }
+
+    if (strcmp(argv[i], "-edr") == 0) { /* -edr HEADROOM */
+        CHECK_FOR_REQUIRED_ARGUMENTS(1);
+        char *end;
+        double h = strtod(argv[i + 1], &end);
+        if (end == argv[i + 1] || *end || !(h >= 1) || h > 64) {
+            UseMsg();
+            FatalError("Invalid -edr argument '%s', expected 1 to 64\n", argv[i + 1]);
+        }
+        currentScreen->edr = h;
         return 2;
     }
 
@@ -1154,6 +1170,31 @@ vfbRRGetInfo(ScreenPtr pScreen, Rotation *rotations)
  */
 static Atom vfbColorSpaceAtom;
 
+/*
+ * XPrism: EDR. There is no backlight: the EDR output property ("2.5";
+ * empty or "1": none) is the most headroom, as the brightness the user
+ * set would allow on a laptop, and EDR_BACKLIGHT (read only, in
+ * thousandths) the factor the compositor asked the backlight to be
+ * scaled by.
+ */
+static Atom vfbEDRAtom, vfbEDRBacklightAtom;
+
+static void
+vfbEDRHeadroom(ScreenPtr pScreen, RRCrtcPtr crtc, double headroom)
+{
+    INT32 v = (INT32) lrint(headroom * 1000);
+
+    for (int i = 0; i < crtc->numOutputs; i++)
+        RRChangeOutputProperty(crtc->outputs[i], vfbEDRBacklightAtom, XA_INTEGER, 32,
+                               PropModeReplace, 1, &v, FALSE, FALSE);
+}
+
+static void
+vfbSetEDR(ScreenPtr pScreen, RRCrtcPtr crtc, double headroom)
+{
+    CompositeSetCrtcEDR(pScreen, crtc, headroom, vfbEDRHeadroom);
+}
+
 static Bool
 vfbRROutputSetProperty(ScreenPtr pScreen, RROutputPtr output, Atom property,
                        RRPropertyValuePtr value)
@@ -1161,6 +1202,24 @@ vfbRROutputSetProperty(ScreenPtr pScreen, RROutputPtr output, Atom property,
     CompositeColorSpaceRec cs;
     char spec[64];
 
+    if (property == vfbEDRBacklightAtom)
+        return FALSE;           /* the compositor's, not the clients' */
+    if (property == vfbEDRAtom) {
+        char buf[32], *end;
+        double h = 1;
+        if (value->type != XA_STRING || value->format != 8 ||
+            value->size >= (long) sizeof(buf) || output->numCrtcs != 1)
+            return FALSE;
+        memcpy(buf, value->data, value->size);
+        buf[value->size] = '\0';
+        if (buf[0]) {
+            h = strtod(buf, &end);
+            if (*end || !(h >= 1) || h > 64)
+                return FALSE;
+        }
+        vfbSetEDR(pScreen, output->crtcs[0], h);
+        return TRUE;
+    }
     if (property != vfbColorSpaceAtom)
         return TRUE;
     if (value->type != XA_STRING || value->format != 8 ||
@@ -1200,6 +1259,8 @@ vfbRandRInit(ScreenPtr pScreen)
     pScrPriv->rrScreenSetSize = vfbRRScreenSetSize;
     pScrPriv->rrOutputSetProperty = vfbRROutputSetProperty;
     vfbColorSpaceAtom = MakeAtom("COLORSPACE", strlen("COLORSPACE"), TRUE);
+    vfbEDRAtom = MakeAtom("EDR", strlen("EDR"), TRUE);
+    vfbEDRBacklightAtom = MakeAtom("EDR_BACKLIGHT", strlen("EDR_BACKLIGHT"), TRUE);
 #if RANDR_13_INTERFACE
     pScrPriv->rrOutputGetProperty = NULL;
 #endif
@@ -1241,6 +1302,23 @@ vfbRandRInit(ScreenPtr pScreen)
             RRChangeOutputProperty(output, vfbColorSpaceAtom, XA_STRING, 8,
                                    PropModeReplace, 0, "", FALSE, FALSE))
             return FALSE;
+        {
+            char edr[32] = "";
+            INT32 one = 1000;
+            if (pvfb->edr > 1)
+                snprintf(edr, sizeof(edr), "%g", pvfb->edr);
+            if (RRConfigureOutputProperty(output, vfbEDRAtom, FALSE, FALSE, FALSE,
+                                          0, NULL) ||
+                RRChangeOutputProperty(output, vfbEDRAtom, XA_STRING, 8,
+                                       PropModeReplace, strlen(edr), edr, FALSE, FALSE) ||
+                RRConfigureOutputProperty(output, vfbEDRBacklightAtom, FALSE, FALSE, TRUE,
+                                          0, NULL) ||
+                RRChangeOutputProperty(output, vfbEDRBacklightAtom, XA_INTEGER, 32,
+                                       PropModeReplace, 1, &one, FALSE, FALSE))
+                return FALSE;
+            if (pvfb->edr > 1)
+                vfbSetEDR(pScreen, crtc, pvfb->edr);
+        }
 
         /* Setup a Mode and notify only for CRTCs with Outputs */
         if (pvci->numOutputs > 0) {

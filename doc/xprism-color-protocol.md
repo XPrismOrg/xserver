@@ -83,6 +83,13 @@ For PQ, maxLum is the peak of the content (its mastering display); for
 HLG, the peak of the display that the content's OOTF assumes. Values
 above 10000 cd/m² are refused.
 
+For sRGB and gamma 2.2, a maxLum above refWhite means extended dynamic
+range (EDR): full scale is maxLum, and reference white is encoded at the
+value that decodes to refWhite / maxLum of it. With maxLum = 4·refWhite,
+reference white is about 54% signal and values above it are up to four
+times brighter. Windows with an EDR space are converted like any other;
+on outputs without as much headroom, what is brighter is clipped.
+
 ## Outputs
 
 Each output shows a colour space too: sRGB unless the display driver
@@ -92,6 +99,13 @@ capabilities and its `Colorspace` and `HDR_OUTPUT_METADATA` properties.
 An output's transfer function is sRGB, gamma 2.2, linear or PQ (HDR);
 for PQ, the output's reference white is where SDR white is shown (203
 cd/m² by default, BT.2408) and its maxLum the display's peak.
+
+An SDR output with maxLum above refWhite has EDR headroom (see
+[doc/color.md](color.md#extended-dynamic-range-edr)): it can show
+maxLum / refWhite times SDR white, such as a laptop panel whose
+backlight is not at full brightness. The output reports the most it can
+show; whether that headroom is in use at a given moment is not reported,
+and nothing changes for clients when it is.
 
 ## How windows are shown
 

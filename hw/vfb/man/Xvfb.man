@@ -84,6 +84,16 @@ Each output also has a \fBCOLORSPACE\fP property (a string, as
 \fB\-colorspace\fP takes it; empty for the screen's) that changes
 what its CRTC shows at run time.
 .TP 4
+.B "\-edr \fIheadroom\fP"
+Gives each CRTC of the screen given by the last \fB\-screen\fP option
+extended dynamic range: a simulated backlight that the built-in
+compositor may raise up to \fIheadroom\fP (1 to 64) times while a
+window shows content brighter than SDR white. Each output has an
+\fBEDR\fP property (a string with the limit, empty for none) to change
+it at run time, and a read-only \fBEDR_BACKLIGHT\fP property (an
+integer, the backlight factor in thousandths) showing what a real
+backlight would be set to.
+.TP 4
 .B "\-pixdepths \fIlist-of-depths\fP"
 This option specifies a list of pixmap depths that the server should
 support in addition to the depths implied by the supported screens.

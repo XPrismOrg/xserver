@@ -310,7 +310,15 @@ typedef struct {
     Bool wide;
     Bool wide_capable;
     CompositeColorSpaceRec wide_space;
+    /* XPrism: extended dynamic range (the "EDR" output property): the
+       built-in panel's backlight raised for content brighter than SDR
+       white (backlight.c) */
+    Atom edr_atom;
+    Bool edr;
+    struct ms_backlight *backlight;     /* NULL: none found */
 } drmmode_output_private_rec, *drmmode_output_private_ptr;
+
+void drmmode_edr_suspend(ScrnInfoPtr scrn, Bool suspend);
 
 typedef struct {
     uint32_t    lessee_id;

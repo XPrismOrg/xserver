@@ -68,9 +68,20 @@ bool xpColorMatrixInvert(const XpColorMatrix m, XpColorMatrix out);
 void xpColorMatrixApply(const XpColorMatrix m, const double in[3], double out[3]);
 
 /*
+ * Extended dynamic range (EDR): an SDR transfer function (sRGB, gamma
+ * 2.2) whose maxLum is above its refWhite has headroom maxLum / refWhite.
+ * Its full-scale signal is then that much brighter than reference white,
+ * and reference white is encoded below full scale. This describes a
+ * display whose backlight is raised above what SDR white needs, and
+ * content made for one. 1 for every other space.
+ */
+double xpColorHeadroom(const XpColorSpace *cs);
+
+/*
  * Transfer functions. Decoding takes a signal in [0, 1] to linear light
- * relative to the space's reference white; encoding is the inverse and
- * clamps to [0, 1]. For PQ and HLG the space's refWhite converts between
+ * relative to the space's reference white (up to the headroom for SDR
+ * transfer functions with EDR); encoding is the inverse and clamps to
+ * [0, 1]. For PQ and HLG the space's refWhite converts between
  * absolute and relative luminance. HLG includes the BT.2100 OOTF for a
  * display of maxLum (system gamma per BT.2100, black level 0).
  */

@@ -261,6 +261,9 @@ void compColorEncodeCrtcs(ScreenPtr pScreen, PicturePtr pDst, int dx, int dy,
 bool compColorCrtcsChanged(ScreenPtr pScreen);
 /* OutputColorSpaceNotify for outputs whose space changed (0.3) */
 void compColorCheckOutputs(ScreenPtr pScreen);
+void compColorUpdateEDR(ScreenPtr pScreen);
+bool compColorEDRMoving(ScreenPtr pScreen);
+void compColorStopEDR(ScreenPtr pScreen);
 
 /*
  * compoverlay.c

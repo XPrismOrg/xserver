@@ -247,6 +247,37 @@ compcolor_tonemap(void)
     near(xpColorToneMap(knee * 1.0001, 1000, 400), knee * 1.0001, 0.01, "past the knee");
 }
 
+/* Extended dynamic range: an SDR transfer function with maxLum above
+   refWhite has headroom maxLum / refWhite; full scale is that bright */
+static void
+compcolor_edr(void)
+{
+    XpColorSpace edr = xpColorSpaceSRGB, g22 = xpColorSpaceSRGB;
+
+    near(xpColorHeadroom(&xpColorSpaceSRGB), 1, 0, "sRGB: none");
+    near(xpColorHeadroom(&xpColorSpaceBT2100PQ), 1, 0, "PQ: none");
+    edr.maxLum = 4 * edr.refWhite;
+    near(xpColorHeadroom(&edr), 4, 1e-12, "headroom");
+    XpColorSpace lin = edr;
+    lin.transfer = XpColorTransferLinear;
+    near(xpColorHeadroom(&lin), 1, 0, "linear: none");
+
+    /* full scale is the headroom, reference white is encoded below it */
+    near(xpColorDecode(&edr, 1), 4, 1e-12, "full scale");
+    near(xpColorEncode(&edr, 4), 1, 1e-12, "the peak");
+    near(xpColorEncode(&edr, 1), xpColorEncode(&xpColorSpaceSRGB, 0.25), 1e-12,
+         "reference white");
+    near(xpColorEncode(&edr, 8), 1, 1e-12, "clamped at the peak");
+    for (int i = 0; i <= 20; i++) {
+        double v = i / 20.0;
+        near(xpColorEncode(&edr, xpColorDecode(&edr, v)), v, 1e-9, "round trip");
+    }
+    g22.transfer = XpColorTransferGamma22;
+    g22.maxLum = 2 * g22.refWhite;
+    near(xpColorDecode(&g22, 0.5), 2 * pow(0.5, 2.2), 1e-12, "gamma 2.2");
+    near(xpColorEncode(&g22, 2 * pow(0.5, 2.2)), 0.5, 1e-12, "gamma 2.2 back");
+}
+
 const testfunc_t*
 compcolor_test(void)
 {
@@ -255,6 +286,7 @@ compcolor_test(void)
         compcolor_transfer,
         compcolor_hlg,
         compcolor_tonemap,
+        compcolor_edr,
         NULL,
     };
 

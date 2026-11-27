@@ -30,6 +30,16 @@
  * On sRGB outputs, windows without a description cost nothing, and as
  * long as no window has one the compositor does exactly what it did
  * before.
+ *
+ * Extended dynamic range (EDR, CompositeSetCrtcEDR): a CRTC showing an
+ * SDR space whose display can raise its backlight has headroom above SDR
+ * white. While a window with content brighter than SDR white is on it,
+ * the compositor uses that headroom: the CRTC's space becomes the SDR
+ * space with maxLum raised by the headroom (xpColorHeadroom), so
+ * everything else is dimmed by it in the encoding, and the DDX raises the
+ * backlight by the same factor. The headroom moves there and back
+ * gradually (compColorUpdateEDR). Applications are told the most the
+ * output can give (GetOutputColorSpace), not each step.
  */
 
 #include <dix-config.h>
@@ -98,7 +108,8 @@ static bool
 colorIsSRGB(const XpColorSpace *cs)
 {
     return cs->transfer == XpColorTransferSRGB &&
-        !memcmp(&cs->primaries, &xpColorPrimariesSRGB, sizeof(XpColorPrimaries));
+        !memcmp(&cs->primaries, &xpColorPrimariesSRGB, sizeof(XpColorPrimaries)) &&
+        xpColorHeadroom(cs) == 1;
 }
 
 /* ---- outputs ------------------------------------------------------------ */
@@ -108,6 +119,32 @@ static bool
 colorIsHDR(const XpColorSpace *cs)
 {
     return cs->transfer == XpColorTransferPQ || cs->transfer == XpColorTransferHLG;
+}
+
+/* The brightest an output shows, relative to its reference white: the
+   peak of HDR outputs, the headroom of SDR ones (1 without EDR) */
+static double
+colorPeak(const XpColorSpace *out)
+{
+    return colorIsHDR(out) ? out->maxLum / out->refWhite : xpColorHeadroom(out);
+}
+
+/* An SDR space with EDR headroom: what is above reference white is
+   extra, clipped where there is no room for it rather than tone mapped,
+   so that SDR white stays SDR white */
+static bool
+colorIsEDR(const XpColorSpace *cs)
+{
+    return xpColorHeadroom(cs) > 1;
+}
+
+/* The brightest content in cs can be, relative to its reference white */
+static double
+colorContentPeak(const XpColorSpace *cs)
+{
+    if (colorIsHDR(cs) || cs->transfer == XpColorTransferLinear)
+        return fmax(cs->maxLum / cs->refWhite, 1);
+    return xpColorHeadroom(cs);
 }
 
 /*
@@ -121,7 +158,14 @@ colorIsHDR(const XpColorSpace *cs)
 
 typedef struct {
     RRCrtcPtr crtc;
-    XpColorSpace cs;
+    XpColorSpace cs;            /* what it shows now */
+    XpColorSpace own;           /* CompositeSetCrtcColorSpace, if hasOwn */
+    bool hasOwn;
+    /* EDR: the most headroom, the headroom used, where it is going */
+    double edrMax, edr, edrTarget;
+    CARD64 edrTime;             /* when edr last moved */
+    CompositeEDRProcPtr edrProc;
+    XpColorSpace reported;      /* what applications are told */
 } ColorCrtcRec;
 
 static XpColorSpace screenSpace[MAXSCREENS];
@@ -141,6 +185,8 @@ static ColorCrtcShownRec crtcShown[MAXSCREENS][COLOR_MAX_CRTCS + 1];
 static int crtcShownCount[MAXSCREENS];
 
 static int colorOtherCrtcs(ScreenPtr pScreen, ColorCrtcShownRec *out);
+static const XpColorSpace *colorOwn(WindowPtr pWin);
+static WindowPtr colorNext(WindowPtr top, WindowPtr pWin);
 
 /* OutputColorSpaceNotify selections (0.3) */
 typedef struct _ColorSelect {
@@ -186,15 +232,50 @@ colorCrtcSpace(ScreenPtr pScreen, RRCrtcPtr crtc)
     return colorScreenSpace(pScreen);
 }
 
-/* What output shows: its CRTC's space; off, that of the only CRTC it
-   can use, or else the screen's */
+/* What output shows, as applications are told: its CRTC's space; off,
+   that of the only CRTC it can use, or else the screen's. With EDR, the
+   most it can show, not what it shows at the moment. */
 static const XpColorSpace *
 colorOutputSpaceOf(RROutputPtr output)
 {
+    ScreenPtr pScreen = output->pScreen;
     RRCrtcPtr crtc = output->crtc ? output->crtc :
         output->numCrtcs == 1 ? output->crtcs[0] : NULL;
 
-    return crtc ? colorCrtcSpace(output->pScreen, crtc) : colorScreenSpace(output->pScreen);
+    if (!crtc)
+        return colorScreenSpace(pScreen);
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++)
+        if (crtcSpaces[pScreen->myNum][i].crtc == crtc)
+            return &crtcSpaces[pScreen->myNum][i].reported;
+    return colorScreenSpace(pScreen);
+}
+
+/* An SDR space with headroom h (none if h is 1) */
+static XpColorSpace
+colorWithHeadroom(const XpColorSpace *base, double h)
+{
+    XpColorSpace cs = *base;
+    cs.maxLum = cs.refWhite * h;
+    return cs;
+}
+
+/* The CRTC slots' spaces from what they were given */
+static void
+colorUpdateCrtcs(int s)
+{
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        ColorCrtcRec *c = &crtcSpaces[s][i];
+        if (!c->crtc)
+            continue;
+        const XpColorSpace *base = c->hasOwn ? &c->own :
+            screenSet[s] ? &screenSpace[s] : &xpColorSpaceSRGB;
+        bool edr = c->edrMax > 1 && !colorIsHDR(base) &&
+            base->transfer != XpColorTransferLinear && xpColorHeadroom(base) == 1;
+        if (!edr)
+            c->edr = c->edrTarget = 1;
+        c->cs = edr && c->edr > 1 ? colorWithHeadroom(base, c->edr) : *base;
+        c->reported = edr ? colorWithHeadroom(base, c->edrMax) : *base;
+    }
 }
 
 static bool
@@ -223,6 +304,7 @@ colorUpdateOutput(int s)
     const XpColorSpace *spaces[COLOR_MAX_CRTCS + 1];
     int n = 0;
 
+    colorUpdateCrtcs(s);
     spaces[n++] = screenSet[s] ? &screenSpace[s] : &xpColorSpaceSRGB;
     for (int i = 0; i < COLOR_MAX_CRTCS; i++)
         if (crtcSpaces[s][i].crtc)
@@ -230,7 +312,7 @@ colorUpdateOutput(int s)
 
     const XpColorSpace *widest = spaces[0];
     bool same = true, hdr = false;
-    double minLum = spaces[0]->minLum, maxLum = 0;
+    double minLum = spaces[0]->minLum, maxLum = 0, headroom = 1;
     for (int i = 0; i < n; i++) {
         same = same && colorSameSpace(spaces[i], spaces[0]);
         if (colorGamutArea(&spaces[i]->primaries) > colorGamutArea(&widest->primaries))
@@ -239,6 +321,7 @@ colorUpdateOutput(int s)
             hdr = true;
             maxLum = fmax(maxLum, spaces[i]->maxLum);
         }
+        headroom = fmax(headroom, xpColorHeadroom(spaces[i]));
         minLum = fmin(minLum, spaces[i]->minLum);
     }
     XpColorSpace cs = *(same ? spaces[0] : widest);
@@ -246,7 +329,11 @@ colorUpdateOutput(int s)
         cs.transfer = XpColorTransferPQ;
         cs.refWhite = 203;
         cs.minLum = minLum;
-        cs.maxLum = maxLum;
+        cs.maxLum = fmax(maxLum, 203 * headroom);
+    } else if (!same && headroom > 1 && !colorIsHDR(&cs) &&
+               cs.transfer != XpColorTransferLinear) {
+        /* a CRTC using EDR: compose with its headroom */
+        cs.maxLum = cs.refWhite * headroom;
     }
     outputSpace[s] = cs;
     outputSet[s] = !colorIsSRGB(&cs);
@@ -331,11 +418,164 @@ CompositeSetCrtcColorSpace(ScreenPtr pScreen, RRCrtcPtr crtc,
                        "with colour spaces of their own\n", s);
         return;
     }
+    ColorCrtcRec *c = &crtcSpaces[s][slot];
+    if (c->crtc != crtc && !space)
+        return;
+    if (c->crtc != crtc)
+        *c = (ColorCrtcRec) { .crtc = crtc, .edrMax = 1, .edr = 1, .edrTarget = 1 };
+    c->hasOwn = space != NULL;
     if (space)
-        crtcSpaces[s][slot] = (ColorCrtcRec) { .crtc = crtc, .cs = cs };
-    else if (crtcSpaces[s][slot].crtc == crtc)
-        crtcSpaces[s][slot].crtc = NULL;
+        c->own = cs;
+    else if (c->edrMax <= 1)
+        c->crtc = NULL;
     colorUpdateOutput(s);
+}
+
+void
+CompositeSetCrtcEDR(ScreenPtr pScreen, RRCrtcPtr crtc, double maxHeadroom,
+                    CompositeEDRProcPtr proc)
+{
+    int s = pScreen->myNum, slot = -1;
+
+    if (!(maxHeadroom > 1))
+        maxHeadroom = 1;
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        if (crtcSpaces[s][i].crtc == crtc) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 && !crtcSpaces[s][i].crtc)
+            slot = i;
+    }
+    if (slot < 0)
+        return;
+    ColorCrtcRec *c = &crtcSpaces[s][slot];
+    if (c->crtc != crtc) {
+        if (maxHeadroom <= 1)
+            return;
+        *c = (ColorCrtcRec) { .crtc = crtc, .edr = 1, .edrTarget = 1 };
+    }
+    if (c->edrMax == maxHeadroom && c->edrProc == proc)
+        return;
+    c->edrMax = maxHeadroom;
+    c->edrProc = proc;
+    /* within the new limit at once; the next frame aims again */
+    if (c->edrTarget > maxHeadroom)
+        c->edrTarget = maxHeadroom;
+    if (c->edr > maxHeadroom) {
+        c->edr = maxHeadroom;
+        if (proc)
+            (*proc) (pScreen, crtc, c->edr);
+    }
+    if (maxHeadroom <= 1 && !c->hasOwn)
+        c->crtc = NULL;
+    colorUpdateOutput(s);
+}
+
+/* How fast the EDR headroom moves: stops (doublings) per second, so
+   that the backlight and the dimming change together without a visible
+   jump */
+#define COLOR_EDR_STOPS_PER_SECOND 4.0
+
+/* The brightest content of the viewable windows on box, relative to SDR
+   white */
+static double
+colorContentPeakOn(ScreenPtr pScreen, const BoxRec *box)
+{
+    double peak = 1;
+
+    if (!colorTagged || !pScreen->root)
+        return 1;
+    for (WindowPtr top = pScreen->root->firstChild; top; top = top->nextSib) {
+        if (!top->viewable)
+            continue;
+        const BoxRec *b = RegionExtents(&top->borderSize);
+        if (b->x2 <= box->x1 || b->x1 >= box->x2 || b->y2 <= box->y1 || b->y1 >= box->y2)
+            continue;
+        for (WindowPtr w = top; w; w = colorNext(top, w)) {
+            const XpColorSpace *own = w->viewable ? colorOwn(w) : NULL;
+            if (own)
+                peak = fmax(peak, colorContentPeak(own));
+        }
+    }
+    return peak;
+}
+
+/* Aim each EDR CRTC's headroom at its brightest content and move it
+   there a step; tell the DDX. Called before each frame. */
+void
+compColorUpdateEDR(ScreenPtr pScreen)
+{
+    int s = pScreen->myNum;
+    CARD64 now = GetTimeInMicros();
+    bool changed = false;
+
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        ColorCrtcRec *c = &crtcSpaces[s][i];
+        if (!c->crtc || c->edrMax <= 1)
+            continue;
+        double target = 1;
+        if (c->crtc->mode && c->crtc->numOutputs) {
+            int w, h;
+            RRCrtcGetScanoutSize(c->crtc, &w, &h);
+            BoxRec box = { c->crtc->x, c->crtc->y, c->crtc->x + w, c->crtc->y + h };
+            target = fmin(colorContentPeakOn(pScreen, &box), c->edrMax);
+        }
+        if (target != c->edrTarget) {
+            c->edrTarget = target;
+            c->edrTime = now;   /* start moving from now */
+        }
+        if (c->edr == target)
+            continue;
+        /* at most a frame's worth of time, so that the first step after
+           a pause is no jump */
+        double dt = fmin((now - c->edrTime) / 1e6, 0.05);
+        double from = log2(c->edr), to = log2(target);
+        double step = COLOR_EDR_STOPS_PER_SECOND * dt;
+        if (step <= 0)
+            continue;
+        double l = to > from ? fmin(from + step, to) : fmax(from - step, to);
+        c->edr = fabs(l - to) < 0.01 ? target : exp2(l);
+        c->edrTime = now;
+        if (c->edrProc)
+            (*c->edrProc) (pScreen, c->crtc, c->edr);
+        changed = true;
+    }
+    if (changed)
+        colorUpdateOutput(s);
+}
+
+/* Whether a CRTC's EDR headroom is still on its way */
+bool
+compColorEDRMoving(ScreenPtr pScreen)
+{
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        ColorCrtcRec *c = &crtcSpaces[pScreen->myNum][i];
+        if (c->crtc && c->edrMax > 1 && c->edr != c->edrTarget)
+            return true;
+    }
+    return false;
+}
+
+/* The compositor stops (another one takes over, or it is turned off):
+   back to SDR at once */
+void
+compColorStopEDR(ScreenPtr pScreen)
+{
+    int s = pScreen->myNum;
+    bool changed = false;
+
+    for (int i = 0; i < COLOR_MAX_CRTCS; i++) {
+        ColorCrtcRec *c = &crtcSpaces[s][i];
+        if (!c->crtc || c->edr == 1)
+            continue;
+        c->edr = c->edrTarget = 1;
+        if (c->edrProc)
+            (*c->edrProc) (pScreen, c->crtc, 1);
+        changed = true;
+    }
+    if (changed)
+        colorUpdateOutput(s);
 }
 
 bool
@@ -369,6 +609,9 @@ colorShownAsIs(const XpColorSpace *cs, const XpColorSpace *out)
     /* PQ is absolute: the same reference white, no tone mapping */
     if (cs->transfer == XpColorTransferPQ)
         return cs->refWhite == out->refWhite && cs->maxLum <= out->maxLum;
+    /* SDR: the same headroom (EDR) */
+    if (cs->transfer != XpColorTransferHLG)
+        return xpColorHeadroom(cs) == xpColorHeadroom(out);
     return true;
 }
 
@@ -458,6 +701,7 @@ typedef struct {
     double knee, peak;          /* relative to the output's reference white */
     float toneLut[TONE_LUT + 1];
     bool encodeSRGB;            /* else xpColorEncode */
+    double encodeScale;         /* before encodeSRGB: 1 / EDR headroom */
     bool encodeHLG;             /* whole pixels: the OOTF needs luminance */
     /* converted pixels: UI contents repeat the same few colours */
     CARD32 cacheKey[COLOR_CACHE], cacheVal[COLOR_CACHE];
@@ -486,10 +730,10 @@ static bool
 colorTonePeaks(const XpColorSpace *cs, const XpColorSpace *out,
                double *srcMax, double *dstMax)
 {
-    /* HDR content, or linear light with values above reference white
-       (composed for an HDR output, shown on a dimmer one) */
-    if (cs->transfer != XpColorTransferPQ && cs->transfer != XpColorTransferHLG &&
-        !(cs->transfer == XpColorTransferLinear && cs->maxLum > cs->refWhite))
+    /* HDR content, linear light with values above reference white
+       (composed for an HDR output, shown on a dimmer one), or SDR with
+       EDR headroom */
+    if (colorContentPeak(cs) <= 1 || colorIsEDR(cs))
         return false;
     *srcMax = cs->maxLum;
     *dstMax = out->maxLum / out->refWhite * cs->refWhite;
@@ -511,7 +755,7 @@ colorConvInit(ColorConv *cv, const XpColorSpace *cs, const XpColorSpace *out)
         return false;
     for (int i = 0; i < 3; i++)
         cv->outLuma[i] = toXYZ[1][i];
-    cv->outPeak = colorIsHDR(out) ? out->maxLum / out->refWhite : 1;
+    cv->outPeak = colorPeak(out);
     cv->encodeHLG = out->transfer == XpColorTransferHLG;
     cv->hlg = cs->transfer == XpColorTransferHLG;
     for (int i = 0; i <= DECODE_LUT; i++)
@@ -528,6 +772,7 @@ colorConvInit(ColorConv *cv, const XpColorSpace *cs, const XpColorSpace *out)
         }
     }
     cv->encodeSRGB = out->transfer == XpColorTransferSRGB;
+    cv->encodeScale = 1 / xpColorHeadroom(out);
     if (encodeLut[ENCODE_LUT] == 0)
         for (int i = 0; i <= ENCODE_LUT; i++)
             encodeLut[i] = (float) xpColorEncode(&xpColorSpaceSRGB,
@@ -576,7 +821,7 @@ colorConvertPixel(const ColorConv *cv, const double in[3], double out[3])
     }
     for (int c = 0; c < 3; c++) {
         double v = y + s * (out[c] - y);
-        out[c] = cv->encodeSRGB ? lutGet(encodeLut, ENCODE_LUT, v) :
+        out[c] = cv->encodeSRGB ? lutGet(encodeLut, ENCODE_LUT, v * cv->encodeScale) :
             xpColorEncode(cv->out, v);
     }
 }
@@ -672,7 +917,7 @@ colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
     p->hlgGamma = (float) (1.2 + 0.42 * log10(cs->maxLum / 1000));
     p->outTransfer = out->transfer;
     p->outRefWhite = (float) out->refWhite;
-    p->outPeak = (float) (colorIsHDR(out) ? out->maxLum / out->refWhite : 1);
+    p->outPeak = (float) colorPeak(out);
     p->outMaxLum = (float) out->maxLum;
     p->outHlgGamma = (float) (1.2 + 0.42 * log10(out->maxLum / 1000));
     if (colorTonePeaks(cs, out, &srcMax, &dstMax)) {
@@ -687,12 +932,16 @@ colorAccelParams(const XpColorSpace *cs, const XpColorSpace *out,
     return true;
 }
 
-/* The output's linear light: its primaries, 1.0 = its reference white */
+/* The output's linear light: its primaries, 1.0 = its reference white.
+   Composed for EDR, what is above reference white clips on outputs with
+   less headroom (colorIsEDR): no peak to tone map from. */
 static XpColorSpace
 colorLinearOf(const XpColorSpace *out)
 {
     XpColorSpace lin = *out;
     lin.transfer = XpColorTransferLinear;
+    if (colorIsEDR(out))
+        lin.maxLum = lin.refWhite;
     return lin;
 }
 
@@ -756,8 +1005,7 @@ colorConvertRegion(PixmapPtr src, PictFormatPtr srcFormat, PixmapPtr dst,
             /* HLG's signal ends at the display's peak */
             params.outPeak = (float) (out->transfer == XpColorTransferPQ ?
                                       XpColorMaxLuminance / out->refWhite :
-                                      out->transfer == XpColorTransferHLG ?
-                                      out->maxLum / out->refWhite : 1);
+                                      colorPeak(out));
         if ((*accel) (src, dst, pRegion, &params))
             return;
     }

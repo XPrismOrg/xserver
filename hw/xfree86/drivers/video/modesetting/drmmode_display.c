@@ -61,6 +61,7 @@
 #include <X11/extensions/dpmsconst.h>
 
 #include "driver.h"
+#include "backlight.h"
 
 static Bool drmmode_xf86crtc_resize(ScrnInfoPtr scrn, int width, int height);
 static PixmapPtr drmmode_create_pixmap_header(ScreenPtr pScreen, int width, int height,
@@ -705,8 +706,48 @@ drmmode_output_hdr_probe(xf86OutputPtr output, xf86MonPtr mon)
     drmmode_output->hdr_capable = TRUE;
 }
 
+/* XPrism: EDR. The compositor's headroom for a CRTC: the backlights of
+   its outputs follow it. */
+static void
+drmmode_edr_headroom(ScreenPtr pScreen, RRCrtcPtr randr_crtc, double headroom)
+{
+    xf86CrtcPtr crtc = randr_crtc->devPrivate;
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(crtc->scrn);
+
+    for (int i = 0; i < xf86_config->num_output; i++) {
+        xf86OutputPtr output = xf86_config->output[i];
+        drmmode_output_private_ptr drmmode_output = output->driver_private;
+
+        if (output->crtc != crtc || !drmmode_output->edr || !drmmode_output->backlight)
+            continue;
+        if (!ms_backlight_apply(drmmode_output->backlight, headroom))
+            xf86DrvMsg(crtc->scrn->scrnIndex, X_WARNING,
+                       "%s: cannot set the backlight %s: no EDR\n", output->name,
+                       drmmode_output->backlight->name);
+    }
+}
+
+/* How much brighter than SDR white an output's panel can go: its
+   backlight's room above the user's brightness, at most EDRMaxHeadroom */
+static double
+drmmode_output_edr_max(xf86OutputPtr output)
+{
+    drmmode_output_private_ptr drmmode_output = output->driver_private;
+    double limit = 4;
+
+    if (!drmmode_output->edr || !drmmode_output->backlight)
+        return 1;
+    const OptionInfoRec *opt =
+        xf86TokenToOptinfo(drmmode_output->drmmode->Options, OPTION_EDR_MAX_HEADROOM);
+    if (opt && opt->found && opt->value.realnum >= 1)
+        limit = opt->value.realnum;
+    double h = ms_backlight_headroom(drmmode_output->backlight);
+    return h < limit ? h : limit;
+}
+
 /* Tell the compositor the space CRTC crtc shows: HDR if an output on it
-   is, else its wide gamut if asked for, else the screen's */
+   is, else its wide gamut if asked for, else the screen's; and how much
+   EDR headroom it has */
 static void
 drmmode_crtc_update_color_space(xf86CrtcPtr crtc)
 {
@@ -729,6 +770,75 @@ drmmode_crtc_update_color_space(xf86CrtcPtr crtc)
             space = &drmmode_output->wide_space;
     }
     CompositeSetCrtcColorSpace(crtc->scrn->pScreen, crtc->randr_crtc, space);
+
+    double edr = 1;
+    Bool hdr = FALSE;
+    for (int i = 0; i < xf86_config->num_output; i++) {
+        xf86OutputPtr output = xf86_config->output[i];
+        if (output->crtc != crtc)
+            continue;
+        double h = drmmode_output_edr_max(output);
+        edr = h > edr ? h : edr;
+        hdr = hdr || drmmode_output_hdr_on(output->driver_private);
+    }
+    if (hdr)                    /* HDR monitors have their own peak */
+        edr = 1;
+    CompositeSetCrtcEDR(crtc->scrn->pScreen, crtc->randr_crtc, edr,
+                        edr > 1 ? drmmode_edr_headroom : NULL);
+}
+
+/* Once a second: the user may have changed the brightness, which
+   changes how much headroom there is */
+static CARD32
+drmmode_edr_timer(OsTimerPtr timer, CARD32 now, void *arg)
+{
+    xf86OutputPtr output = arg;
+    drmmode_output_private_ptr drmmode_output = output->driver_private;
+    ms_backlight *bl = drmmode_output->backlight;
+
+    if (!bl || !drmmode_output->edr)
+        return 0;
+    if (output->scrn->vtSema && ms_backlight_update_user(bl)) {
+        xf86DrvMsg(output->scrn->scrnIndex, X_INFO,
+                   "%s: brightness %d of %d: EDR headroom %.2f\n", output->name,
+                   bl->user, bl->max, drmmode_output_edr_max(output));
+        if (output->crtc)
+            drmmode_crtc_update_color_space(output->crtc);
+        /* the raise, from the new brightness */
+        ms_backlight_apply(bl, bl->headroom);
+    }
+    return 1000;
+}
+
+static void
+drmmode_output_set_edr(xf86OutputPtr output, Bool on)
+{
+    drmmode_output_private_ptr drmmode_output = output->driver_private;
+    ms_backlight *bl = drmmode_output->backlight;
+
+    drmmode_output->edr = on && bl;
+    if (!bl)
+        return;
+    if (drmmode_output->edr) {
+        bl->timer = TimerSet(bl->timer, 0, 1000, drmmode_edr_timer, output);
+    } else {
+        TimerCancel(bl->timer);
+        ms_backlight_apply(bl, 1);
+    }
+    if (output->crtc)
+        drmmode_crtc_update_color_space(output->crtc);
+}
+
+void
+drmmode_edr_suspend(ScrnInfoPtr scrn, Bool suspend)
+{
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(scrn);
+
+    for (int i = 0; i < xf86_config->num_output; i++) {
+        drmmode_output_private_ptr drmmode_output = xf86_config->output[i]->driver_private;
+        if (drmmode_output && drmmode_output->backlight && drmmode_output->edr)
+            ms_backlight_suspend(drmmode_output->backlight, suspend);
+    }
 }
 
 static int
@@ -3447,6 +3557,10 @@ drmmode_output_destroy(xf86OutputPtr output)
     drmmode_output_private_ptr drmmode_output = output->driver_private;
     int i;
 
+    if (drmmode_output->backlight) {
+        ms_backlight_apply(drmmode_output->backlight, 1);       /* the user's */
+        ms_backlight_free(drmmode_output->backlight);
+    }
     drmModeFreePropertyBlob(drmmode_output->edid_blob);
     drmModeFreePropertyBlob(drmmode_output->tile_blob);
     if (drmmode_output->hdr_blob_id)
@@ -3589,6 +3703,19 @@ drmmode_output_create_resources(xf86OutputPtr output)
             !RRChangeOutputProperty(output->randr_output, name, XA_INTEGER, 32,
                                     PropModeReplace, 1, &value, FALSE, FALSE))
             drmmode_output->hdr_atom = name;
+    }
+
+    /* XPrism: EDR on or off, on built-in panels with a backlight */
+    if (drmmode_output->backlight) {
+        Atom name = dixAddAtom("EDR");
+        INT32 edr_range[2] = { 0, 1 }, value = drmmode_output->edr;
+
+        if (name != BAD_RESOURCE &&
+            !RRConfigureOutputProperty(output->randr_output, name, FALSE, TRUE,
+                                       FALSE, 2, edr_range) &&
+            !RRChangeOutputProperty(output->randr_output, name, XA_INTEGER, 32,
+                                    PropModeReplace, 1, &value, FALSE, FALSE))
+            drmmode_output->edr_atom = name;
     }
 
     /* XPrism: wide-gamut SDR on or off; on needs a wide-gamut EDID */
@@ -3746,6 +3873,18 @@ drmmode_output_set_property(xf86OutputPtr output, Atom property,
                 }
             }
         }
+    }
+
+    if (property && property == drmmode_output->edr_atom) {
+        if (value->type != XA_INTEGER || value->format != 32 || value->size != 1)
+            return FALSE;
+        Bool on = *(INT32 *) value->data != 0;
+        if (on != drmmode_output->edr) {
+            drmmode_output_set_edr(output, on);
+            xf86DrvMsg(output->scrn->scrnIndex, X_INFO, "%s: EDR %s\n",
+                       output->name, on ? "on" : "off");
+        }
+        return TRUE;
     }
 
     if (property && property == drmmode_output->wide_atom) {
@@ -4084,6 +4223,23 @@ drmmode_output_init(ScrnInfoPtr pScrn, drmmode_ptr drmmode, drmModeResPtr mode_r
     drmmode_output->hdr = drmmode_output->hdr_managed =
         xf86ReturnOptValBool(drmmode->Options, OPTION_HDR, FALSE);
     drmmode_output->wide = xf86ReturnOptValBool(drmmode->Options, OPTION_WIDE_GAMUT, FALSE);
+    /* EDR on built-in panels whose backlight can be found: off unless
+       Option "EDR" */
+    if (koutput->connector_type == DRM_MODE_CONNECTOR_eDP ||
+        koutput->connector_type == DRM_MODE_CONNECTOR_LVDS ||
+        koutput->connector_type == DRM_MODE_CONNECTOR_DSI) {
+        drmmode_output->backlight = ms_backlight_find(drmmode->fd);
+        if (drmmode_output->backlight)
+            xf86DrvMsg(pScrn->scrnIndex, X_INFO, "%s: backlight %s, brightness %d of %d\n",
+                       name, drmmode_output->backlight->name,
+                       drmmode_output->backlight->user, drmmode_output->backlight->max);
+        if (drmmode_output->backlight &&
+            xf86ReturnOptValBool(drmmode->Options, OPTION_EDR, FALSE)) {
+            drmmode_output->edr = TRUE;
+            drmmode_output->backlight->timer =
+                TimerSet(NULL, 0, 1000, drmmode_edr_timer, output);
+        }
+    }
     output->mm_width = koutput->mmWidth;
     output->mm_height = koutput->mmHeight;
 

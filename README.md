@@ -71,7 +71,9 @@ External compositors such as picom still work. See
 Windows can declare their colour space
 ([XPRISM-COLOR](doc/xprism-color-protocol.md)); the compositor converts
 them on the GPU and composes in linear light, for sRGB, wide-gamut and
-HDR (PQ, HLG) monitors, one space per monitor. See [doc/color.md](doc/color.md).
+HDR (PQ, HLG) monitors, one space per monitor. Laptop panels get
+extended dynamic range (EDR): the backlight goes up for HDR content
+while SDR content stays as it was. See [doc/color.md](doc/color.md).
 
 ### Modern display handling
 

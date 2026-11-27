@@ -302,13 +302,22 @@ xpColorEncodeRGB(const XpColorSpace *cs, const double in[3], double out[3])
 }
 
 double
+xpColorHeadroom(const XpColorSpace *cs)
+{
+    if ((cs->transfer != XpColorTransferSRGB && cs->transfer != XpColorTransferGamma22) ||
+        !(cs->refWhite > 0) || !(cs->maxLum > cs->refWhite))
+        return 1;
+    return cs->maxLum / cs->refWhite;
+}
+
+double
 xpColorDecode(const XpColorSpace *cs, double v)
 {
     switch (cs->transfer) {
     case XpColorTransferSRGB:
-        return srgbDecode(clamp01(v));
+        return srgbDecode(clamp01(v)) * xpColorHeadroom(cs);
     case XpColorTransferGamma22:
-        return pow(clamp01(v), 2.2);
+        return pow(clamp01(v), 2.2) * xpColorHeadroom(cs);
     case XpColorTransferLinear:
         return clamp01(v);
     case XpColorTransferPQ:
@@ -327,9 +336,9 @@ xpColorEncode(const XpColorSpace *cs, double l)
 {
     switch (cs->transfer) {
     case XpColorTransferSRGB:
-        return srgbEncode(clamp01(l));
+        return srgbEncode(clamp01(l / xpColorHeadroom(cs)));
     case XpColorTransferGamma22:
-        return pow(clamp01(l), 1 / 2.2);
+        return pow(clamp01(l / xpColorHeadroom(cs)), 1 / 2.2);
     case XpColorTransferLinear:
         return clamp01(l);
     case XpColorTransferPQ:

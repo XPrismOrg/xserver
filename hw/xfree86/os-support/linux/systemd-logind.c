@@ -225,6 +225,39 @@ close:
         close(fd);
 }
 
+/*
+ * XPrism: set a backlight's brightness through the session (logind's
+ * SetBrightness), for a server that cannot write to sysfs itself. Does
+ * not wait for the answer: it is called as often as every frame while
+ * EDR changes the brightness. 0 if sent, -1 without a session.
+ */
+int
+systemd_logind_set_brightness(const char *backlight, unsigned value)
+{
+    struct systemd_logind_info *info = &logind_info;
+    const char *subsystem = "backlight";
+    dbus_uint32_t v = value;
+    DBusMessage *msg;
+    int ret = -1;
+
+    if (!info->session || !info->conn)
+        return -1;
+    msg = dbus_message_new_method_call("org.freedesktop.login1", info->session,
+                                       "org.freedesktop.login1.Session", "SetBrightness");
+    if (!msg)
+        return -1;
+    dbus_message_set_no_reply(msg, TRUE);
+    if (dbus_message_append_args(msg, DBUS_TYPE_STRING, &subsystem,
+                                 DBUS_TYPE_STRING, &backlight,
+                                 DBUS_TYPE_UINT32, &v, DBUS_TYPE_INVALID) &&
+        dbus_connection_send(info->conn, msg, NULL)) {
+        dbus_connection_flush(info->conn);
+        ret = 0;
+    }
+    dbus_message_unref(msg);
+    return ret;
+}
+
 int
 systemd_logind_controls_session(void)
 {

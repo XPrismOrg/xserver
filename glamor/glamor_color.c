@@ -102,8 +102,10 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "}\n"                                                               \
     "vec3 color_decode(vec3 c) {\n"                                     \
     "  float tf = color_tf.x;\n"                                        \
-    "  if (tf < 0.5) return vec3(srgb_dec(c.r), srgb_dec(c.g), srgb_dec(c.b));\n" \
-    "  if (tf < 1.5) return pow(c, vec3(2.2));\n"                       \
+    /* SDR: times the EDR headroom, maxLum / refWhite (1 without) */  \
+    "  float h = max(color_tf.z / color_tf.y, 1.0);\n"                  \
+    "  if (tf < 0.5) return h * vec3(srgb_dec(c.r), srgb_dec(c.g), srgb_dec(c.b));\n" \
+    "  if (tf < 1.5) return h * pow(c, vec3(2.2));\n"                   \
     "  if (tf < 2.5) return c;\n"                                       \
     "  if (tf < 3.5)\n"                                                 \
     "    return vec3(pq_to_nits(c.r), pq_to_nits(c.g), pq_to_nits(c.b)) / color_tf.y;\n" \
@@ -114,6 +116,8 @@ use_color(DrawablePtr drawable, GCPtr gc, glamor_program *prog, void *arg)
     "}\n"                                                               \
     "vec3 color_encode(vec3 o) {\n"                                     \
     "  float tf = color_out.x;\n"                                       \
+    /* SDR: full scale is the peak, the EDR headroom (1 without) */    \
+    "  if (tf < 1.5) o /= color_out.z;\n"                               \
     "  if (tf < 0.5) return vec3(srgb_enc(o.r), srgb_enc(o.g), srgb_enc(o.b));\n" \
     "  if (tf < 1.5) return pow(o, vec3(1.0 / 2.2));\n"                 \
     "  if (tf < 2.5) return o;\n"                                       \

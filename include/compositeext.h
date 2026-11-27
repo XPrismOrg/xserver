@@ -122,6 +122,22 @@ extern _X_EXPORT void CompositeSetCrtcColorSpace(ScreenPtr pScreen, struct _rrCr
                                                  const CompositeColorSpaceRec *space);
 
 /*
+ * XPrism: extended dynamic range (EDR) on a CRTC showing an SDR space.
+ * maxHeadroom is how much brighter than SDR white its display can go by
+ * raising the backlight (1: no EDR). While content brighter than SDR
+ * white is on the CRTC, the compositor uses up to that much: it dims
+ * everything else by the headroom it uses and calls proc with it before
+ * each frame that changes it, and the DDX scales the backlight by it
+ * (1: as the user set it). The headroom changes gradually. Call again
+ * when the limit changes, for example because the user changed the
+ * brightness.
+ */
+typedef void (*CompositeEDRProcPtr) (ScreenPtr pScreen, struct _rrCrtc *crtc,
+                                     double headroom);
+extern _X_EXPORT void CompositeSetCrtcEDR(ScreenPtr pScreen, struct _rrCrtc *crtc,
+                                          double maxHeadroom, CompositeEDRProcPtr proc);
+
+/*
  * XPrism: for what is drawn over the composed screen, such as the
  * software cursor. CompositeOutputPixel: an sRGB pixel of the root
  * window's format as the output shows it (the pixel itself on sRGB

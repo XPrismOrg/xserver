@@ -1659,6 +1659,7 @@ sceneDeactivate(ScreenPtr pScreen, SceneScreenPtr ss)
         sceneDropWindowDamage(pWin);
     ss->active = false;
     ss->direct = None;
+    compColorStopEDR(pScreen);
     free(ss->nodes);
     ss->nodes = NULL;
     ss->numNodes = 0;
@@ -1912,6 +1913,9 @@ sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
         ss->fullDamage = true;
     }
     sceneInFrame = true;
+    /* EDR headroom first: it decides what the output shows, so also
+       whether a fullscreen window can be shown directly */
+    compColorUpdateEDR(pScreen);
     sceneUpdateDirect(pScreen, ss, !fromHook);
 
     /* Composed before a drawing operation on the root window, this frame
@@ -2013,6 +2017,9 @@ sceneBlockHandler(void *data, void *timeout)
             AdjustWaitForDelay(timeout, ss->due > now ?
                                (int) ((ss->due - now + 999) / 1000) : 0);
         }
+        /* EDR headroom on its way: a frame per step */
+        if (ss->active && compColorEDRMoving(pScreen))
+            AdjustWaitForDelay(timeout, 8);
     }
 }
 

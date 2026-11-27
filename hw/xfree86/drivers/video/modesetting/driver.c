@@ -160,6 +160,8 @@ static const OptionInfoRec Options[] = {
     {OPTION_VARIABLE_REFRESH, "VariableRefresh", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_HDR, "HDR", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_WIDE_GAMUT, "WideGamut", OPTV_BOOLEAN, {0}, FALSE},
+    {OPTION_EDR, "EDR", OPTV_BOOLEAN, {0}, FALSE},
+    {OPTION_EDR_MAX_HEADROOM, "EDRMaxHeadroom", OPTV_REAL, {0}, FALSE},
     {OPTION_USE_GAMMA_LUT, "UseGammaLUT", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_ASYNC_FLIP_SECONDARIES, "AsyncFlipSecondaries", OPTV_BOOLEAN, {0}, FALSE},
     {OPTION_TEARFREE, "TearFree", OPTV_BOOLEAN, {0}, FALSE},
@@ -2411,6 +2413,7 @@ LeaveVT(ScrnInfoPtr pScrn)
     xf86_hide_cursors(pScrn);
 
     pScrn->vtSema = FALSE;
+    drmmode_edr_suspend(pScrn, TRUE);
 
 #ifdef XF86_PDEV_SERVER_FD
     if (ms->pEnt->location.type == BUS_PLATFORM &&
@@ -2453,6 +2456,7 @@ EnterVT(ScrnInfoPtr pScrn)
         RRSetChanged(xf86ScrnToScreen(pScrn));
         xf86RandR12TellChanged(xf86ScrnToScreen(pScrn));
     }
+    drmmode_edr_suspend(pScrn, FALSE);
 
     return TRUE;
 }

@@ -121,6 +121,30 @@ precedence.
 The default is
 .B off.
 .TP
+.BI "Option \*qEDR\*q \*q" boolean \*q
+Extended dynamic range on built-in panels (eDP, LVDS, DSI) with a
+backlight in \fI/sys/class/backlight\fP: while a window shows content
+brighter than SDR white (HDR, or extended sRGB), the backlight is turned
+up from the user's brightness and the built-in compositor turns
+everything else down by as much, so that SDR content looks the same and
+the brighter content is brighter. The headroom is the backlight's
+maximum over the user's brightness, so there is none at full
+brightness. The brightness is written to sysfs, or through
+systemd-logind when the server does not run as root; changes the user
+makes are noticed within a second. Each such output has an \fBEDR\fP
+property (0 or 1) to change it at run time. HDR, where on, takes
+precedence.
+.br
+The default is
+.B off.
+.TP
+.BI "Option \*qEDRMaxHeadroom\*q \*q" real \*q
+The most EDR may raise the backlight, as a factor of the user's
+brightness.
+.br
+The default is
+.B 4.
+.TP
 .BI "Option \*qAsyncFlipSecondaries\*q \*q" boolean \*q
 Use async flips for secondary video outputs on multi-display setups. If a screen
 has multiple displays attached and DRI3 page flipping is used, then only one of

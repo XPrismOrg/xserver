@@ -183,6 +183,10 @@ in db2711525).
 - **HDR monitors** detected from their EDID and driven in BT.2020 with
   PQ or HLG (d4dd4ad1c), and **wide-gamut SDR monitors** shown in their
   own primaries (7278673f7). Both are off by default.
+- **Extended dynamic range (EDR)** on laptop panels: while a window
+  shows HDR or extended sRGB content, the backlight is raised and SDR
+  content dimmed by as much, so highlights are brighter and SDR white is
+  unchanged (`Option "EDR"`, off by default).
 - **Variable refresh rate** reaches the driver again: an XLibre bug
   dropped `_VARIABLE_REFRESH` whenever Xinerama was compiled in but not
   used (c362bc782).
@@ -207,7 +211,8 @@ manager (a7d77194a and following):
 - Xvfb gives each screen its own CRTCs, sized to the screen (1c2242b4e),
   and places Xinerama screens side by side (`-origin`, a096fe620).
 - Xvfb takes an output colour space per screen or per CRTC
-  (`-colorspace`, `-crtccolorspace`).
+  (`-colorspace`, `-crtccolorspace`), and simulates an EDR backlight
+  (`-edr`).
 - Explicit sync (`PresentPixmapSynced`) with Xvfb and glamor on a render
   node (906e39e52).
 - glamor runs Render's convolution filter on the GPU (1634f6162).

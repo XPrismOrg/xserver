@@ -164,6 +164,40 @@ the output's own space come back exactly from its black level up, so
 they look the same composited or shown directly. sRGB outputs still
 compose in sRGB, unchanged.
 
+### Extended dynamic range (EDR)
+
+An SDR display that is not at its full brightness can still show content
+brighter than SDR white: by turning the backlight up and every pixel
+down by the same factor, SDR white stays where it was and the rest of
+the range above it (the headroom) shows brighter content. This is what
+macOS calls EDR; XPrism does the same on SDR outputs that offer it.
+
+- **The colour space.** An SDR transfer function (sRGB, gamma 2.2) with
+  maxLum above refWhite has headroom H = maxLum / refWhite: full scale is
+  H times reference white (`xpColorHeadroom`, `xpColorDecode`,
+  `xpColorEncode`; unit-tested in `test/compcolor.c`). Windows can use
+  such a space too: extended sRGB.
+- **Only when needed.** The driver gives each CRTC the most headroom it
+  has (`CompositeSetCrtcEDR`). Each frame the compositor takes the
+  brightest content in a viewable window on that CRTC (HDR, linear or
+  EDR, relative to reference white), and moves the CRTC's headroom
+  towards it, at most that limit, at 4 stops a second so the change is
+  not seen. With only SDR windows, the headroom goes back to 1, the
+  output is plain sRGB, and fullscreen windows are shown directly again.
+- **The driver** is told each step (`CompositeEDRProcPtr`) and sets the
+  backlight to the user's brightness times it, while the compositor
+  encodes the frame for that headroom: SDR white looks the same, HDR
+  highlights are brighter.
+- **Clients** see the potential headroom in `GetOutputColorSpace` (maxLum
+  = refWhite times the limit), not each step.
+- **Brighter than there is room for**, content is clipped, not tone
+  mapped, as on macOS: SDR white stays exactly SDR white, also on CRTCs
+  without EDR.
+
+Xvfb has it too (`-edr H`, an `EDR` output property to change the limit
+and a read-only `EDR_BACKLIGHT` one showing the backlight factor), for
+the tests in `test/pyxtest/test_color_edr.py`.
+
 ### Monitors (modesetting driver)
 
 - HDR outputs: `Option "HDR"`, and an `HDR` output property to change it
@@ -181,3 +215,12 @@ compose in sRGB, unchanged.
   primaries are not always right. HDR takes precedence.
 - Hardware cursor images are converted for their CRTC's space
   (`CompositeCrtcConvertARGB`).
+- EDR on built-in panels (eDP, LVDS, DSI): `Option "EDR"`, and an `EDR`
+  output property. The panel's backlight is found in
+  `/sys/class/backlight` (firmware, else platform, else this GPU's raw
+  one); the headroom is its maximum over the user's brightness, at most
+  `Option "EDRMaxHeadroom"` (4). The brightness is written to sysfs, or
+  through logind's `SetBrightness` when the server is not root. The user
+  can still change the brightness: the driver checks once a second and
+  takes the new value as theirs. Leaving the VT or closing the server
+  puts the user's brightness back. HDR, where on, takes precedence.
