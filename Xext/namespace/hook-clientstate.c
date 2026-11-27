@@ -43,6 +43,7 @@ void hookClientState(CallbackListPtr *pcbl, void *unused, void *calldata)
         char * data = NULL;
         if (AuthorizationFromID(subj->authId, &name_len, &name, &data_len, &data)) {
             XnamespaceAssignClient(subj, XnsFindByAuth(name_len, name, data_len, data));
+            XnsClassifyClient(client, subj);
         } else {
             XNS_HOOK_LOG("no auth data - assuming anon\n");
         }

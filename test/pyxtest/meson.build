@@ -56,6 +56,7 @@ if pytest.found()
         'test_automation.py',
         'test_wx11.py',
      'test_clipboard_grants.py',
+     'test_flatpak_classify.py',
      'test_randr_access.py',
      'test_compositor.py',
      'test_color.py',

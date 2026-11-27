@@ -70,7 +70,8 @@ Notes:
 - Process hints are never used to grant anything. They are looked up by
   pid and can be forged by a process that controls its own cgroup or
   command line, so they serve logging and the fallback classification of
-  unlabeled clients only. Permissions are granted through labeled
+  unlabeled clients only (`classify` in the namespace configuration,
+  which only ever moves a client out of the root namespace). Permissions are granted through labeled
   sockets (X-NAMESPACE listeners). Where a pidfd is available,
   `pal_process_describe()` checks afterwards that the process still
   exists, so the result cannot describe an unrelated process that reused

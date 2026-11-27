@@ -160,7 +160,7 @@ complete for it; what they leave for later releases is listed with each.
 
 | Phase | Done in 26.11.01 | Later |
 |---|---|---|
-| I. Foundation | Codebase audit, security hooks, launcher-assigned identity, capabilities, platform abstraction layer, CI | Large clipboard transfers (INCR) between namespaces, Flatpak integration |
+| I. Foundation | Codebase audit, security hooks, launcher-assigned identity, capabilities, platform abstraction layer, CI, large clipboard transfers (INCR) between namespaces, Flatpak applications confined by their cgroup | |
 | II. Display | Atomic modesetting by default (mode changes, DPMS, screen saver, rotation and gamma tested in CI), per-output scheduling, variable refresh rate (tested on FreeSync) | Testing hotplug and multi-GPU on hardware |
 | III. Compositor | Server-side compositor controlled by the window manager ([XPRISM-SCENE](doc/xprism-scene-protocol.md)), explicit sync, direct scanout with page flips; tested on hardware | Direct scanout per monitor |
 | IV. Colour | Per-window colour spaces, sRGB, wide-gamut and HDR (PQ, HLG) outputs, HDR and wide gamut driven from the EDID, colour-converted cursors | fp16 scanout; trying an HDR monitor |

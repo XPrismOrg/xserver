@@ -39,6 +39,9 @@ struct Xnamespace {
     char *allowExtensions;      /* " NAME NAME ": unreviewed extensions its
                                    clients may use ("allow-extension") */
     Bool autoRemove;           /* destroy when the last client exits */
+    char *classifyEngine;       /* "classify ENGINE [APP]" (classify.c), or NULL */
+    char *classifyAppId;        /* that application only; NULL: a template */
+    char *classifiedFrom;       /* made by classify.c from this template */
     struct xorg_list auth_tokens;
     CARD32 tokenHandleSeq;      /* monotonic per-namespace handle counter */
     size_t refcnt;
@@ -81,6 +84,9 @@ Bool XnsSelReplyMayWatch(ClientPtr owner, Window requestor);
 Bool XnsSelReplyMayHear(ClientPtr owner, WindowPtr requestor, const xEvent *events, int count);
 Bool XnsSelReplyConsume(ClientPtr owner, WindowPtr dest, const xEvent *events, int count);
 void XnsSelReplyDropClient(ClientPtr client);
+
+/* unlabeled clients of a sandbox (Flatpak) into their namespace (classify.c) */
+void XnsClassifyClient(ClientPtr client, struct XnamespaceClientPriv *subj);
 void XnsAppInfoUnref(struct XnsAppInfo *app);
 
 struct XnamespaceClientPriv {

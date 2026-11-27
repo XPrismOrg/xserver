@@ -182,6 +182,25 @@ static void parseLine(char *line, struct Xnamespace **walk_ns)
         return;
     }
 
+    /* "classify flatpak [org.example.App]": unlabeled sandboxed clients
+       (classify.c) */
+    if (strcmp(token, "classify") == 0)
+    {
+        char *engine = strtok(NULL, " \t");
+        char *app = engine ? strtok(NULL, " \t") : NULL;
+        if (!engine || (app && strtok(NULL, " \t")))
+            XNS_LOG("classify takes an engine and maybe an application id\n");
+        else if (curr == &ns_root || curr->superPower)
+            XNS_LOG("classify: namespace \"%s\" confines nothing\n", curr->name);
+        else {
+            free(curr->classifyEngine);
+            free(curr->classifyAppId);
+            curr->classifyEngine = strdup(engine);
+            curr->classifyAppId = app ? strdup(app) : NULL;
+        }
+        return;
+    }
+
     /* "allow-extension NV-CONTROL ...": unreviewed extensions */
     if (strcmp(token, "allow-extension") == 0)
     {
@@ -554,6 +573,9 @@ void XnsDestroyNamespace(struct Xnamespace *ns)
     xorg_list_del(&ns->entry);
     free(ns->injectInto);
     free(ns->allowExtensions);
+    free(ns->classifyEngine);
+    free(ns->classifyAppId);
+    free(ns->classifiedFrom);
     free((void *) ns->name);
     free(ns);
 }

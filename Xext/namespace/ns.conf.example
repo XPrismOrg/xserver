@@ -35,3 +35,9 @@ namespace nvidia-settings root
 namespace editor-bot root
   auth MIT-MAGIC-COOKIE-1 46f8e62b78e58962de0ceefc05ad90c2
   inject-into editor
+
+# Flatpak applications (they bring the session's cookie): each gets a
+# namespace of its own made from this one (doc/Xnamespace.md)
+namespace flatpak root
+  classify flatpak
+  grant clipboard.read
