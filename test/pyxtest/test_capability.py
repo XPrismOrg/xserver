@@ -683,7 +683,7 @@ class TestExtensions:
     others (driver extensions, new ones) only if their namespace allows
     them."""
 
-    REVIEWED = {"BIG-REQUESTS", "Composite", "DAMAGE", "DOUBLE-BUFFER", "DRI2", "GLX",
+    REVIEWED = {"BIG-REQUESTS", "Composite", "DAMAGE", "DOUBLE-BUFFER", "DRI2", "DRI3", "GLX",
                 "Generic Event Extension", "MIT-SHM", "Present", "RANDR", "RENDER", "SYNC",
                 "X-Resource", "XC-MISC", "XFIXES", "XINERAMA", "XInputExtension",
                 "XKEYBOARD", "XPRISM-COLOR", "XPRISM-SCENE"}
