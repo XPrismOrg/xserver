@@ -81,7 +81,11 @@ class TestWithoutPacing:
 
     def test_composes_every_change(self, xvfb):
         frames, draws, _, _ = _frames_while_drawing(xvfb)
-        assert frames > 150, f"{frames} frames for {draws} draws"
+        # well above the paced maximum (80). Not more: frames are counted
+        # by millisecond timestamp, and where the server's clock moves in
+        # kernel ticks (FreeBSD's coarse clock, 10 ms in a VM) there are
+        # at most ~100 distinct ones a second
+        assert frames > 90, f"{frames} frames for {draws} draws"
 
 
 def test_held_back_damage_is_composed_when_due(xvfb, tmp_path):

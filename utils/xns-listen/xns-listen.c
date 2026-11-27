@@ -448,6 +448,13 @@ make_listening_socket(const char *path)
     return fd;
 }
 
+/* never runs (SIGCHLD stays blocked); its existence keeps the signal */
+static void
+on_sigchld(int sig)
+{
+    (void) sig;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -527,7 +534,16 @@ main(int argc, char **argv)
         check_app_string("--engine", engine))
         return 1;
 
-    /* signals are handled synchronously in the wait loop below */
+    /* signals are handled synchronously in the wait loop below. SIGCHLD
+       is ignored by default, and some kernels (OpenBSD) then discard it
+       even while it is blocked, so sigwait() would never see the command
+       exit: give it a handler, so that it stays pending. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
+
     sigset_t sigs;
     sigemptyset(&sigs);
     sigaddset(&sigs, SIGINT);
