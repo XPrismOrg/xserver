@@ -10,8 +10,9 @@ set -e
 
 os=$1
 ./.github/scripts/$os/install-pkg.sh
-# the unit tests compile XKB keymaps; upstream's FreeBSD list lacks the data
-if [ "$os" = freebsd ]; then
+# the unit tests compile XKB keymaps; upstream's FreeBSD and DragonFly
+# lists lack the data
+if [ "$os" = freebsd ] || [ "$os" = DragonFlyBSD ]; then
     pkg install -y xkeyboard-config
 fi
 
