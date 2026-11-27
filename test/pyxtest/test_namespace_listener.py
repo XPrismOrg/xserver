@@ -251,7 +251,10 @@ class TestNamespaceListener:
         assert (info["app_id"], info["instance_id"], info["engine"]) == (
             APP_ID, INSTANCE_ID, ENGINE)
         # the peer identity recorded at connect time: that's us
-        assert info["flags"] & INFO_PID and info["pid"] == os.getpid()
+        if PEER_PID_KNOWN:
+            assert info["flags"] & INFO_PID and info["pid"] == os.getpid()
+        else:
+            assert not info["flags"] & INFO_PID     # unknown, not made up
         assert info["flags"] & INFO_UID and info["uid"] == os.getuid()
 
     def test_regular_client_has_no_app_info(self, xserver):
