@@ -74,8 +74,11 @@ uint32_t XnsClientGrants(struct XnamespaceClientPriv *priv);
 /* Answering a SelectionRequest across namespaces (hook-selection.c): the
    owner may set the requested property on the requestor's window and send
    it one SelectionNotify, once per request. */
-Bool XnsSelReplyMayChangeProperty(ClientPtr owner, Window requestor, Atom property);
+Bool XnsSelReplyMayChangeProperty(ClientPtr owner, Window requestor, Atom property,
+                                  Bool last);
 Bool XnsSelReplyPending(ClientPtr owner, Window requestor);
+Bool XnsSelReplyMayWatch(ClientPtr owner, Window requestor);
+Bool XnsSelReplyMayHear(ClientPtr owner, WindowPtr requestor, const xEvent *events, int count);
 Bool XnsSelReplyConsume(ClientPtr owner, WindowPtr dest, const xEvent *events, int count);
 void XnsSelReplyDropClient(ClientPtr client);
 void XnsAppInfoUnref(struct XnsAppInfo *app);

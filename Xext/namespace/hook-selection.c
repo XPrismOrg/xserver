@@ -8,7 +8,10 @@
 
 #include "dix/capability_priv.h"
 #include "dix/dix_priv.h"
+#include "dix/resource_priv.h"
 #include "dix/selection_priv.h"
+#include "include/propertyst.h"
+#include "include/windowstr.h"
 
 #include "namespace.h"
 #include "hooks.h"
@@ -76,8 +79,13 @@ static Bool sessionSelectionGranted(struct XnamespaceClientPriv *subj,
  * allows ChangeProperty of exactly that property on that window, and one
  * SendEvent of a matching SelectionNotify to it, which uses the token up.
  *
- * Not covered: INCR transfers (large data in chunks; the owner would also
- * need PropertyNotify from the requestor's window).
+ * INCR (ICCCM 2.7.2, large data in chunks): if the property holds type
+ * INCR when the SelectionNotify goes out, the token becomes a transfer
+ * token instead of being used up. During the transfer the owner may
+ * select PropertyChangeMask (nothing else) on the requestor window, gets
+ * PropertyNotify for that one property only, and may write it again. The
+ * zero-length write that ends the transfer ends the token. Tokens also
+ * end when the owner or the requestor's client goes away.
  */
 #define SEL_REPLY_MAX 64
 
@@ -86,6 +94,7 @@ static struct {
     Window requestor;
     Atom selection;
     Atom property;
+    Bool transfer;          /* INCR transfer under way: no more notifies */
 } selReplies[SEL_REPLY_MAX];
 static unsigned selReplyNext;
 
@@ -103,23 +112,63 @@ static void selReplyAdd(ClientPtr owner, Window requestor, Atom selection, Atom 
     selReplies[selReplyNext].requestor = requestor;
     selReplies[selReplyNext].selection = selection;
     selReplies[selReplyNext].property = property;
+    selReplies[selReplyNext].transfer = FALSE;
     selReplyNext = (selReplyNext + 1) % SEL_REPLY_MAX;
 }
 
-Bool XnsSelReplyMayChangeProperty(ClientPtr owner, Window requestor, Atom property)
+Bool XnsSelReplyMayChangeProperty(ClientPtr owner, Window requestor, Atom property,
+                                  Bool last)
 {
-    for (unsigned i = 0; i < SEL_REPLY_MAX; i++)
+    for (unsigned i = 0; i < SEL_REPLY_MAX; i++) {
         if (selReplies[i].owner == owner && selReplies[i].requestor == requestor &&
-            selReplies[i].property == property)
+            selReplies[i].property == property) {
+            if (last && selReplies[i].transfer)
+                selReplies[i].owner = NULL;  /* the INCR transfer's end */
             return TRUE;
+        }
+    }
     return FALSE;
 }
 
 Bool XnsSelReplyPending(ClientPtr owner, Window requestor)
 {
     for (unsigned i = 0; i < SEL_REPLY_MAX; i++)
+        if (selReplies[i].owner == owner && selReplies[i].requestor == requestor &&
+            !selReplies[i].transfer)
+            return TRUE;
+    return FALSE;
+}
+
+Bool XnsSelReplyMayWatch(ClientPtr owner, Window requestor)
+{
+    for (unsigned i = 0; i < SEL_REPLY_MAX; i++)
         if (selReplies[i].owner == owner && selReplies[i].requestor == requestor)
             return TRUE;
+    return FALSE;
+}
+
+Bool XnsSelReplyMayHear(ClientPtr owner, WindowPtr requestor, const xEvent *events, int count)
+{
+    if (count != 1 || (events[0].u.u.type & 0x7f) != PropertyNotify ||
+        events[0].u.property.window != requestor->drawable.id)
+        return FALSE;
+    for (unsigned i = 0; i < SEL_REPLY_MAX; i++)
+        if (selReplies[i].owner == owner &&
+            selReplies[i].requestor == requestor->drawable.id &&
+            selReplies[i].property == events[0].u.property.atom)
+            return TRUE;
+    return FALSE;
+}
+
+/* the property on the window holds type INCR: a transfer starts */
+static Bool selIsIncr(WindowPtr pWin, Atom property)
+{
+    static Atom incr;
+    if (!incr)
+        incr = dixAddAtom("INCR");
+    for (PropertyPtr p = wUserProps(pWin); p; p = p->next)
+        if (p->propertyName == property)
+            return p->type == incr;
     return FALSE;
 }
 
@@ -135,9 +184,12 @@ Bool XnsSelReplyConsume(ClientPtr owner, WindowPtr dest, const xEvent *events, i
 
     for (unsigned i = 0; i < SEL_REPLY_MAX; i++) {
         if (selReplies[i].owner == owner && selReplies[i].requestor == requestor &&
-            selReplies[i].selection == selection &&
+            selReplies[i].selection == selection && !selReplies[i].transfer &&
             (property == None || property == selReplies[i].property)) {
-            selReplies[i].owner = NULL;
+            if (property != None && selIsIncr(dest, property))
+                selReplies[i].transfer = TRUE;
+            else
+                selReplies[i].owner = NULL;
             return TRUE;
         }
     }
@@ -146,8 +198,11 @@ Bool XnsSelReplyConsume(ClientPtr owner, WindowPtr dest, const xEvent *events, i
 
 void XnsSelReplyDropClient(ClientPtr client)
 {
+    /* the owner, or the requestor window's client (whose window ids may
+       be used again) */
     for (unsigned i = 0; i < SEL_REPLY_MAX; i++)
-        if (selReplies[i].owner == client)
+        if (selReplies[i].owner == client ||
+            dixClientIdForXID(selReplies[i].requestor) == client->index)
             selReplies[i].owner = NULL;
 }
 

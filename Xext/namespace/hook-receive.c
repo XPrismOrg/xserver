@@ -29,6 +29,10 @@ hookReceive(CallbackListPtr *pcbl, void *unused, void *calldata)
     if (XnsClientSameNS(subj, obj))
         goto pass;
 
+    /* PropertyNotify of the property an INCR transfer uses (hook-selection.c) */
+    if (XnsSelReplyMayHear(client, param->pWin, param->events, param->count))
+        goto pass;
+
     for (int i=0; i<param->count; i++) {
         const int type = param->events[i].u.u.type;
         switch (type) {

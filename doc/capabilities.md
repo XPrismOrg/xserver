@@ -183,11 +183,16 @@ may set the requested property on that window and send it one
 any second reply, is refused. Refused events are dropped without an
 error, as is usual for `SendEvent`.
 
+Large data goes in chunks (ICCCM `INCR`): when the owner's reply is an
+`INCR` property, the permission lasts for the transfer. The owner may
+then select `PropertyChangeMask` (and nothing else) on the requestor's
+window, receives `PropertyNotify` for that one property only, and may
+write it again; its zero-length write that ends the transfer ends the
+permission. Permissions also end when the owner or the requestor's
+client disconnects.
+
 Limitations:
 
-- Incremental (INCR) transfers from a confined owner to another
-  namespace do not work yet, because the owner would also need
-  `PropertyNotify` events from the requestor's window.
 - Transfers between two confined namespaces use the same mechanism but
   are not covered by tests yet.
 

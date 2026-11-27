@@ -53,8 +53,20 @@ void hookResourceAccess(CallbackListPtr *pcbl, void *unused, void *calldata)
         if (client->majorOp == X_ChangeProperty &&
             checkAllowed(param->access_mode, DixSetPropAccess)) {
             const xChangePropertyReq *req = client->requestBuffer;
+            /* a zero-length write ends an INCR transfer */
             if (req->window == param->id &&
-                XnsSelReplyMayChangeProperty(client, param->id, req->property))
+                XnsSelReplyMayChangeProperty(client, param->id, req->property,
+                                             req->nUnits == 0))
+                goto pass;
+        }
+        /* INCR: the owner watches the requestor delete the property */
+        if (client->majorOp == X_ChangeWindowAttributes &&
+            param->access_mode == DixReceiveAccess) {
+            const xChangeWindowAttributesReq *req = client->requestBuffer;
+            if (req->window == param->id && req->valueMask == CWEventMask &&
+                client->req_len == bytes_to_int32(sizeof(*req)) + 1 &&
+                (((const CARD32 *) &req[1])[0] & ~PropertyChangeMask) == 0 &&
+                XnsSelReplyMayWatch(client, param->id))
                 goto pass;
         }
         if (client->majorOp == X_SendEvent &&

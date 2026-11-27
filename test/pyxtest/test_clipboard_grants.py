@@ -291,3 +291,128 @@ class TestSelectionReplyIsNarrow:
             if seen[-1] == SELECTION_NOTIFY:
                 break
         assert 2 not in seen, "fake KeyPress was delivered"
+
+
+X_CHANGE_WINDOW_ATTRIBUTES = 2
+CW_EVENT_MASK = 1 << 11
+PROPERTY_CHANGE_MASK = 1 << 22
+KEY_PRESS_MASK = 1 << 0
+PROPERTY_NOTIFY = 28
+PROPERTY_DELETE = 1
+
+
+def _select(window, mask):
+    return struct.pack("<BxHIII", X_CHANGE_WINDOW_ATTRIBUTES, 4, window,
+                       CW_EVENT_MASK, mask)
+
+
+def _put(window, prop, ptype, data, fmt=8):
+    body = _pad(data)
+    return struct.pack("<BBHIIIBxxxI", X_CHANGE_PROPERTY, 0, 6 + len(body) // 4,
+                       window, prop, ptype, fmt, len(data) * 8 // fmt) + body
+
+
+def _take(conn, wid, prop):
+    """GetProperty with delete: (type, data)"""
+    seq = conn.send_request(struct.pack("<BBHIIIII", X_GET_PROPERTY, 1, 6,
+                                        wid, prop, 0, 0, 1 << 20))
+    r = _reply(conn, seq)
+    ptype, n = struct.unpack_from("<I", r.data, 8)[0], struct.unpack_from("<I", r.data, 16)[0]
+    return ptype, r.data[32:32 + n]
+
+
+def _property_event(conn, wid, prop, state, timeout=2.0):
+    """next PropertyNotify of *prop* on *wid* with *state*, or None"""
+    while True:
+        ev = _event(conn, PROPERTY_NOTIFY, timeout)
+        if ev is None:
+            return None
+        w, a = struct.unpack_from("<II", ev.data, 4)
+        if (w, a, ev.data[16]) == (wid, prop, state):
+            return ev
+
+
+class TestIncrTransfer:
+    """Large data from a confined owner to another namespace, in chunks
+    (ICCCM INCR): the owner watches the requestor delete each chunk."""
+
+    CHUNKS = [b"A" * 3000, b"B" * 3000, b"C" * 1234]
+
+    def _start(self, xserver):
+        writer = _connect(xserver, WRITER_COOKIE)
+        clip = writer.intern_atom("CLIPBOARD")
+        _set_owner(writer, writer.create_window(), clip)
+        session = _connect(xserver, SESSION_COOKIE)
+        swid = session.create_window()
+        prop = session.intern_atom("XPRISM_PASTE")
+        incr = session.intern_atom("INCR")
+        session.send_request(_select(swid, PROPERTY_CHANGE_MASK))
+        assert _owner(session, clip) != 0  # round trip, and no error before it
+        _convert(session, swid, clip, prop)
+        assert _event(writer, SELECTION_REQUEST) is not None
+        self.session = session
+        return writer, swid, clip, prop, incr
+
+    def _begin(self, writer, swid, clip, prop, incr):
+        """the owner's INCR reply; the session takes the INCR property"""
+        assert _errors(writer, _select(swid, PROPERTY_CHANGE_MASK)) == []
+        total = sum(map(len, self.CHUNKS))
+        assert _errors(writer, _put(swid, prop, incr, struct.pack("<I", total), 32)) == []
+        assert _errors(writer, _notify(swid, clip, prop)) == []
+        assert _event(self.session, SELECTION_NOTIFY) is not None
+        ptype, _ = _take(self.session, swid, prop)
+        assert ptype == incr
+
+    def _chunk(self, writer, swid, prop, data, heard=True):
+        """the owner hears the deletion (unless *heard* is False: already
+        swallowed by _errors) and writes *data*; the session takes it"""
+        if heard:
+            assert _property_event(writer, swid, prop, PROPERTY_DELETE) is not None, \
+                "owner never heard the deletion"
+        assert _errors(writer, _put(swid, prop, ATOM_STRING, data)) == []
+        assert _property_event(self.session, swid, prop, 0) is not None
+        ptype, got = _take(self.session, swid, prop)
+        assert ptype == ATOM_STRING
+        return got
+
+    def test_chunks_arrive(self, xserver):
+        writer, swid, clip, prop, incr = self._start(xserver)
+        self._begin(writer, swid, clip, prop, incr)
+        got = b"".join(self._chunk(writer, swid, prop, c) for c in self.CHUNKS)
+        assert got == b"".join(self.CHUNKS)
+        assert self._chunk(writer, swid, prop, b"") == b""
+        # the transfer is over: the token is gone
+        assert _errors(writer, _put(swid, prop, ATOM_STRING, b"more")) in DENIED
+        assert _errors(writer, _notify(swid, clip, prop)) in DENIED
+        assert _errors(writer, _select(swid, PROPERTY_CHANGE_MASK)) in DENIED
+
+    def test_transfer_is_narrow(self, xserver):
+        writer, swid, clip, prop, incr = self._start(xserver)
+        other = self.session.intern_atom("XPRISM_OTHER")
+        self._begin(writer, swid, clip, prop, incr)
+        # property changes only, one property, no second notify
+        assert _errors(writer, _select(swid, PROPERTY_CHANGE_MASK | KEY_PRESS_MASK)) in DENIED
+        assert _errors(writer, _put(swid, other, ATOM_STRING, b"x")) in DENIED
+        assert _errors(writer, _notify(swid, clip, prop)) in DENIED
+        # and hears nothing of the requestor's other properties
+        self.session.send_request(_put(swid, other, ATOM_STRING, b"private"))
+        assert _property_event(writer, swid, other, 0, timeout=1.0) is None
+        assert self._chunk(writer, swid, prop, b"still works", heard=False) == b"still works"
+
+    def test_no_watching_without_incr(self, xserver):
+        writer, swid, clip, prop, incr = self._start(xserver)
+        assert _errors(writer, _put(swid, prop, ATOM_STRING, b"small")) == []
+        assert _errors(writer, _notify(swid, clip, prop)) == []
+        assert _errors(writer, _select(swid, PROPERTY_CHANGE_MASK)) in DENIED
+
+    def test_ends_with_the_requestor(self, xserver):
+        """the requestor's client goes: its window ids may come back"""
+        writer, swid, clip, prop, incr = self._start(xserver)
+        self._begin(writer, swid, clip, prop, incr)
+        self.session.close()
+        writer.flush_responses(timeout=0.3)  # the server has seen it go
+        session = _connect(xserver, SESSION_COOKIE)
+        # the next session client gets the same window id back
+        assert session.create_window() == swid
+        assert _owner(session, clip) != 0
+        assert _errors(writer, _put(swid, prop, ATOM_STRING, b"x")) in DENIED
