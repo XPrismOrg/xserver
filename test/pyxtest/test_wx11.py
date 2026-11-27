@@ -675,12 +675,13 @@ class TestSandbox:
             p.wait_for("pasted into the box")
 
 
-def _answer_incr(conn, chunks):
-    """X owner side: answer the next SelectionRequest in INCR chunks"""
+def _answer_incr(conn, chunks, utf8, incr):
+    """X owner side: answer the next SelectionRequest in INCR chunks. The
+    atoms are interned beforehand: a round trip here would take the
+    request, if it came first, for its reply."""
     from test_clipboard_grants import (SELECTION_REQUEST, PROPERTY_CHANGE_MASK,
                                        PROPERTY_DELETE, _event, _notify, _property_event,
                                        _put, _select)
-    utf8, incr = conn.intern_atom("UTF8_STRING"), conn.intern_atom("INCR")
     ev = _event(conn, SELECTION_REQUEST, timeout=5.0)
     assert ev is not None, "WX11 did not ask the X owner"
     _t, _w, requestor, sel, _target, prop = struct.unpack_from("<IIIIII", ev.data, 4)
@@ -697,12 +698,13 @@ def test_large_x_copy_pastes_in_wayland(xserver, client):
     """large X selections come in chunks (INCR)"""
     from test_clipboard_grants import _set_owner
     owner = RawX11Connection(xserver.display_num)
+    utf8, incr = owner.intern_atom("UTF8_STRING"), owner.intern_atom("INCR")
     _set_owner(owner, owner.create_window(), owner.intern_atom("CLIPBOARD"))
     c, win = _shown(xserver, client, "big paster", "--paste")
     Input(xserver).focus(win)
     c.wait_for("keyboard enter")
     chunks = [b"a" * 20000, b"b" * 20000, b"c" * 20000]
-    _answer_incr(owner, chunks)
+    _answer_incr(owner, chunks, utf8, incr)
     c.wait_for("pasted " + b"".join(chunks).decode(), timeout=15)
 
 
