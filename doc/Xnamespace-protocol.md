@@ -1,5 +1,5 @@
-Xnamespace protocol extension — design v0.1 (DRAFT)
-===================================================
+X-NAMESPACE protocol extension, version 1.2
+===========================================
 
 This document specifies an X11 protocol extension for the Xnamespace
 feature. Its purpose is to let an authorized management client
@@ -17,8 +17,8 @@ The wire protocol mirrors the existing in-memory model (`struct Xnamespace`
 in `Xext/namespace/namespace.h`) so the extension stays a thin, auditable
 layer over data the server already maintains.
 
-Status: DESIGN DRAFT. Opcodes, encodings and the capability bit layout are
-not yet frozen.
+Status: implemented in XPrism (`Xext/namespace/proto.c`), version 1.2.
+Additions keep compatibility and raise the minor version (section 5).
 
 
 1. Goals and non-goals
@@ -36,7 +36,7 @@ Goals:
  * Auto-remove a namespace when its last client exits (transient
    namespaces for transient containers).
 
-Non-goals (decided, not just deferred):
+Not provided, by design:
 
  * **No persistence.** Xservers never persist state; runtime changes live
    only in memory. The config file remains the boot-time seed and is never
@@ -153,7 +153,7 @@ bumping the minor version.
 5. Versioning
 -------------
 
-`QueryVersion` negotiates (major, minor). This document is major 1, minor 0.
+`QueryVersion` negotiates (major, minor). This document is major 1, minor 2.
 The client sends the highest version it supports; the server replies with
 the highest it supports that is not greater than the client's.
 
@@ -185,6 +185,15 @@ Minor opcodes:
  |   7    | `RemoveAuthToken`    | yes (ack) |
  |   8    | `ListAuthTokens`     | yes   |
  |   9    | `GetClientNamespace` | yes   |
+ |  10    | `AddListener` (1.1)  | yes   |
+ |  11    | `RemoveListener` (1.1) | yes (ack) |
+ |  12    | `GetClientInfo` (1.1) | yes  |
+ |  13    | `SetNamespaceGrants` (1.1) | yes (ack) |
+ |  14    | `SetPermissionAgent` (1.2) | no |
+ |  15    | `AnswerPermission` (1.2) | no |
+ |  16    | `SetNamespaceInjectScope` (1.2) | yes (ack) |
+
+Event 0 (since 1.2) is `PermissionRequest`, section 6.16.
 
 ### 6.0 QueryVersion
 
@@ -387,7 +396,7 @@ of a sandbox and used from anywhere, a socket path can be kept inside it.
    They are the launcher's claim; the server can't verify them.
  * The ceiling is the most a client from the socket may ever hold: it
    holds its namespace's grants AND the ceiling, even after the namespace
-   is granted more. This is AD-2's capability ceiling: a launcher can add
+   is granted more. This is the capability ceiling: a launcher can add
    a socket to a shared namespace without handing out everything that
    namespace may later be granted.
  * Clients on the socket need no other authorization, and the
@@ -568,67 +577,34 @@ The extension defines no new error codes; it reuses core errors:
  * `BadAlloc`  — out of memory.
 
 
-8. Mapping to the existing implementation
------------------------------------------
+8. Implementation
+-----------------
 
-Registered like any other extension (`AddExtension`, cf.
-`Xext/dpms/dpms.c:515`) from `NamespaceExtensionInit()` in
-`Xext/namespace/namespace.c`, after `XnsLoadConfig()` succeeds — no point
-exposing management when namespaces are disabled.
+The extension is registered by `NamespaceExtensionInit()`
+(`Xext/namespace/namespace.c`) once the namespace configuration has
+loaded; without namespaces there is nothing to manage. The requests are
+in `Xext/namespace/proto.c`, the wire format in
+`Xext/namespace/namespaceproto.h`.
 
- | Protocol concept       | Existing code                                   |
+ | Protocol concept       | Code                                            |
  | ---------------------- | ----------------------------------------------- |
  | namespace record       | `struct Xnamespace` (`namespace.h`)             |
- | capability bits        | `allow*` / `superPower` bool fields             |
- | find by name           | `XnsFindByName()`                               |
- | create namespace       | `select_ns()` logic, factored out of `config.c` |
- | add token              | `AddAuthorization()` + `xorg_list_append`       |
- | remove token           | `RemoveAuthorization()` + `xorg_list_del`       |
+ | capability bits        | `allow*` / `superPower` fields                  |
+ | grants                 | `xpcaps` (`dix/capability_priv.h`)              |
+ | find by name           | `XnsFindByName()` (`config.c`)                  |
+ | name check             | `validateName()` (`config.c`)                   |
+ | listeners              | `Xext/namespace/listener.c`, `os/listener.c`    |
  | client → namespace     | `XnsClientPriv()->ns`                           |
- | refcount               | `struct Xnamespace.refcnt`                      |
 
-Required changes:
+The config file and the protocol share one set of setters, so a namespace
+created either way behaves the same. Only management clients (those in a
+`superpower` namespace) see the extension: `hook-ext-access.c` hides it
+from everyone else and `hook-ext-dispatch.c` refuses their requests with
+`BadAccess`. Everything runs in the single-threaded dispatch loop, so no
+locking is needed.
 
- 1. **Access gate.** Add `Xnamespace-mgmt` to the blacklist in both
-    `hook-ext-access.c` (invisible to non-superPower) and
-    `hook-ext-dispatch.c` (`BadAccess` on dispatch), alongside
-    `SECURITY`/`RECORD`/`XTEST`.
- 2. **Shared setters.** Factor the per-field parsing in `parseLine()` into
-    helpers (`XnsCreateNamespace`, `XnsSetCaps`, `XnsAddToken`,
-    `XnsRemoveToken`) so the config loader and the protocol handlers share
-    one code path and cannot drift apart.
- 3. **Removable tokens.** Add an opaque per-namespace `token-handle` to
-    `struct auth_token` and support unlinking + `RemoveAuthorization()`
-    (today tokens are only ever appended at boot).
- 4. **New attribute fields.** `Bool builtin` already exists; add
-    `Bool autoRemove`. Set `builtin` for `root`/`anon`.
- 5. **Auto-remove.** Centralise in `XnamespaceAssignClient()`: after the
-    `priv->ns->refcnt--` path, if the namespace is non-builtin, has
-    `autoRemove` set, and refcnt reached 0, destroy it (free tokens via
-    `RemoveAuthorization()`, unlink from `ns_list`, free). This is reached
-    naturally from `hookClientDestroy()`, which already calls
-    `XnamespaceAssignClient(subj, NULL)`. `root`/`anon` are safe because
-    they are builtin and start at `refcnt = 1`.
- 6. **Client termination on delete.** For `DeleteNamespace onclients=1`,
-    walk clients whose `XnsClientPriv()->ns` matches and close them
-    (`CloseDownClient`), then free the namespace.
- 7. **Dispatch.** A `ProcXnsDispatch` / `SProcXnsDispatch` pair with the
-    usual byte-swapped variants for each request.
-
-Serialization: everything runs in the single-threaded dispatch loop, so no
-locking is needed. Refcount and list mutations are safe as they happen only
-from request handlers and the existing callbacks.
-
-
-9. Remaining minor questions
-----------------------------
-
- 1. **Reserved name charset.** `'/'` is reserved for nesting. Confirm the
-    full allowed charset (proposal: printable ASCII excluding whitespace,
-    `#`, and `/`) so protocol-created names round-trip through the config
-    grammar.
- 2. **Auto-remove vs. explicit delete race.** If a transient namespace
-    auto-removes just before a manager issues `DeleteNamespace`, the delete
-    sees no such name and returns `BadName`. Is that acceptable (treat as
-    "already gone, success") or should auto-removed names linger briefly?
-    Proposal: `BadName` is fine; the namespace is gone either way.
+Names are printable ASCII without whitespace, `#` (which starts a comment
+in the config file) or `/` (kept for nesting), at most 255 bytes, so a
+name created through the protocol can also be written in the config
+file. A `DeleteNamespace` that races with a transient namespace removing
+itself gets `BadName`; the namespace is gone either way.

@@ -25,7 +25,7 @@ expected to work on SchOS.
    layer is for behaviour that genuinely differs between systems.
 4. The layer belongs to the server as a whole, not to one DDX. XLibre's
    `hw/xfree86/os-support` serves only the Xorg DDX, and kdrive has its
-   own copy; the new display code planned for Phase II uses neither.
+   own copy; new code uses neither.
 5. Modules without a backend still build and return `-ENOTSUP`, so that
    callers can already be written against the interface.
 
@@ -42,13 +42,13 @@ expected to work on SchOS.
 
 ## Backends
 
-The identity column and the Linux process hint are implemented. The rest
-of the table is the plan for Phase II.
+The identity and process hint columns are implemented. The other columns
+list the backends each module is meant to use; they are not written yet.
 
 | | Identity | Process hint | Session | Devices | Input | Restrict |
 |---|---|---|---|---|---|---|
 | Linux, SchOS | `SO_PEERCRED`, `SO_PEERPIDFD` | cgroup (Flatpak and Snap scopes) | libseat, logind | udev | libinput | Landlock |
-| FreeBSD | `LOCAL_PEERCRED` (pid from 13.0) | jail (planned) | libseat (seatd) | devd, sysctl | libinput (evdev) | Capsicum, limited |
+| FreeBSD | `LOCAL_PEERCRED` (pid from 13.0) | none (jails not yet detected) | libseat (seatd) | devd, sysctl | libinput (evdev) | Capsicum, limited |
 | DragonFly | `LOCAL_PEERCRED` | none | libseat (seatd) | devd | libinput (evdev) | none |
 | OpenBSD | `SO_PEERCRED` | none | direct, or libseat if available | hotplug(4), `/dev/drm*` | wscons | pledge, unveil |
 | NetBSD | `LOCAL_PEEREID` | none | libseat (seatd) or direct | drvctl, hotplug | wscons | none |
@@ -65,8 +65,8 @@ Notes:
   devices module adds what libdrm does not provide: seat assignment, the
   boot display flag and hotplug notification.
 - Input uses libinput where the kernel provides evdev (Linux, FreeBSD,
-  DragonFly) and wscons on OpenBSD and NetBSD. The input stack itself is
-  Phase V work; for now the layer only reports which backend applies.
+  DragonFly) and wscons on OpenBSD and NetBSD. For now the layer only
+  reports which backend applies.
 - Process hints are never used to grant anything. They are looked up by
   pid and can be forged by a process that controls its own cgroup or
   command line, so they serve logging and the fallback classification of
@@ -87,7 +87,7 @@ contain OS `#if`s (see `test/os-ifdefs.baseline`):
 | Peer credentials | `os/access.c` | identity; `GetLocalClientCreds()` already reads the stored identity |
 | Console, VT, power management, bell | `hw/xfree86/os-support/*`, `hw/xfree86/common/xf86Init.c` | session |
 | Device and bus discovery | `hw/xfree86/common/xf86AutoConfig.c`, `xf86pciBus.c`, `xf86platformBus.c`, `xf86Configure.c`, `config/udev.c`, `config/wscons.c` | devices |
-| Input devices | `hw/kdrive/os/linux/*`, `config/wscons.c` | input backend (Phase V) |
+| Input devices | `hw/kdrive/os/linux/*`, `config/wscons.c` | input backend |
 | Privilege handling | `hw/xfree86/xorg-wrapper.c`, `os/utils.c` | session, restrict |
 | Sockets and transport | `os/Xtranssock.c`, `os/Xtransutil.c`, `os/connection.c` | stays; portability code (rule 3) |
 | Other portability code | `include/compiler.h`, `os/xsha1.c`, `os/backtrace.c`, `os/inputthread.c`, `Xext/shm/shm.c` | stays, or becomes `HAVE_*` checks |

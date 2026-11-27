@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# WX11 (wx11/, DECISIONS.md AD-3): Wayland toplevels as X windows. Runs
+# WX11 (wx11/README.md): Wayland toplevels as X windows. Runs
 # wx11 against the test server and wx11-test-client against wx11.
 # Skipped unless wx11 is built (cargo build in wx11/, or WX11_DIR set to
 # its target directory).

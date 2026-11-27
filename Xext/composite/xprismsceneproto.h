@@ -3,7 +3,7 @@
  * XPRISM-SCENE protocol, version 0.3 (wire format).
  *
  * The window manager describes how the server's scene compositor shows
- * each top-level window; the server does the pixels (AD-1). See
+ * each top-level window; the server does the pixels. See
  * doc/xprism-scene-protocol.md.
  */
 #ifndef XPRISM_SCENE_PROTO_H

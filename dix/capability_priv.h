@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT OR X11
  *
- * XPrism capabilities: the permission model from idea.txt section 7.
+ * XPrism capabilities: the permission model of doc/capabilities.md.
  *
  * Each capability is checked at the place in the server where the
  * protocol actually does the thing (see dix/capability.c for the map). A
@@ -35,7 +35,7 @@ enum xp_cap {
     XP_CAP_CLIPBOARD_READ,      /* read PRIMARY / SECONDARY / CLIPBOARD */
     XP_CAP_CLIPBOARD_WRITE,     /* own PRIMARY / SECONDARY / CLIPBOARD */
     XP_CAP_DISPLAY_CONFIGURE,   /* change outputs / CRTCs (RandR) */
-    XP_CAP_COMPOSITOR_LEGACY,   /* run an external compositor (AD-1);
+    XP_CAP_COMPOSITOR_LEGACY,   /* run an external compositor;
                                    implies capture.screen and capture.window */
     XP_CAP_COUNT
 };
@@ -120,7 +120,7 @@ void XpCapBeginRequest(ClientPtr client);
 void XpCapEndRequest(ClientPtr client, int *result);
 
 /*
- * Scoped automation (idea.txt section 8). A client without input.inject
+ * Scoped automation. A client without input.inject
  * whose policy gives it an inject scope may still use XTest, through a
  * seat of its own (a master pointer and keyboard the server makes on its
  * first injection, and removes when it goes), so it does not take over

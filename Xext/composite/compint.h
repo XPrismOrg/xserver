@@ -241,7 +241,7 @@ PixmapPtr compColorConvertedCopy(ScreenPtr pScreen, PixmapPtr src, PictFormatPtr
 bool compColorOutputIsSRGB(ScreenPtr pScreen);
 /* an sRGB colour as the output shows it, in format's layout */
 CARD32 compColorConvertPixel(ScreenPtr pScreen, PictFormatPtr format, CARD32 pixel);
-/* composition in linear light (doc/color.md step 4) */
+/* composition in linear light (doc/color.md, "Composition in linear light") */
 bool compColorLinear(ScreenPtr pScreen);
 bool compColorShownAsIs(WindowPtr top);
 PixmapPtr compColorFloatPixmap(ScreenPtr pScreen, int w, int h);

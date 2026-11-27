@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Colour spaces and conversions for the built-in compositor (Phase IV,
- * doc/color.md). Pure arithmetic, no server state, so that it can be
- * unit tested and later turned into shader or lookup-table form.
+ * Colour spaces and conversions for the built-in compositor (doc/color.md).
+ * Pure arithmetic, no server state, so that it can be unit tested and
+ * later turned into shader or lookup-table form.
  *
  * Linear light is relative: 1.0 is the colour space's reference white
  * (SDR white). Absolute luminance (cd/m^2) appears only where a transfer

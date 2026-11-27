@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * XPRISM-COLOR (Phase IV, doc/color.md): applications describe the colour
+ * XPRISM-COLOR (doc/color.md): applications describe the colour
  * space of their windows' pixels, and the scene compositor shows them
  * converted for the output.
  *

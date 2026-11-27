@@ -35,7 +35,7 @@ XnsClientGrants(struct XnamespaceClientPriv *priv)
 
     uint32_t grants = priv->ns->superPower ? XP_CAP_ALL : priv->ns->xpcaps;
     if (priv->app)
-        grants &= priv->app->ceiling;   /* the launcher's limit (AD-2) */
+        grants &= priv->app->ceiling;   /* the launcher's limit */
     return grants;
 }
 

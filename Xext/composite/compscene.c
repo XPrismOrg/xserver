@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * XPrism scene compositor (AD-1, Phase III).
+ * XPrism scene compositor (doc/compositor.md).
  *
  * The server owns final composition. When enabled (-compositor on), the
  * server itself holds the Manual redirection of every top-level window,
@@ -2062,7 +2062,7 @@ compSceneResume(ClientPtr pClient, WindowPtr pWin)
 /* ---- XPRISM-SCENE protocol -------------------------------------------- */
 
 /* The window manager: the client holding SubstructureRedirect on the
-   window's root. Only it may describe the scene (AD-1). */
+   window's root. Only it may describe the scene. */
 static bool
 sceneClientIsWM(ClientPtr client, WindowPtr pWin)
 {

@@ -1,10 +1,9 @@
 # WX11
 
-Wayland applications as X11 windows on XPrism (DECISIONS.md AD-3,
-Phase VI). WX11 is a Wayland compositor whose only backend is the X
-server: each `xdg_toplevel` becomes a real X window that any X11 window
-manager manages. It runs as a separate process, comparable to XWayland
-in reverse, and is built on [Smithay](https://github.com/Smithay/smithay).
+Wayland applications as X11 windows on XPrism. WX11 is a Wayland
+compositor whose only backend is the X server: each `xdg_toplevel`
+becomes a real X window that any X11 window manager manages. It runs as a separate process,
+comparable to XWayland in reverse, and is built on [Smithay](https://github.com/Smithay/smithay).
 
 ```
 cargo build --release

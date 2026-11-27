@@ -187,7 +187,7 @@ pal_cmdline_of_processes(void)
 static void
 pal_stub_modules_report_unsupported(void)
 {
-    /* until the Phase II backends land */
+    /* until the real backends are written */
     struct pal_session *s = (struct pal_session *) 0x1;
     assert(pal_session_open(NULL, NULL, &s) == -ENOTSUP && s == NULL);
     struct pal_device_monitor *m = (struct pal_device_monitor *) 0x1;

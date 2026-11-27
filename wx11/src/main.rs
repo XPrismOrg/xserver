@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// WX11: a Wayland compositor whose only backend is the XPrism server
-// (DECISIONS.md AD-3). Each xdg_toplevel becomes a real X window that any
-// X11 window manager manages; its buffers are drawn into that window.
+// WX11: a Wayland compositor whose only backend is the XPrism server.
+// Each xdg_toplevel becomes a real X window that any X11 window manager
+// manages; its buffers are drawn into that window.
 //
 // Buffers are copied in with PutImage. Input comes from the X window's
 // core events: the X server has already decided which client gets it, so

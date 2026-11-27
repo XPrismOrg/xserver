@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 #
 # XPRISM-COLOR 0.2: outputs in colour spaces other than sRGB (Xvfb
-# -colorspace, doc/color.md step 3). The compositor shows every window,
+# -colorspace, doc/color.md, "Output colour spaces"). The compositor shows every window,
 # described or not, converted for the output; windows in the output's
 # own space are shown as they are, and can be shown directly.
 #

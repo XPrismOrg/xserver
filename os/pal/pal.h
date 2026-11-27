@@ -19,7 +19,7 @@
  *   restrict   interface     pal_restrict_self()  (no-op backend)
  *
  * "interface" modules compile and return "not supported" until their
- * Phase II backends land, so callers can be written against them now.
+ * backends are written, so callers can be written against them now.
  *
  * Conventions: functions returning int return 0 or a negative errno
  * value. Strings returned in structs are owned by the struct and freed by
@@ -53,7 +53,7 @@ const char *pal_platform_input_backend(void);
 
 /* ------------------------------------------------------------------ *
  *  process: what a peer process is, best effort, for logs and for
- *  classifying unlabeled clients (AD-2, "peer credentials" fallback).
+ *  classifying unlabeled clients (the "classify" fallback).
  *  Never a basis for granting anything: all of it can be spoofed or is
  *  racy, which is why the security model uses labeled sockets instead.
  * ------------------------------------------------------------------ */

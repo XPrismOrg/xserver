@@ -688,7 +688,7 @@ remove_seats_of(ClientPtr client)
         }
 }
 
-/* legacy compatibility (idea.txt section 7) is explicit, never silent:
+/* legacy compatibility is explicit, never silent:
    every client with unrestricted access is on record, and so is a server
    with no policy at all */
 static void

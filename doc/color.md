@@ -1,12 +1,12 @@
-# Colour management, wide gamut and HDR (Phase IV design)
+# Colour management, wide gamut and HDR
 
-Status: being implemented. Steps 1 to 4 are done, step 5 in part: the colour library
-(`Xext/composite/compcolor.[ch]`, tested by `test/compcolor.c`),
-[XPRISM-COLOR 0.3](xprism-color-protocol.md) with window descriptions
-and an event when an output's space changes,
-output colour spaces in Xvfb, including HDR (PQ and HLG) outputs, and, with
-glamor, composition in linear light in half float; the conversion runs
-on the GPU with glamor. The modesetting driver remains, see Steps.
+XPrism's built-in compositor shows each window in the colour space of the
+monitor it is on. Applications describe their windows' colour spaces
+with [XPRISM-COLOR](xprism-color-protocol.md); the compositor converts
+them, on the GPU with glamor, and composes in linear light. Outputs can
+be sRGB, wide-gamut SDR or HDR (PQ or HLG), one space per monitor. What
+is implemented and what is not is listed under
+[Implementation](#implementation).
 
 ## Goals
 
@@ -23,9 +23,9 @@ on the GPU with glamor. The modesetting driver remains, see Steps.
   nothing of this: untagged windows are sRGB, and with only sRGB outputs
   composition gives exactly today's pixels.
 
-Non-goals for Phase IV: ICC profiles evaluated in the server (clients
-and colour daemons keep doing that, as with `_ICC_PROFILE` today),
-calibration, and colour management without the built-in compositor.
+Not covered: ICC profiles evaluated in the server (clients and colour
+daemons keep doing that, as with `_ICC_PROFILE` today), calibration, and
+colour management without the built-in compositor.
 
 ## Model
 
@@ -46,7 +46,7 @@ which also fixes the darkened edges of today's blending in sRGB), and
 encoded for each output (3x3 matrix, gamut and tone mapping where the
 output cannot show the content, encode the output's transfer function).
 
-As built (step 4), with one colour space per screen, that linear light
+With one colour space per screen, that linear light
 has the output's primaries, and gamut and tone mapping happen when each
 window is converted into it, so that blending (which only mixes colours
 the output can show) needs none and the encoding of each frame is the
@@ -70,7 +70,7 @@ and nothing costs more.
 
 ### Windows: XPRISM-COLOR
 
-A new extension, kept apart from XPRISM-SCENE because applications use
+An extension kept apart from XPRISM-SCENE because applications use
 it, not the window manager:
 
 - `QueryVersion`
@@ -78,14 +78,14 @@ it, not the window manager:
   the description is the parameters above. Applies to the window's
   contents; child windows inherit it unless they set their own.
 - `GetWindowColorSpace(window)`
-- `GetOutputColorSpace(output)` (step 3): what the compositor targets on
+- `GetOutputColorSpace(output)`: what the compositor targets on
   a RandR output, so that applications can choose what to render (for
   example render HDR only where some output can show it), and an event
   when it changes.
 
 Content in wide-gamut or HDR spaces needs more than 8 bits per channel:
-applications use depth-30 visuals (10 bits per channel) as today, and a
-later step adds 16-bit floating point formats (see Rendering).
+applications use depth-30 visuals (10 bits per channel) as today. Inside
+the compositor, glamor uses 16-bit floating point (see Rendering).
 
 ### Outputs: RandR properties
 
@@ -105,70 +105,79 @@ The compositor chooses its target for each output from these.
 The composition path needs pixel formats beyond Render's 8 and 10 bits
 per channel:
 
-1. Done, with glamor: half float (RGBA16F) pixmaps, internal to the
+1. With glamor: half float (RGBA16F) pixmaps, internal to the
    compositor (clients never see them). For Render they are depth-32
    a8r8g8b8 pictures; glamor stores them as half float, and code that
    reads or writes their pixels as 8-bit ARGB (software fallbacks)
    still works, at 8 bits. Desktop GL 3.0 renders to them; GLES would
    need half float pixel transfers, and keeps composing in the output's
    encoding.
-2. Software composition in linear light (fb would need 64-bit-per-pixel
-   pixmaps; pixman has a16b16g16r16 and rgba_float) is not done: without
-   glamor, the compositor composes in the output's encoding.
-3. KMS scanout of 10-bit and fp16 framebuffers, with direct scanout of
-   windows whose colour space matches the output.
+2. Without glamor, the compositor composes in the output's encoding.
+   Composition in linear light in software is not implemented (fb would
+   need 64-bit-per-pixel pixmaps; pixman has a16b16g16r16 and
+   rgba_float).
+3. Not implemented: KMS scanout of fp16 framebuffers.
 
-## Steps
+## Implementation
 
-Each step is tested on Xvfb (software and glamor on a render node),
-apart from the KMS parts, which need a display device and wait, like
-Phase II, for vkms in CI or real hardware.
+Everything below is tested on Xvfb, in software and with glamor on a
+render node. The modesetting parts that need a monitor are covered in
+CI on vkms, which has no EDID and no HDR properties, so HDR and wide
+gamut on a real monitor are not yet tested.
 
-1. Done: the colour model and conversions as a library with unit tests
-   (descriptions, matrices, transfer functions, tone mapping), checked
-   against reference values: the sRGB and Bradford-adapted D50 matrices,
-   BT.2087's BT.709 to BT.2020, ST 2084's PQ curve and BT.2408's
-   reference white for PQ and HLG, and the BT.2390 EETF's knee and
-   peak.
-2. Done: XPRISM-COLOR window descriptions
-   ([xprism-color-protocol.md](xprism-color-protocol.md)); the compositor
-   converts described windows for sRGB outputs, with gamut mapping and
-   tone mapping of HDR content to SDR white, on the GPU with glamor and
-   on the CPU otherwise. Composition
-   stays in sRGB; composition in linear light comes with the
-   64-bit-per-pixel buffers of step 3.
-3. Done: output colour spaces in Xvfb (`-colorspace`, per screen),
-   `GetOutputColorSpace`, and composition for wide-gamut SDR and for
-   HDR (PQ and HLG) outputs: every window is converted into the
-   output's space and composed in its encoding; windows already in it
-   are shown as they are, and can be shown directly. HLG outputs encode
-   with the inverse of the BT.2100 OOTF for their peak, so SDR white is
-   75% signal on a 1000 cd/m² display (BT.2408); HLG content goes to
-   them unchanged, as HLG is scene-referred.
-4. Done: composition in linear light with glamor, on outputs other
-   than sRGB: windows, the root background and shadows are converted to
-   the output's linear light in half float, blended there (translucent
-   windows, shadows, background blur), and each frame is encoded for
-   the output once. Values above SDR white are kept (HDR), and ARGB
-   windows on HDR outputs keep more than 8 bits. Windows in the
-   output's own space come back exactly from its black level up, so
-   they look the same composited or shown directly. sRGB outputs still
-   compose in sRGB, unchanged.
-5. modesetting, in part: HDR outputs (`Option "HDR"`, and an `HDR`
-   output property per output to change it at run time). Where the
-   monitor's EDID offers BT.2020 RGB with PQ or HLG
-   (`xf86MonitorHDRColorSpace`, unit-tested in `test/ddc-tests.c`) and
-   the connector has `Colorspace` and `HDR_OUTPUT_METADATA`, the mode
-   set sends BT.2020 RGB with the monitor's metadata and `max bpc` 10,
-   and the compositor shows that CRTC in the monitor's HDR space (one
-   space per CRTC). Checked on vkms only so far (which has neither
-   property, nor an EDID): it needs an HDR monitor. Wide-gamut SDR
-   monitors (`Option "WideGamut"`, and a `WIDE_GAMUT` output property):
-   where the EDID's primaries cover at least 1.1 times sRGB's area and
-   it does not say the monitor shows sRGB by default
-   (`xf86MonitorSDRColorSpace`), the compositor shows that CRTC in those
-   primaries with gamma 2.2, so sRGB content is no longer
-   oversaturated. Nothing changes for the monitor; off by default, as
-   EDID primaries are not always right. HDR takes precedence. Hardware
-   cursor images are converted for their CRTC's space
-   (`CompositeCrtcConvertARGB`). Remaining: fp16 scanout.
+### Colour library
+
+The colour model and conversions are a library without server state
+(`Xext/composite/compcolor.[ch]`), unit-tested in `test/compcolor.c`:
+descriptions, matrices, transfer functions and tone mapping, checked
+against reference values. These are the sRGB and Bradford-adapted D50
+matrices, BT.2087's BT.709 to BT.2020, ST 2084's PQ curve, BT.2408's
+reference white for PQ and HLG, and the BT.2390 EETF's knee and peak.
+
+### Window colour spaces
+
+Applications describe their windows with XPRISM-COLOR
+([xprism-color-protocol.md](xprism-color-protocol.md)). The compositor
+converts described windows for the output, with gamut mapping and tone
+mapping of HDR content to SDR white, on the GPU with glamor and on the
+CPU otherwise.
+
+### Output colour spaces
+
+Xvfb takes an output colour space per screen (`-colorspace`) or per CRTC
+(`-crtccolorspace`), and `GetOutputColorSpace` reports it. The
+compositor handles wide-gamut SDR and HDR (PQ and HLG) outputs: every
+window is converted into the output's space; windows already in it are
+shown as they are, and can be shown directly. HLG outputs encode with the
+inverse of the BT.2100 OOTF for their peak, so SDR white is 75% signal on
+a 1000 cd/m² display (BT.2408); HLG content goes to them unchanged, as
+HLG is scene-referred.
+
+### Composition in linear light
+
+With glamor, on outputs other than sRGB, windows, the root background
+and shadows are converted to the output's linear light in half float and
+blended there (translucent windows, shadows, background blur), and each
+frame is encoded for the output once. Values above SDR white are kept
+(HDR), and ARGB windows on HDR outputs keep more than 8 bits. Windows in
+the output's own space come back exactly from its black level up, so
+they look the same composited or shown directly. sRGB outputs still
+compose in sRGB, unchanged.
+
+### Monitors (modesetting driver)
+
+- HDR outputs: `Option "HDR"`, and an `HDR` output property to change it
+  at run time. Where the monitor's EDID offers BT.2020 RGB with PQ or HLG
+  (`xf86MonitorHDRColorSpace`, unit-tested in `test/ddc-tests.c`) and the
+  connector has `Colorspace` and `HDR_OUTPUT_METADATA`, the mode set
+  sends BT.2020 RGB with the monitor's metadata and `max bpc` 10, and the
+  compositor shows that CRTC in the monitor's HDR space.
+- Wide-gamut SDR monitors: `Option "WideGamut"`, and a `WIDE_GAMUT`
+  output property. Where the EDID's primaries cover at least 1.1 times
+  sRGB's area and it does not say the monitor shows sRGB by default
+  (`xf86MonitorSDRColorSpace`), the compositor shows that CRTC in those
+  primaries with gamma 2.2, so sRGB content is no longer oversaturated.
+  Nothing changes for the monitor. It is off by default, because EDID
+  primaries are not always right. HDR takes precedence.
+- Hardware cursor images are converted for their CRTC's space
+  (`CompositeCrtcConvertARGB`).

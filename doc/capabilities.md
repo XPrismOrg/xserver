@@ -112,7 +112,7 @@ rules. A request has to pass both.
 ### Legacy clients
 
 Applications that need traditional, unrestricted X11 get it explicitly,
-never silently (idea.txt section 7, AD-2):
+never silently:
 
 - A client authenticated with a cookie of the root namespace, or of
   another `superpower` namespace, has unrestricted access. Each such
@@ -149,7 +149,7 @@ session is confined can run in a namespace of its own marked
 | `clipboard.read` | `ConvertSelection` on the session's `PRIMARY`, `SECONDARY` and `CLIPBOARD` | See below. |
 | `clipboard.write` | `SetSelectionOwner` on the same selections | See below. |
 | `display.configure` | RandR requests that change the configuration: `SetScreenSize`, `SetCrtcConfig`, gamma, transforms, panning, primary output, modes, output and provider properties, monitors, leases | Checked when the request is dispatched. RandR also looks up the objects it modifies with write access, so other XACE policies such as SELinux see the change as a write. |
-| `compositor.legacy` | Manual Composite redirection of a root window's children, which is how an external compositor (picom, KWin, Mutter) takes over from the [built-in compositor](compositor.md) | Also grants `capture.screen` and `capture.window`, because a compositor sees every window. At present only unconfined clients are able to redirect a root window, so this check has no effect until session clients are confined (Phase V). |
+| `compositor.legacy` | Manual Composite redirection of a root window's children, which is how an external compositor (picom, KWin, Mutter) takes over from the [built-in compositor](compositor.md) | Also grants `capture.screen` and `capture.window`, because a compositor sees every window. At present only unconfined clients are able to redirect a root window, so this check matters only once a session runs its compositor confined. |
 
 "Another client's" resource is one whose XID belongs to a different
 client or to the server. A client never needs a capability to access its
@@ -250,8 +250,8 @@ every capability mode, since it is part of the namespace isolation.
 
 ## Extensions
 
-Every extension built into XPrism has been reviewed for confined clients
-(Phase V). Those not listed here, such as driver extensions or new ones,
+Every extension built into XPrism has been reviewed for confined
+clients. Those not listed here, such as driver extensions or new ones,
 are hidden from confined clients unless their namespace names them with
 `allow-extension NAME ...`. That keyword can't reopen the hidden ones in
 the first group of the table.

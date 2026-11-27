@@ -22,9 +22,9 @@ abilities available, but the server decides which clients hold them, based
 on a policy set by the user or the sandbox that launched the application.
 
 XPrism runs as a regular X server with everything XLibre provides, and
-adds the features below. It is young: the protocols it adds may still
-change, and the hardware paths have been tried on few machines (see
-[Status](#status)).
+adds the features below. [CHANGES-FROM-XORG.md](CHANGES-FROM-XORG.md)
+lists every difference from the X.Org Server, including what was
+removed.
 
 The current version is **26.11.01**. Versions are `YY.MM.NN`, the NNth
 release of that month, with `.PP` added for patch releases (`26.11.01.01`).
@@ -89,18 +89,18 @@ apply to it like to any X client, and sandboxed ones (via
 
 ### Platform abstraction layer
 
-Operating-system specific code (process information, sandbox detection,
-and later session and device handling) is kept behind one interface with
-a backend per OS. See [doc/pal.md](doc/pal.md).
+Operating-system specific code, such as peer credentials, process
+information and sandbox detection, is kept behind one interface with a
+backend per OS. See [doc/pal.md](doc/pal.md).
 
 ## Supported platforms
 
 | Platform | Status |
 |---|---|
-| Linux | Built and tested in CI |
-| FreeBSD | Built and unit-tested in CI |
-| OpenBSD | Built in CI |
-| NetBSD, DragonFly BSD | Built and unit-tested in CI |
+| Linux | Full test suite in CI, tested on real hardware |
+| FreeBSD, OpenBSD, NetBSD, DragonFly BSD | Built and tested in CI (the Python test suite on Xvfb) |
+
+macOS and Windows, which XLibre supports, are not supported.
 
 ## Building
 
@@ -155,19 +155,35 @@ applications in a sandbox, see the bubblewrap example in
 
 ## Status
 
-The first release is **26.11.01**. The eight development phases are
-complete for it; what they leave for later releases is listed with each.
+The current release is **26.11.01**, the first.
 
-| Phase | Done in 26.11.01 | Later |
-|---|---|---|
-| I. Foundation | Codebase audit, security hooks, launcher-assigned identity, capabilities, platform abstraction layer, CI, large clipboard transfers (INCR) between namespaces, Flatpak applications confined by their cgroup | |
-| II. Display | Atomic modesetting by default (mode changes, DPMS, screen saver, rotation and gamma tested in CI), per-output scheduling, variable refresh rate (tested on FreeSync) | Testing hotplug and multi-GPU on hardware |
-| III. Compositor | Server-side compositor controlled by the window manager ([XPRISM-SCENE](doc/xprism-scene-protocol.md)), explicit sync, direct scanout with page flips; tested on hardware | Direct scanout per monitor |
-| IV. Colour | Per-window colour spaces, sRGB, wide-gamut and HDR (PQ, HLG) outputs, HDR and wide gamut driven from the EDID, colour-converted cursors | fp16 scanout; trying an HDR monitor |
-| V. Permissions | Capabilities enforced by default, permission prompts ([xprism-permission-agent](utils/xprism-permission-agent/README.md)), application-scoped keyboard, focus and input, virtual seats, extension audit ([doc/capabilities.md](doc/capabilities.md)) | |
-| VI. Wayland | [WX11](wx11/README.md): toplevels, popups kept on screen, input, clipboard and primary selection, transparency, one X connection per application, sandboxes through security contexts | Zero-copy dma-buf and Present, touch, subsurfaces, drag and drop |
-| VII. Portability | Linux, FreeBSD, OpenBSD, NetBSD and DragonFly BSD built and unit-tested in CI | The test suite on the BSDs, hardware validation on more GPUs |
-| VIII. Release | Versioning, Code of Conduct, contributing guide, Arch packaging (`.github/arch`), full test suite green | |
+Every push is built and tested in CI. On Linux this is the full test
+suite, run with the built-in compositor on and off: XPrism's own tests,
+piglit, the X Test Suite, and display tests on a virtual KMS device. The
+BSDs run the Python test suite. Every security check has a test, which
+is shown to fail when the check is removed.
+
+The display paths have been tried on real hardware: a desktop with an
+AMD Renoir GPU and a FreeSync monitor, and a laptop with an AMD integrated GPU driving
+the panel and an NVIDIA GPU rendering through PRIME. Mode changes, VRR,
+VT switching, direct scanout of fullscreen windows, the compositor's
+effects and Wayland applications through WX11 all worked; the results
+were checked against the kernel's own display state. The test suite
+also passes with glamor on both GPUs.
+
+Not yet done or not yet tested:
+
+- **Display:** HDR and wide-gamut output on a real monitor; scanout of
+  16-bit floating point framebuffers; direct scanout of a window that
+  covers only one of several monitors; GPU hotplug on real hardware.
+- **WX11:** zero-copy buffers (dma-buf and Present), touch,
+  subsurfaces, and drag and drop.
+- **Platform layer:** session and device handling (the interface exists,
+  without backends).
+
+The protocols XPrism adds (X-NAMESPACE 1.2, XPRISM-SCENE 0.4,
+XPRISM-COLOR 0.3) may still change before they reach version 1.0, apart
+from X-NAMESPACE, whose changes keep compatibility.
 
 ## Documentation
 
@@ -175,11 +191,12 @@ complete for it; what they leave for later releases is listed with each.
 - [doc/Xnamespace.md](doc/Xnamespace.md): namespaces and their configuration
 - [doc/Xnamespace-protocol.md](doc/Xnamespace-protocol.md): the X-NAMESPACE extension
 - [doc/compositor.md](doc/compositor.md): the server-side compositor
-- [doc/color.md](doc/color.md): colour management, wide gamut and HDR (design)
+- [doc/color.md](doc/color.md): colour management, wide gamut and HDR
 - [doc/xprism-color-protocol.md](doc/xprism-color-protocol.md): the XPRISM-COLOR extension
 - [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md): the XPRISM-SCENE extension
 - [doc/pal.md](doc/pal.md): the platform abstraction layer
 - [wx11/README.md](wx11/README.md): WX11, Wayland applications on XPrism
+- [CHANGES-FROM-XORG.md](CHANGES-FROM-XORG.md): every difference from the X.Org Server
 - [CODE_OVERVIEW.md](CODE_OVERVIEW.md): layout of the source tree
 
 ## Contributing

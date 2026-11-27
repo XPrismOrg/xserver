@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# Composition in linear light (doc/color.md step 4): on outputs other
+# Composition in linear light (doc/color.md, "Composition in linear light"): on outputs other
 # than sRGB, with glamor, the compositor blends windows in a half float
 # buffer in the output's linear light and encodes the result once. These
 # tests need a GPU (--xvfb-args='-glamor -dri /dev/dri/renderD128') and

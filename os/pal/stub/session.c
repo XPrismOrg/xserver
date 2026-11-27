@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT OR X11
  *
- * PAL session/devices/restrict: stub backend, until the Phase II
+ * PAL session/devices/restrict: stub backend, until the real
  * backends (libseat, logind, udev, devd, hotplug(4), pledge, Landlock)
  * land. Everything reports "not supported"; restrict does nothing.
  */

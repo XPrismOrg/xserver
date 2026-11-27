@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# Scoped automation (idea.txt section 8, dix/capability.c): a namespace
+# Scoped automation (doc/capabilities.md, dix/capability.c): a namespace
 # with "inject-into app" may use XTest without input.inject, through a
 # seat of its own, and only into the windows of namespace "app".
 
