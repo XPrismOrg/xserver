@@ -233,6 +233,20 @@ def _notify(requestor, sel, prop):
     return struct.pack("<BBHII", X_SEND_EVENT, 0, 11, requestor, 0) + ev
 
 
+def test_unowned_selection_notify_names_the_selection(xserver):
+    """Pasting a selection nobody owns answers SelectionNotify, property
+    None, for the selection the client asked: not its namespace's
+    internal name (once named it twice, so the paste never finished)."""
+    conn = _connect(xserver, SANDBOX_COOKIE)
+    wid = conn.create_window()
+    clip = conn.intern_atom("CLIPBOARD")
+    _convert(conn, wid, clip, conn.intern_atom("XPRISM_PASTE"))
+    ev = _event(conn, SELECTION_NOTIFY)
+    assert ev is not None, "no SelectionNotify"
+    requestor, selection, _target, prop = struct.unpack_from("<IIII", ev.data, 8)
+    assert (requestor, selection, prop) == (wid, clip, 0)
+
+
 class TestSelectionReplyIsNarrow:
     """What a confined owner may do to the requestor's window: set the one
     requested property and send one SelectionNotify, nothing else."""

@@ -373,8 +373,12 @@ ProcConvertSelection(ClientPtr client)
     }
 
     /* If no owner for the specified selection exists, the X server generates
-       a SelectionNotify event to the requestor with property None. */
+       a SelectionNotify event to the requestor with property None.
+       The filter already rewrote the selection for the request (e.g. into
+       an Xnamespace's own); as a notify it maps it back to the name the
+       client asked for, instead of rewriting it a second time. */
     param.property = None;
+    param.op = SELECTION_FILTER_NOTIFY;
     CallCallbacks(&SelectionFilterCallback, &param);
     if (param.skip) {
         if (param.status != Success)
