@@ -199,6 +199,7 @@ manager (a7d77194a and following):
 
 - toplevels and popups, with popups kept on screen;
 - keyboard and pointer input;
+- one output (`wl_output`, `xdg_output`): the X screen;
 - clipboard and primary selection between Wayland and X applications,
   including large transfers;
 - transparency (ARGB windows);

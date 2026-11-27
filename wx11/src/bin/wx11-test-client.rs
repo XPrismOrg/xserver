@@ -6,7 +6,9 @@
 // for a size asked for, "closed" when asked to close (then exits), and the
 // input it gets: "keymap", "keyboard enter|leave", "key CODE pressed|released"
 // (evdev codes), "modifiers DEPRESSED", "pointer enter X Y", "pointer leave",
-// "motion X Y", "button CODE pressed|released", "axis vertical|horizontal V".
+// "motion X Y", "button CODE pressed|released", "axis vertical|horizontal V";
+// "output W H" and "output size MMW MMH" for the wl_output, "surface
+// enter output" when its window is on it.
 //
 // With --popup WxH+X+Y it opens a popup at X, Y of the window once that is
 // drawn, or, with --grab, as a grabbing menu when the window is clicked:
@@ -39,7 +41,8 @@ use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
     wl_buffer, wl_callback, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
-    wl_data_source, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
+    wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
+    wl_surface,
 };
 use wayland_client::{
     delegate_noop, event_created_child, Connection, Dispatch, QueueHandle, WEnum,
@@ -228,6 +231,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 "wl_seat" => app.seat = Some(registry.bind(name, 5, qh, ())),
+                "wl_output" => {
+                    let _: wl_output::WlOutput = registry.bind(name, 2, qh, ());
+                }
                 "wl_data_device_manager" => app.data_manager = Some(registry.bind(name, 3, qh, ())),
                 "zwp_primary_selection_device_manager_v1" => {
                     app.primary_manager = Some(registry.bind(name, 1, qh, ()))
@@ -656,7 +662,49 @@ delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(App: ignore wl_shm::WlShm);
 delegate_noop!(App: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(App: ignore wl_buffer::WlBuffer);
-delegate_noop!(App: ignore wl_surface::WlSurface);
+
+/// "output W H" for the current mode, "output size MMW MMH"
+impl Dispatch<wl_output::WlOutput, ()> for App {
+    fn event(
+        _: &mut App,
+        _: &wl_output::WlOutput,
+        event: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        match event {
+            wl_output::Event::Mode {
+                flags: WEnum::Value(f),
+                width,
+                height,
+                ..
+            } if f.contains(wl_output::Mode::Current) => say(format!("output {width} {height}")),
+            wl_output::Event::Geometry {
+                physical_width,
+                physical_height,
+                ..
+            } => say(format!("output size {physical_width} {physical_height}")),
+            _ => {}
+        }
+    }
+}
+
+/// "surface enter output" when the window is said to be on the output
+impl Dispatch<wl_surface::WlSurface, ()> for App {
+    fn event(
+        _: &mut App,
+        _: &wl_surface::WlSurface,
+        event: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        if let wl_surface::Event::Enter { .. } = event {
+            say("surface enter output".into());
+        }
+    }
+}
 
 fn main() {
     let mut title = "wx11 test".to_string();

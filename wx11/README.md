@@ -67,6 +67,9 @@ grants decide whether they reach the session's clipboard.
   makes no progress for 10 seconds (a client that never reads its paste,
   or never finishes writing its copy) is given up, the X client's paste
   then refused
+- one `wl_output` (and `xdg_output`): the X screen, with its size in
+  pixels and millimetres; every window is said to be on it. Some clients,
+  such as foot, do not start without an output
 - transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
   compositing manager (or XPrism's compositor) blends
 - windows X lost while covered (no compositor) are repainted on Expose

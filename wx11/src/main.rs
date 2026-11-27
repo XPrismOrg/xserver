@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::delegate_compositor;
 use smithay::delegate_data_device;
+use smithay::delegate_output;
 use smithay::delegate_primary_selection;
 use smithay::delegate_seat;
 use smithay::delegate_shm;
@@ -33,6 +34,7 @@ use smithay::delegate_xdg_shell;
 use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{
     EventLoop, Interest, LoopHandle, Mode, PostAction, RegistrationToken,
@@ -50,6 +52,7 @@ use smithay::wayland::compositor::{
     with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
     SurfaceAttributes,
 };
+use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, request_data_device_client_selection, set_data_device_focus,
     set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
@@ -108,6 +111,9 @@ pub struct State {
     shm: ShmState,
     xdg: XdgShellState,
     seat_state: SeatState<State>,
+    /// the X screen, as the one wl_output: clients such as foot need one
+    output: Output,
+    _output_manager: OutputManagerState,
     seat: Seat<State>,
     data_device: DataDeviceState,
     handle: LoopHandle<'static, State>,
@@ -1118,6 +1124,7 @@ impl XdgShellHandler for State {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let id = surface.wl_surface().id();
+        self.output.enter(surface.wl_surface());
         self.toplevels.insert(
             id,
             Toplevel {
@@ -1159,6 +1166,7 @@ impl XdgShellHandler for State {
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         let geometry = self.place_popup(&surface, positioner);
         surface.with_pending_state(|s| s.geometry = geometry);
+        self.output.enter(surface.wl_surface());
         let id = surface.wl_surface().id();
         self.popups.insert(
             id,
@@ -1222,6 +1230,9 @@ impl XdgShellHandler for State {
 delegate_compositor!(State);
 delegate_shm!(State);
 delegate_xdg_shell!(State);
+delegate_output!(State);
+
+impl OutputHandler for State {}
 delegate_seat!(State);
 delegate_data_device!(State);
 delegate_primary_selection!(State);
@@ -1358,7 +1369,34 @@ fn main() {
         })
         .expect("keyboard");
     let pointer = seat.add_pointer();
+    // one output: the X screen. X decides where windows go, so its
+    // position is 0,0 and its size the root window's; 60 Hz is a guess
+    // that clients only use for pacing hints.
+    let output_manager = OutputManagerState::new_with_xdg_output::<State>(&dh);
+    let output = Output::new(
+        "X-0".into(),
+        PhysicalProperties {
+            size: x.screen_mm().into(),
+            subpixel: Subpixel::Unknown,
+            make: "XPrism".into(),
+            model: "X screen".into(),
+        },
+    );
+    let _ = output.create_global::<State>(&dh);
+    let mode = OutputMode {
+        size: x.screen_size().into(),
+        refresh: 60_000,
+    };
+    output.change_current_state(
+        Some(mode),
+        Some(smithay::utils::Transform::Normal),
+        Some(Scale::Integer(1)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
     let mut state = State {
+        output,
+        _output_manager: output_manager,
         seat_state,
         seat,
         data_device: DataDeviceState::new::<State>(&dh),

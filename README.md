@@ -29,6 +29,24 @@ removed.
 The current version is **26.11.01**. Versions are `YY.MM.NN`, the NNth
 release of that month, with `.PP` added for patch releases (`26.11.01.01`).
 
+## Screenshots
+
+![Xfce 4.20 on XPrism: a terminal with the server's details, vkcube on an NVIDIA GPU, glxgears on an AMD GPU, the XPrism logo, Thunar, and the Wayland terminal foot](doc/screenshots/xfce.png)
+
+*Xfce 4.20 on XPrism on a laptop panel, captured from the display
+hardware (kmsgrab), not from the X server. glxgears renders on the AMD
+iGPU that drives the panel, vkcube on the NVIDIA GPU through PRIME, and
+foot is a Wayland application shown as an X window by
+[WX11](wx11/README.md). xfwm4 manages the windows; XPrism composites
+them.*
+
+![XPrism's built-in compositor: rounded corners and shadows on every window, and a translucent Wayland window with background blur over glxgears and vkcube](doc/screenshots/compositor.png)
+
+*The built-in compositor with a window manager that uses XPRISM-SCENE:
+rounded corners and shadows on every window, and a 78% opaque Wayland
+window (WX11) blurring what is behind it. No external compositor is
+running.*
+
 ## Features
 
 ### Application isolation
@@ -155,6 +173,54 @@ asked. For running real
 applications in a sandbox, see the bubblewrap example in
 [utils/xns-listen](utils/xns-listen/README.md).
 
+### A desktop session
+
+XPrism's `Xorg` runs any X11 desktop. For example, Xfce on the second
+virtual terminal:
+
+```sh
+xinit /usr/bin/startxfce4 -- /usr/local/bin/Xorg :1 vt2
+```
+
+The modesetting driver's XPrism options go in `xorg.conf`; all are off
+by default:
+
+```
+Section "Device"
+    Identifier "gpu"
+    Driver     "modesetting"
+    Option     "HDR"       "true"   # HDR monitors, from their EDID
+    Option     "EDR"       "true"   # laptop panels: brighter HDR highlights
+    Option     "WideGamut" "true"   # wide-gamut SDR monitors
+EndSection
+```
+
+Each can also be changed while the server runs, per output:
+
+```sh
+xrandr --output eDP-1 --set EDR 1
+xrandr --output DP-1 --set HDR 1
+```
+
+### Wayland applications
+
+[WX11](wx11/README.md) shows Wayland applications as X windows:
+
+```sh
+wx11/target/release/wx11 &        # prints WAYLAND_DISPLAY=wayland-N
+WAYLAND_DISPLAY=wayland-N foot     # the name it printed
+```
+
+### Colour and compositor effects in Xvfb
+
+The virtual server has the same compositor, and can pretend to have an
+HDR monitor or an EDR panel:
+
+```sh
+./build/hw/vfb/Xvfb :5 -colorspace bt2020,pq,1000   # an HDR monitor
+./build/hw/vfb/Xvfb :5 -edr 4                       # a panel with 4x headroom
+```
+
 ## Status
 
 The current release is **26.11.01**, the first.
@@ -169,8 +235,9 @@ The display paths have been tried on real hardware: a desktop with an
 AMD Renoir GPU and a FreeSync monitor, and a laptop with an AMD integrated GPU driving
 the panel and an NVIDIA GPU rendering through PRIME. Mode changes, VRR,
 VT switching, direct scanout of fullscreen windows, the compositor's
-effects and Wayland applications through WX11 all worked; the results
-were checked against the kernel's own display state. The test suite
+effects, Wayland applications through WX11, EDR with the panel's
+backlight, and an Xfce desktop all worked; the results were checked
+against the kernel's own display state. The test suite
 also passes with glamor on both GPUs.
 
 Not yet done or not yet tested:

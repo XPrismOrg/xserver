@@ -200,6 +200,19 @@ def test_toplevel_is_an_x_window(xserver, client):
     assert _pixel(conn, win, 10, 10) == 0x00ff00
 
 
+def test_the_x_screen_is_an_output(xserver, client):
+    """Clients get one wl_output, the X screen, and are told their
+    window is on it (some, like foot, will not start without one)"""
+    c, _win = _shown(xserver, client, "on an output")
+    conn = RawX11Connection(xserver.display_num)
+    root = conn.root_window
+    w, h = _geometry(conn, root)
+    c.wait_for(f"output {w} {h}")
+    seen = c.heard(1.0)         # with the lines read before the mode
+    assert any(line.startswith("output size ") for line in seen), seen
+    assert "surface enter output" in seen, seen
+
+
 def test_unicode_title(xserver, client):
     c = client("--title", "Zażółć ✓")
     c.wait_for("drawn 64 48")

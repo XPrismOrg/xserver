@@ -484,6 +484,15 @@ impl XSide {
         )
     }
 
+    /// the screen's size in millimetres, as the X server reports it
+    pub fn screen_mm(&self) -> (i32, i32) {
+        let screen = &self.conn.setup().roots[0];
+        (
+            screen.width_in_millimeters as i32,
+            screen.height_in_millimeters as i32,
+        )
+    }
+
     pub fn root_position(&self, win: u32) -> (i32, i32) {
         self.conn
             .translate_coordinates(win, self.root, 0, 0)
