@@ -16,8 +16,10 @@ fi
 
 # the pytest suite (test/pyxtest), run against Xvfb
 case "$os" in
-    # whichever Python the repository builds pytest for
-    freebsd|DragonFlyBSD) pkg install -y -g 'py3*-pytest' ;;
+    # pytest itself for whichever Python the repository builds it for: a
+    # glob also matched plugins such as py3xx-aiomisc-pytest, which pytest
+    # then loads (and which needs ssl, broken in DragonFly's Python)
+    freebsd|DragonFlyBSD) pkg install -y -x '^py3[0-9]+-pytest$' ;;
     openbsd) pkg_add -I py3-test ;;
     netbsd)
         PATH="$PATH:/usr/pkg/bin:/usr/pkg/sbin"
