@@ -73,6 +73,11 @@ limited per launcher socket, and can be changed at runtime. They are
 enforced by default; `-capmode audit` only logs what would be denied, and
 a permission agent can ask the user. See [doc/capabilities.md](doc/capabilities.md).
 
+[XPrism Control](https://github.com/XPrismOrg/xprism-control) shows and
+changes namespaces, permissions, connected applications and display
+settings while the server runs, in a window (`xprism-control-panel`) or a
+terminal (`xprismctl`), and can answer the permission prompts.
+
 ### Server-side compositing
 
 By default the server composites windows itself (`-compositor off`
@@ -265,6 +270,7 @@ from X-NAMESPACE, whose changes keep compatibility.
 - [doc/xprism-scene-protocol.md](doc/xprism-scene-protocol.md): the XPRISM-SCENE extension
 - [doc/pal.md](doc/pal.md): the platform abstraction layer
 - [wx11/README.md](wx11/README.md): WX11, Wayland applications on XPrism
+- [XPrism Control](https://github.com/XPrismOrg/xprism-control): the control panel and `xprismctl`
 - [CHANGES-FROM-XORG.md](CHANGES-FROM-XORG.md): every difference from the X.Org Server
 - [CODE_OVERVIEW.md](CODE_OVERVIEW.md): layout of the source tree
 
