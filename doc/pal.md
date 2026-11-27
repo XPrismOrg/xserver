@@ -5,9 +5,9 @@ and DragonFly BSD goes through one interface, `os/pal/pal.h`. This
 document describes how that interface is organized, which backend each
 platform uses, and what OS-specific code still exists outside it.
 
-SchOS implements the Linux ABI and system calls, so it uses the Linux
-backends and needs no code of its own. Anything that works on Linux is
-expected to work on SchOS.
+SchBSD is built on the FreeBSD base system, so it uses the FreeBSD
+backends and needs no code of its own. Anything that works on FreeBSD is
+expected to work on SchBSD.
 
 ## Rules
 
@@ -47,8 +47,8 @@ list the backends each module is meant to use; they are not written yet.
 
 | | Identity | Process hint | Session | Devices | Input | Restrict |
 |---|---|---|---|---|---|---|
-| Linux, SchOS | `SO_PEERCRED`, `SO_PEERPIDFD` | cgroup (Flatpak and Snap scopes) | libseat, logind | udev | libinput | Landlock |
-| FreeBSD | `LOCAL_PEERCRED` (pid from 13.0) | none (jails not yet detected) | libseat (seatd) | devd, sysctl | libinput (evdev) | Capsicum, limited |
+| Linux | `SO_PEERCRED`, `SO_PEERPIDFD` | cgroup (Flatpak and Snap scopes) | libseat, logind | udev | libinput | Landlock |
+| FreeBSD, SchBSD | `LOCAL_PEERCRED` (pid from 13.0) | none (jails not yet detected) | libseat (seatd) | devd, sysctl | libinput (evdev) | Capsicum, limited |
 | DragonFly | `LOCAL_PEERCRED` | none | libseat (seatd) | devd | libinput (evdev) | none |
 | OpenBSD | `SO_PEERCRED` | none | direct, or libseat if available | hotplug(4), `/dev/drm*` | wscons | pledge, unveil |
 | NetBSD | `LOCAL_PEEREID` | none | libseat (seatd) or direct | drvctl, hotplug | wscons | none |
