@@ -35,15 +35,32 @@ pal_backend_process_cmdline(pid_t pid, char **cmdname, char **cmdargs)
         }
 
         /* Read KERN_PROC_ARGS contents. Similar to /proc/pid/cmdline
-         * the process name and each argument are separated by NUL byte. */
-        char *const procargs = calloc(1, len);
-        if (!procargs) {
-            ErrorF("Failed to allocate memory (%zu bytes) for KERN_PROC_ARGS result for pid %d: %s\n", len, pid, strerror(errno));
-            return -1;
+         * the process name and each argument are separated by NUL byte.
+         * DragonFly's size query can report less than the read then
+         * needs (ENOMEM): grow the buffer and retry, up to a limit. */
+        char *procargs = NULL;
+        size_t size = len < 256 ? 256 : len;
+        for (;;) {
+            char *const grown = realloc(procargs, size);
+            if (!grown) {
+                ErrorF("Failed to allocate memory (%zu bytes) for KERN_PROC_ARGS result for pid %d: %s\n", size, pid, strerror(errno));
+                free(procargs);
+                return -1;
+            }
+            procargs = grown;
+            memset(procargs, 0, size);
+            len = size;
+            if (sysctl(mib, ARRAY_SIZE(mib), procargs, &len, NULL, 0) == 0)
+                break;
+            if (errno != ENOMEM || size >= (1 << 20)) {
+                ErrorF("Failed to get KERN_PROC_ARGS for PID %d: %s\n", pid, strerror(errno));
+                free(procargs);
+                return -1;
+            }
+            size *= 2;
         }
-
-        if (sysctl(mib, ARRAY_SIZE(mib), procargs, &len, NULL, 0) != 0) {
-            ErrorF("Failed to get KERN_PROC_ARGS for PID %d: %s\n", pid, strerror(errno));
+        if (len == 0 || procargs[len - 1] != '\0') {
+            /* nothing, or cut short: not a usable command line */
             free(procargs);
             return -1;
         }
