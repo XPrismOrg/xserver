@@ -103,11 +103,25 @@ while SDR content stays as it was. See [doc/color.md](doc/color.md).
 Atomic modesetting is on by default, each output is composed at most
 once per refresh, and variable refresh rate (FreeSync) works.
 
+### GPUs, the standard way
+
+A GPU on a modern kernel driver (AMD `amdgpu`, Intel `i915` and `xe`,
+NVIDIA) needs no vendor X driver: modesetting drives its displays, glamor
+accelerates it on the vendor's EGL and GBM, and applications render
+through DRI3 and Present with explicit sync. This includes NVIDIA's
+OpenGL: XPrism makes glvnd pick NVIDIA's library, which renders over
+DRI3 and Present as it does on Xwayland, also as a PRIME offload GPU
+behind an integrated one. Older GPUs keep their X drivers. NVIDIA's
+proprietary X driver still works, as an opt-in (`IgnoreABI`), because it
+bypasses XPrism's namespace checks. See
+[CHANGES-FROM-XORG.md](CHANGES-FROM-XORG.md).
+
 ### Wayland applications
 
 [WX11](wx11/README.md) runs Wayland applications as ordinary X windows,
-managed by any X11 window manager: toplevels, popups, keyboard and
-pointer, clipboard and primary selection, transparency. Each Wayland
+managed by any X11 window manager: toplevels, popups, subsurfaces,
+keyboard and pointer, the clipboard and primary selection in any type,
+drag and drop from X applications, transparency. Each Wayland
 application gets an X connection of its own, so XPrism's permissions
 apply to it like to any X client, and sandboxed ones (via
 `wp_security_context_v1`) land in a namespace.
@@ -216,6 +230,16 @@ wx11/target/release/wx11 &        # prints WAYLAND_DISPLAY=wayland-N
 WAYLAND_DISPLAY=wayland-N foot     # the name it printed
 ```
 
+### NVIDIA as a render GPU
+
+With an integrated GPU driving the displays, an application renders on
+the NVIDIA GPU with NVIDIA's offload variables (NixOS's `nvidia-offload`
+sets them); Vulkan picks the GPU the same way:
+
+```sh
+__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia glxinfo -B
+```
+
 ### Colour and compositor effects in Xvfb
 
 The virtual server has the same compositor, and can pretend to have an
@@ -243,15 +267,19 @@ VT switching, direct scanout of fullscreen windows, the compositor's
 effects, Wayland applications through WX11, EDR with the panel's
 backlight, and an Xfce desktop all worked; the results were checked
 against the kernel's own display state. The test suite
-also passes with glamor on both GPUs.
+also passes with glamor on both GPUs. NVIDIA's OpenGL over DRI3, with
+the frames read back pixel for pixel, works with drivers 595 and 620, as
+the X screen's GPU and as an offload GPU (an RTX 3060 behind an AMD iGPU,
+an RTX 4050 laptop GPU behind an AMD 660M); so does NVIDIA's proprietary
+X driver as the opt-in.
 
 Not yet done or not yet tested:
 
 - **Display:** HDR and wide-gamut output on a real monitor; scanout of
   16-bit floating point framebuffers; direct scanout of a window that
   covers only one of several monitors; GPU hotplug on real hardware.
-- **WX11:** zero-copy buffers (dma-buf and Present), touch,
-  subsurfaces, and drag and drop.
+- **WX11:** zero-copy buffers (dma-buf and Present), touch, and drag
+  and drop from Wayland applications into X ones.
 - **Platform layer:** session and device handling (the interface exists,
   without backends).
 
