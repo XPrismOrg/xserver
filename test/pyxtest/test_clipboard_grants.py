@@ -80,7 +80,31 @@ def _event(conn, code, timeout=2.0):
 
 
 def _set_owner(conn, wid, sel):
+    # an owner answers TARGETS before the data (WX11 asks it first); the
+    # atoms are interned now: a round trip while a request waits would
+    # take the request for its reply
+    conn.targets_atoms = (conn.intern_atom("TARGETS"), conn.intern_atom("UTF8_STRING"))
     conn.send_request(struct.pack("<BxHIII", X_SET_SELECTION_OWNER, 4, wid, sel, 0))
+
+
+def _next_data_request(conn, timeout=2.0, offer=None):
+    """Owner side: the next SelectionRequest that is not for TARGETS;
+    TARGETS ones are answered (text, or the atoms in offer)."""
+    targets, utf8 = getattr(conn, "targets_atoms", (None, None))
+    while True:
+        ev = _event(conn, SELECTION_REQUEST, timeout)
+        if ev is None or targets is None:
+            return ev
+        _t, _o, requestor, sel, target, prop = struct.unpack_from("<IIIIII", ev.data, 4)
+        if target != targets:
+            return ev
+        atoms = offer if offer is not None else [targets, utf8, ATOM_STRING]
+        body = b"".join(struct.pack("<I", a) for a in atoms)
+        conn.send_request(struct.pack("<BBHIIIBxxxI", X_CHANGE_PROPERTY, 0, 6 + len(atoms),
+                                      requestor, prop, 4, 32, len(atoms)) + body)  # ATOM
+        notify = struct.pack("<BxHIIIII", SELECTION_NOTIFY, 0, 0, requestor, sel,
+                             target, prop).ljust(32, b"\0")
+        conn.send_request(struct.pack("<BBHII", X_SEND_EVENT, 0, 11, requestor, 0) + notify)
 
 
 def _owner(conn, sel):
@@ -96,7 +120,7 @@ def _convert(conn, requestor, sel, prop):
 def _answer(conn, data):
     """Owner side: answer the next SelectionRequest with *data*. False if
     none came."""
-    ev = _event(conn, SELECTION_REQUEST)
+    ev = _next_data_request(conn)
     if ev is None:
         return False
     _t, _owner_w, requestor, sel, target, prop = struct.unpack_from("<IIIIII", ev.data, 4)

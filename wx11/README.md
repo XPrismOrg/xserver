@@ -58,11 +58,13 @@ grants decide whether they reach the session's clipboard.
   positioner; a grabbing popup gets the keyboard and an X pointer grab,
   and a click outside it closes it; popups are kept on the screen as far
   as the client allows (flip, slide, resize)
-- the clipboard and the primary selection (text) both ways: a Wayland
-  copy or selection owns X's CLIPBOARD or PRIMARY (UTF8_STRING, TEXT,
-  STRING as Latin-1, TARGETS), and X's are offered to the Wayland client
-  with the keyboard (`wl_data_device`, `zwp_primary_selection_v1`);
-  large X selections arrive in chunks (INCR). Transfers never block
+- the clipboard and the primary selection both ways, in any type: a
+  Wayland copy or selection owns X's CLIPBOARD or PRIMARY and offers its
+  MIME types as X targets (image/png, text/html, ...; text also as
+  UTF8_STRING, TEXT and STRING in Latin-1), and an X copy is offered to
+  the Wayland client with the keyboard in the types its TARGETS name
+  (`wl_data_device`, `zwp_primary_selection_v1`). Large transfers go in
+  chunks (INCR) both ways. Transfers never block
   WX11: a paste is written as the client reads it, and a transfer that
   makes no progress for 10 seconds (a client that never reads its paste,
   or never finishes writing its copy) is given up, the X client's paste
@@ -82,7 +84,7 @@ Buffers are copied into the window with `PutImage` for now.
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
 - subsurfaces
-- clipboard types other than text, and drag and drop (XDND)
+- drag and drop (XDND)
 - one namespace per sandboxed application (today all sandboxed clients
   share `--sandbox-display`)
 

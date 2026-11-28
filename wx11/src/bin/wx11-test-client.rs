@@ -25,13 +25,18 @@
 // ("copied"; "sent" when someone pasted it); --paste prints every clipboard
 // text it is offered ("pasted TEXT"). With --primary both use the primary
 // selection (zwp_primary_selection_v1) instead of the clipboard.
+// --mime TYPE copies and pastes TYPE instead of UTF-8 text; a paste that is
+// not text prints "pasted-bin LENGTH SUM" (SUM: the bytes added up).
+// --copy-bytes N copies N bytes of a pattern (byte i is i * 7 % 251).
+// --paste also prints each type it is offered ("offer TYPE").
 // --paste-late MS waits MS milliseconds before reading a paste and then
 // prints only its length ("pasted-late N"); --copy-stall never writes
 // what it is asked to send, nor closes the pipe ("send stalled").
 //
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]]
-//                    [--copy TEXT [--copy-stall]] [--paste [--paste-late MS]]
+//                    [--copy TEXT | --copy-bytes N [--copy-stall]]
+//                    [--paste [--paste-late MS]] [--mime TYPE]
 //                    [--primary] [--alpha]
 //                    [--security-context APP_ID]
 
@@ -99,6 +104,18 @@ struct App {
 
 const TEXT: &str = "text/plain;charset=utf-8";
 
+/// --mime: the type copied and pasted
+static MIME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+fn mime() -> String {
+    MIME.get().cloned().unwrap_or_else(|| TEXT.to_string())
+}
+
+/// --copy-bytes N: the pattern copied
+fn pattern(n: usize) -> Vec<u8> {
+    (0..n).map(|i| (i * 7 % 251) as u8).collect()
+}
+static COPY_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// --paste-late: milliseconds before reading a paste, 0 for at once
 static PASTE_LATE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// --copy-stall
@@ -112,8 +129,17 @@ fn send_copy(fd: std::os::fd::OwnedFd, text: &str) {
         say("send stalled".into());
         return;
     }
-    let _ = File::from(fd).write_all(text.as_bytes());
-    say("sent".into());
+    let n = COPY_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+    let data = if n > 0 {
+        pattern(n)
+    } else {
+        text.as_bytes().to_vec()
+    };
+    // in a thread: a large copy fills the pipe before the reader drains it
+    std::thread::spawn(move || {
+        let _ = File::from(fd).write_all(&data);
+        say("sent".into());
+    });
 }
 
 fn say(line: String) {
@@ -415,7 +441,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
                         (app.copy.take(), &app.primary_manager, &app.primary_device)
                     {
                         let source = manager.create_source(qh, text);
-                        source.offer(TEXT.into());
+                        source.offer(mime());
                         device.set_selection(Some(&source), serial);
                         say("copied".into());
                     }
@@ -423,7 +449,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
                     (app.copy.take(), &app.data_manager, &app.data_device)
                 {
                     let source = manager.create_data_source(qh, text);
-                    source.offer(TEXT.into());
+                    source.offer(mime());
                     device.set_selection(Some(&source), serial);
                     say("copied".into());
                 }
@@ -523,7 +549,7 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
             return;
         }
         let (reader, writer) = std::io::pipe().expect("pipe");
-        offer.receive(TEXT.into(), writer.as_fd());
+        offer.receive(mime(), writer.as_fd());
         drop(writer);
         let _ = conn.flush();
         print_pasted(reader);
@@ -604,6 +630,9 @@ fn print_pasted(reader: std::io::PipeReader) {
         let _ = reader.read_to_end(&mut text);
         if late > 0 {
             say(format!("pasted-late {}", text.len()));
+        } else if !mime().starts_with("text/") {
+            let sum: u64 = text.iter().map(|&b| b as u64).sum();
+            say(format!("pasted-bin {} {}", text.len(), sum));
         } else {
             say(format!("pasted {}", String::from_utf8_lossy(&text)));
         }
@@ -626,7 +655,7 @@ impl Dispatch<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1, ()> 
             return;
         }
         let (reader, writer) = std::io::pipe().expect("pipe");
-        offer.receive(TEXT.into(), writer.as_fd());
+        offer.receive(mime(), writer.as_fd());
         drop(writer);
         let _ = conn.flush();
         print_pasted(reader);
@@ -655,7 +684,22 @@ impl Dispatch<zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1, Stri
 
 delegate_noop!(App: ignore zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1);
 delegate_noop!(App: ignore zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1);
-delegate_noop!(App: ignore wl_data_offer::WlDataOffer);
+impl Dispatch<wl_data_offer::WlDataOffer, ()> for App {
+    fn event(
+        app: &mut App,
+        _: &wl_data_offer::WlDataOffer,
+        event: wl_data_offer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<App>,
+    ) {
+        if let wl_data_offer::Event::Offer { mime_type } = event {
+            if app.paste {
+                say(format!("offer {mime_type}"));
+            }
+        }
+    }
+}
 delegate_noop!(App: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
 delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
@@ -759,6 +803,16 @@ fn main() {
                     u32::from_str_radix(&v, 16).expect("--popup-color RRGGBB")
             }
             "--copy" => copy = Some(v),
+            "--mime" => {
+                let _ = MIME.set(v);
+            }
+            "--copy-bytes" => {
+                COPY_BYTES.store(
+                    v.parse().expect("--copy-bytes N"),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                copy.get_or_insert_with(String::new);
+            }
             "--paste-late" => PASTE_LATE_MS.store(
                 v.parse().expect("--paste-late MS"),
                 std::sync::atomic::Ordering::Relaxed,
@@ -789,7 +843,7 @@ fn main() {
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT [--copy-stall]] [--paste [--paste-late MS]] [--primary] [--alpha] [--security-context APP_ID]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT | --copy-bytes N [--copy-stall]] [--paste [--paste-late MS]] [--mime TYPE] [--primary] [--alpha] [--security-context APP_ID]");
                 std::process::exit(2);
             }
         }

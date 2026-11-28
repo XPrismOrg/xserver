@@ -9,9 +9,9 @@ use std::os::fd::{AsFd, OwnedFd};
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xfixes::{ConnectionExt as _, SelectionEventMask};
 use x11rb::protocol::xproto::{
-    AtomEnum, ColormapAlloc, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
-    EventMask, GrabMode, GrabStatus, ImageFormat, NotifyDetail, NotifyMode, PropMode, Property,
-    VisualClass, WindowClass,
+    AtomEnum, ChangeWindowAttributesAux, ColormapAlloc, ConfigureWindowAux, ConnectionExt,
+    CreateGCAux, CreateWindowAux, EventMask, GrabMode, GrabStatus, ImageFormat, NotifyDetail,
+    NotifyMode, PropMode, Property, VisualClass, WindowClass,
 };
 use x11rb::protocol::xproto::{SelectionNotifyEvent, SELECTION_NOTIFY_EVENT};
 use x11rb::protocol::Event as XEvent;
@@ -41,8 +41,12 @@ pub enum Event {
     ClipboardOwner(Sel, Option<u32>),
     /// an X client asks for our CLIPBOARD (we own it for a Wayland client)
     ClipboardRequest(SelectionRequest),
-    /// the X clipboard we asked for (None: refused)
-    ClipboardData(Sel, Option<Vec<u8>>),
+    /// the X clipboard we asked for, in the target (an X atom name or a
+    /// MIME type) we asked for it as (None: refused)
+    ClipboardData(Sel, String, Option<Vec<u8>>),
+    /// the types the X owner of a selection offers (its TARGETS, as atom
+    /// names), after request_targets (None: it did not say)
+    ClipboardTargets(Sel, Option<Vec<String>>),
     /// another X client took a selection we owned (SelectionClear)
     ClipboardLost(Sel),
     /// an X pointer button went down (true) or up, at x, y in the window
@@ -75,8 +79,20 @@ pub enum ClipboardTarget {
     Utf8,
     /// text as Latin-1 (STRING)
     Latin1,
-    /// something WX11 does not offer
+    /// another type, by its name: a MIME type such as image/png, which
+    /// is what X clients name non-text targets with
+    Named(String),
+    /// something WX11 does not offer (a target without a name)
     Other,
+}
+
+/// a large answer to an X client, given in chunks (ICCCM 2.7.2, INCR):
+/// the next chunk goes when the client deletes the property
+struct Outgoing {
+    type_: u32,
+    data: Vec<u8>,
+    off: usize,
+    started: std::time::Instant,
 }
 
 /// the keyboard layout the X server uses (_XKB_RULES_NAMES), for the
@@ -134,7 +150,24 @@ pub struct XSide {
     incr: u32,
     /// INCR transfers coming in (ICCCM 2.7.2): by property, the selection
     /// and the chunks so far
-    incoming: RefCell<HashMap<u32, (Sel, Vec<u8>)>>,
+    incoming: RefCell<HashMap<u32, (Sel, String, Vec<u8>)>>,
+    /// INCR transfers going out: by requestor window and property
+    outgoing: RefCell<HashMap<(u32, u32), Outgoing>>,
+    /// atoms by name and names by atom, as interned so far
+    atoms: RefCell<HashMap<String, u32>>,
+    names: RefCell<HashMap<u32, String>>,
+    /// the target each answer property of sel_win was asked for in
+    asked: RefCell<HashMap<u32, String>>,
+}
+
+/// largest property WX11 writes in one request; more goes by INCR.
+/// WX11_MAX_PROPERTY (bytes) lowers it, for tests.
+fn max_property(conn: &RustConnection) -> usize {
+    let limit = conn.maximum_request_bytes().saturating_sub(1024).max(4096);
+    std::env::var("WX11_MAX_PROPERTY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(limit, |v: usize| v.clamp(1, limit))
 }
 
 /// most a pasted X selection may hold; a larger one is cut off
@@ -243,6 +276,10 @@ impl XSide {
             sel_win,
             incr,
             incoming: RefCell::new(HashMap::new()),
+            outgoing: RefCell::new(HashMap::new()),
+            atoms: RefCell::new(HashMap::new()),
+            names: RefCell::new(HashMap::new()),
+            asked: RefCell::new(HashMap::new()),
         })
     }
 
@@ -303,17 +340,88 @@ impl XSide {
         }
     }
 
-    /// ask the X owner of a selection for UTF-8 text; the answer comes as
-    /// Event::ClipboardData (each selection into its own property)
-    pub fn request_clipboard(&self, which: Sel) {
-        let property = match which {
-            Sel::Clipboard => self.wx11_selection,
-            Sel::Primary => self.wx11_primary,
+    /// the atom called name (0 if the server refused)
+    pub fn atom(&self, name: &str) -> u32 {
+        if let Some(&a) = self.atoms.borrow().get(name) {
+            return a;
+        }
+        let a = self
+            .conn
+            .intern_atom(false, name.as_bytes())
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map_or(0, |r| r.atom);
+        if a != 0 {
+            self.atoms.borrow_mut().insert(name.to_string(), a);
+            self.names.borrow_mut().insert(a, name.to_string());
+        }
+        a
+    }
+
+    /// the name of atom (None if it has none)
+    pub fn atom_name(&self, atom: u32) -> Option<String> {
+        if atom == 0 {
+            return None;
+        }
+        if let Some(n) = self.names.borrow().get(&atom) {
+            return Some(n.clone());
+        }
+        let name = self
+            .conn
+            .get_atom_name(atom)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .map(|r| String::from_utf8_lossy(&r.name).into_owned())?;
+        self.names.borrow_mut().insert(atom, name.clone());
+        self.atoms.borrow_mut().insert(name.clone(), atom);
+        Some(name)
+    }
+
+    /// the property of sel_win an answer for (which, target) comes in: one
+    /// per selection and target, so answers to requests still out do not
+    /// overwrite each other
+    fn answer_property(&self, which: Sel, target: &str) -> u32 {
+        if target == "UTF8_STRING" {
+            // the property earlier versions used
+            return match which {
+                Sel::Clipboard => self.wx11_selection,
+                Sel::Primary => self.wx11_primary,
+            };
+        }
+        let sel = match which {
+            Sel::Clipboard => "CLIPBOARD",
+            Sel::Primary => "PRIMARY",
         };
+        self.atom(&format!("WX11_{sel}_{target}"))
+    }
+
+    /// ask the X owner of a selection for it as target (an atom name:
+    /// UTF8_STRING for text, or a MIME type); the answer comes as
+    /// Event::ClipboardData
+    pub fn request_clipboard(&self, which: Sel, target: &str) {
+        let atom = self.atom(target);
+        let property = self.answer_property(which, target);
+        if atom == 0 || property == 0 {
+            return;
+        }
+        self.asked.borrow_mut().insert(property, target.to_string());
         let _ = self.conn.convert_selection(
             self.sel_win,
             self.selection_atom(which),
-            self.utf8_string,
+            atom,
+            property,
+            x11rb::CURRENT_TIME,
+        );
+    }
+
+    /// ask the X owner of a selection what types it offers; the answer
+    /// comes as Event::ClipboardTargets
+    pub fn request_targets(&self, which: Sel) {
+        let property = self.answer_property(which, "TARGETS");
+        let _ = self.conn.convert_selection(
+            self.sel_win,
+            self.selection_atom(which),
+            self.targets,
             property,
             x11rb::CURRENT_TIME,
         );
@@ -327,62 +435,23 @@ impl XSide {
         } else if req.target == u32::from(AtomEnum::STRING) {
             ClipboardTarget::Latin1
         } else {
-            ClipboardTarget::Other
+            match self.atom_name(req.target) {
+                Some(name) => ClipboardTarget::Named(name),
+                None => ClipboardTarget::Other,
+            }
         }
     }
 
-    /// answer a request: text (UTF-8, converted for STRING), the target
-    /// list, or None to refuse
-    pub fn answer_clipboard(&self, req: &SelectionRequest, text: Option<&[u8]>) {
-        // ICCCM: an old client may give no property; use the target
-        let property = if req.property == x11rb::NONE {
+    /// ICCCM: an old client may give no property; use the target
+    fn reply_property(req: &SelectionRequest) -> u32 {
+        if req.property == x11rb::NONE {
             req.target
         } else {
             req.property
-        };
-        let stored = match self.clipboard_target(req) {
-            ClipboardTarget::Targets => self
-                .conn
-                .change_property32(
-                    PropMode::REPLACE,
-                    req.requestor,
-                    property,
-                    AtomEnum::ATOM,
-                    &[
-                        self.targets,
-                        self.utf8_string,
-                        self.text,
-                        AtomEnum::STRING.into(),
-                    ],
-                )
-                .is_ok(),
-            ClipboardTarget::Utf8 if text.is_some() => self
-                .conn
-                .change_property8(
-                    PropMode::REPLACE,
-                    req.requestor,
-                    property,
-                    self.utf8_string,
-                    text.unwrap(),
-                )
-                .is_ok(),
-            ClipboardTarget::Latin1 if text.is_some() => {
-                let latin1: Vec<u8> = String::from_utf8_lossy(text.unwrap())
-                    .chars()
-                    .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' })
-                    .collect();
-                self.conn
-                    .change_property8(
-                        PropMode::REPLACE,
-                        req.requestor,
-                        property,
-                        AtomEnum::STRING,
-                        &latin1,
-                    )
-                    .is_ok()
-            }
-            _ => false,
-        };
+        }
+    }
+
+    fn notify(&self, req: &SelectionRequest, stored: bool) {
         let event = SelectionNotifyEvent {
             response_type: SELECTION_NOTIFY_EVENT,
             sequence: 0,
@@ -390,11 +459,132 @@ impl XSide {
             requestor: req.requestor,
             selection: req.selection,
             target: req.target,
-            property: if stored { property } else { x11rb::NONE },
+            property: if stored {
+                Self::reply_property(req)
+            } else {
+                x11rb::NONE
+            },
         };
         let _ = self
             .conn
             .send_event(false, req.requestor, EventMask::NO_EVENT, event);
+    }
+
+    /// answer TARGETS: TARGETS, the text targets if text is offered, and
+    /// each MIME type
+    pub fn answer_targets(&self, req: &SelectionRequest, mimes: &[String]) {
+        let mut atoms = vec![self.targets];
+        if mimes.iter().any(|m| is_text(m)) {
+            atoms.extend([self.utf8_string, self.text, AtomEnum::STRING.into()]);
+        }
+        for m in mimes {
+            let a = self.atom(m);
+            if a != 0 && !atoms.contains(&a) {
+                atoms.push(a);
+            }
+        }
+        let stored = self
+            .conn
+            .change_property32(
+                PropMode::REPLACE,
+                req.requestor,
+                Self::reply_property(req),
+                AtomEnum::ATOM,
+                &atoms,
+            )
+            .is_ok();
+        self.notify(req, stored);
+    }
+
+    /// answer a request with data in its target (UTF-8 text converted to
+    /// Latin-1 for STRING), in chunks (INCR) if it is large; None refuses
+    pub fn answer_clipboard(&self, req: &SelectionRequest, data: Option<&[u8]>) {
+        let Some(data) = data else {
+            return self.notify(req, false);
+        };
+        let (type_, data): (u32, std::borrow::Cow<[u8]>) = match self.clipboard_target(req) {
+            ClipboardTarget::Utf8 => (self.utf8_string, data.into()),
+            ClipboardTarget::Latin1 => (
+                AtomEnum::STRING.into(),
+                String::from_utf8_lossy(data)
+                    .chars()
+                    .map(|c| if (c as u32) < 256 { c as u8 } else { b'?' })
+                    .collect::<Vec<u8>>()
+                    .into(),
+            ),
+            ClipboardTarget::Named(_) => (req.target, data.into()),
+            _ => return self.notify(req, false),
+        };
+        let property = Self::reply_property(req);
+        if data.len() <= max_property(&self.conn) {
+            let stored = self
+                .conn
+                .change_property8(PropMode::REPLACE, req.requestor, property, type_, &data)
+                .is_ok();
+            return self.notify(req, stored);
+        }
+        // INCR: the size first; each delete of the property asks for the
+        // next chunk. A requestor that never deletes it is dropped after
+        // a while (when the next transfer starts).
+        self.outgoing
+            .borrow_mut()
+            .retain(|_, o| o.started.elapsed() < std::time::Duration::from_secs(60));
+        let watch = self.conn.change_window_attributes(
+            req.requestor,
+            &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+        );
+        let stored = watch.is_ok()
+            && self
+                .conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    property,
+                    self.incr,
+                    &[data.len().min(u32::MAX as usize) as u32],
+                )
+                .is_ok();
+        if stored {
+            self.outgoing.borrow_mut().insert(
+                (req.requestor, property),
+                Outgoing {
+                    type_,
+                    data: data.into_owned(),
+                    off: 0,
+                    started: std::time::Instant::now(),
+                },
+            );
+        }
+        self.notify(req, stored);
+    }
+
+    /// the requestor of an INCR transfer deleted the property: the next
+    /// chunk, or the empty one that ends it
+    fn incr_next(&self, window: u32, property: u32) {
+        let mut outgoing = self.outgoing.borrow_mut();
+        let Some(o) = outgoing.get_mut(&(window, property)) else {
+            return;
+        };
+        let n = (o.data.len() - o.off).min(max_property(&self.conn));
+        let _ = self.conn.change_property8(
+            PropMode::REPLACE,
+            window,
+            property,
+            o.type_,
+            &o.data[o.off..o.off + n],
+        );
+        o.off += n;
+        if n == 0 {
+            outgoing.remove(&(window, property));
+            // stop hearing about the window unless another transfer to it
+            // is still going
+            if !outgoing.keys().any(|(w, _)| *w == window) {
+                let _ = self.conn.change_window_attributes(
+                    window,
+                    &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
+                );
+            }
+        }
     }
 
     /// the keyboard layout set on the X server, empty fields if unknown
@@ -705,18 +895,38 @@ impl XSide {
                     if n.requestor == self.sel_win && self.which(n.selection).is_some() =>
                 {
                     let which = self.which(n.selection).unwrap();
+                    // the target asked for, by the property it was asked
+                    // into: some owners answer with another target
+                    let target = self
+                        .asked
+                        .borrow()
+                        .get(&n.property)
+                        .cloned()
+                        .or_else(|| self.atom_name(n.target))
+                        .unwrap_or_default();
                     let got = (n.property != x11rb::NONE)
                         .then(|| self.take_property(n.property))
                         .flatten();
                     match got {
+                        Some((_, v)) if n.target == self.targets => {
+                            let names = v
+                                .chunks_exact(4)
+                                .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
+                                .filter_map(|a| self.atom_name(a))
+                                .collect();
+                            out.push(Event::ClipboardTargets(which, Some(names)));
+                        }
+                        None if n.target == self.targets => {
+                            out.push(Event::ClipboardTargets(which, None))
+                        }
                         // large: chunks follow, each as a new value of the
                         // property (deleting it, above, asked for the first)
                         Some((ty, _)) if ty == self.incr => {
                             self.incoming
                                 .borrow_mut()
-                                .insert(n.property, (which, Vec::new()));
+                                .insert(n.property, (which, target, Vec::new()));
                         }
-                        got => out.push(Event::ClipboardData(which, got.map(|(_, v)| v))),
+                        got => out.push(Event::ClipboardData(which, target, got.map(|(_, v)| v))),
                     }
                 }
                 XEvent::PropertyNotify(p)
@@ -726,7 +936,7 @@ impl XSide {
                 {
                     let chunk = self.take_property(p.atom).map(|(_, v)| v);
                     let mut incoming = self.incoming.borrow_mut();
-                    let (which, data) = incoming.get_mut(&p.atom).unwrap();
+                    let (which, _, data) = incoming.get_mut(&p.atom).unwrap();
                     let which = *which;
                     match chunk {
                         // the empty chunk ends the transfer
@@ -735,14 +945,18 @@ impl XSide {
                             data.extend_from_slice(&c[..c.len().min(room)]);
                         }
                         Some(_) => {
-                            let (_, data) = incoming.remove(&p.atom).unwrap();
-                            out.push(Event::ClipboardData(which, Some(data)));
+                            let (_, target, data) = incoming.remove(&p.atom).unwrap();
+                            out.push(Event::ClipboardData(which, target, Some(data)));
                         }
                         None => {
-                            incoming.remove(&p.atom);
-                            out.push(Event::ClipboardData(which, None));
+                            let (_, target, _) = incoming.remove(&p.atom).unwrap();
+                            out.push(Event::ClipboardData(which, target, None));
                         }
                     }
+                }
+                // an X client took a chunk of an INCR answer
+                XEvent::PropertyNotify(p) if p.state == Property::DELETE => {
+                    self.incr_next(p.window, p.atom)
                 }
                 XEvent::SelectionClear(c) if c.owner == self.sel_win => {
                     if let Some(which) = self.which(c.selection) {
@@ -809,4 +1023,10 @@ impl XSide {
         }
         out
     }
+}
+
+/// a MIME type or X target for text
+pub fn is_text(name: &str) -> bool {
+    matches!(name, "UTF8_STRING" | "TEXT" | "STRING" | "text/plain")
+        || name.starts_with("text/plain;")
 }

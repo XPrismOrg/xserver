@@ -698,10 +698,10 @@ def _answer_incr(conn, chunks, utf8, incr):
     """X owner side: answer the next SelectionRequest in INCR chunks. The
     atoms are interned beforehand: a round trip here would take the
     request, if it came first, for its reply."""
-    from test_clipboard_grants import (SELECTION_REQUEST, PROPERTY_CHANGE_MASK,
-                                       PROPERTY_DELETE, _event, _notify, _property_event,
+    from test_clipboard_grants import (PROPERTY_CHANGE_MASK, PROPERTY_DELETE,
+                                       _next_data_request, _notify, _property_event,
                                        _put, _select)
-    ev = _event(conn, SELECTION_REQUEST, timeout=5.0)
+    ev = _next_data_request(conn, timeout=5.0)
     assert ev is not None, "WX11 did not ask the X owner"
     _t, _w, requestor, sel, _target, prop = struct.unpack_from("<IIIIII", ev.data, 4)
     conn.send_request(_select(requestor, PROPERTY_CHANGE_MASK))
@@ -853,3 +853,120 @@ def test_buffer_too_large_for_x_is_not_shown(xserver, client):
     big.wait_for("drawn 40000 2")
     c, _ = _shown(xserver, client, "normal")
     assert not _window_named(RawX11Connection(xserver.display_num), "too wide")
+
+
+# clipboard types other than text
+
+def _pattern(n):
+    """what wx11-test-client --copy-bytes N copies"""
+    return bytes(i * 7 % 251 for i in range(n))
+
+
+def _get_property(conn, win, prop, delete=False):
+    """(type, value) of a property, all of it"""
+    from test_clipboard_grants import X_GET_PROPERTY
+    seq = conn.send_request(struct.pack("<BBHIIIII", X_GET_PROPERTY, int(delete), 6,
+                                        win, prop, 0, 0, 0x3FFFFFFF))
+    r = _reply(conn, seq)
+    ptype, _after, n = struct.unpack_from("<III", r.data, 8)
+    fmt = r.data[1]
+    return ptype, r.data[32:32 + n * max(fmt, 8) // 8]
+
+
+def _convert_and_wait(conn, win, target):
+    """ConvertSelection(CLIPBOARD, target) into WX11_TEST on win; the
+    property it was answered in, or 0 for a refusal"""
+    from test_clipboard_grants import SELECTION_NOTIFY, X_CONVERT_SELECTION, _event
+    clip, prop = conn.intern_atom("CLIPBOARD"), conn.intern_atom("WX11_TEST")
+    conn.send_request(struct.pack("<BxHIIIII", X_CONVERT_SELECTION, 6, win, clip, target,
+                                  prop, 0))
+    ev = _event(conn, SELECTION_NOTIFY, timeout=5.0)
+    assert ev is not None, "no SelectionNotify"
+    return struct.unpack_from("<I", ev.data, 20)[0]
+
+
+def test_wayland_image_copy_pastes_in_x(xserver, client):
+    """a Wayland client's image/png: offered in TARGETS (without text) and
+    given in its own type"""
+    c, win = _shown(xserver, client, "image copier", "--copy-bytes", "5000",
+                    "--mime", "image/png")
+    Input(xserver).focus(win)
+    c.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_owner(conn), "WX11 did not take CLIPBOARD"
+    png, utf8 = conn.intern_atom("image/png"), conn.intern_atom("UTF8_STRING")
+    targets = conn.intern_atom("TARGETS")
+    req = conn.create_window()
+    prop = _convert_and_wait(conn, req, targets)
+    assert prop
+    _t, value = _get_property(conn, req, prop)
+    offered = struct.unpack(f"<{len(value) // 4}I", value)
+    assert png in offered and utf8 not in offered, offered
+    prop = _convert_and_wait(conn, req, png)
+    assert prop, "image/png refused"
+    ptype, value = _get_property(conn, req, prop)
+    assert ptype == png
+    assert value == _pattern(5000)
+    # text is not offered, so it is refused
+    assert _convert_and_wait(conn, req, utf8) == 0
+
+
+@pytest.mark.parametrize("wx11_env", [{"WX11_MAX_PROPERTY": "4096"}])
+def test_large_wayland_copy_goes_in_chunks(xserver, client):
+    """more than fits in one property goes by INCR: the size first, then a
+    chunk each time the X client deletes the property, then an empty one"""
+    from test_clipboard_grants import (PROPERTY_CHANGE_MASK, PROPERTY_DELETE,
+                                       _property_event, _select)
+    n = 50000
+    c, win = _shown(xserver, client, "big image copier", "--copy-bytes", str(n),
+                    "--mime", "image/png")
+    Input(xserver).focus(win)
+    c.wait_for("copied")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_owner(conn), "WX11 did not take CLIPBOARD"
+    png, incr = conn.intern_atom("image/png"), conn.intern_atom("INCR")
+    req = conn.create_window()
+    conn.send_request(_select(req, PROPERTY_CHANGE_MASK))
+    prop = _convert_and_wait(conn, req, png)
+    assert prop
+    ptype, value = _get_property(conn, req, prop, delete=True)
+    assert ptype == incr
+    assert struct.unpack("<I", value)[0] == n
+    data, chunks = b"", 0
+    while True:
+        assert _property_event(conn, req, prop, 0, timeout=5.0), "no next chunk"  # NewValue
+        ptype, chunk = _get_property(conn, req, prop, delete=True)
+        assert ptype == png
+        if not chunk:
+            break
+        assert len(chunk) <= 4096
+        data += chunk
+        chunks += 1
+    assert chunks >= n // 4096
+    assert data == _pattern(n)
+
+
+def test_x_image_copy_pastes_in_wayland(xserver, client):
+    """an X client's image/png (from its TARGETS) is offered to Wayland
+    clients and pasted in that type"""
+    from test_clipboard_grants import X_CHANGE_PROPERTY, _next_data_request, _notify, _pad
+    owner = RawX11Connection(xserver.display_num)
+    png = owner.intern_atom("image/png")
+    owner_win = owner.create_window()
+    from test_clipboard_grants import _set_owner
+    _set_owner(owner, owner_win, owner.intern_atom("CLIPBOARD"))
+    targets = owner.targets_atoms[0]
+    c, win = _shown(xserver, client, "image paster", "--paste", "--mime", "image/png")
+    Input(xserver).focus(win)
+    c.wait_for("keyboard enter")
+    ev = _next_data_request(owner, timeout=5.0, offer=[targets, png])
+    assert ev is not None, "WX11 never asked for the image"
+    c.wait_for("offer image/png")
+    _t, _o, requestor, sel, target, prop = struct.unpack_from("<IIIIII", ev.data, 4)
+    assert target == png
+    data = _pattern(3000)
+    body = _pad(data)
+    owner.send_request(struct.pack("<BBHIIIBxxxI", X_CHANGE_PROPERTY, 0, 6 + len(body) // 4,
+                                   requestor, prop, png, 8, len(data)) + body)
+    owner.send_request(_notify(requestor, sel, prop))
+    c.wait_for(f"pasted-bin 3000 {sum(data)}")

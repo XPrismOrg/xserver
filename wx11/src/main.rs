@@ -117,11 +117,14 @@ pub struct State {
     seat: Seat<State>,
     data_device: DataDeviceState,
     handle: LoopHandle<'static, State>,
-    /// the text type a Wayland client's selection offers, while it owns
+    /// the MIME types a Wayland client's selection offers, while it owns
     /// that X selection (CLIPBOARD, PRIMARY)
-    wayland_selection: HashMap<Sel, (String, Rc<XSide>)>,
-    /// Wayland clients' pipes waiting for an X selection, in order
-    to_wayland: HashMap<(Sel, ConnKey), VecDeque<OwnedFd>>,
+    wayland_selection: HashMap<Sel, (Vec<String>, Rc<XSide>)>,
+    /// the types offered to Wayland clients for an X client's selection
+    x_offer: HashMap<Sel, Vec<String>>,
+    /// Wayland clients' pipes waiting for an X selection in a target, in
+    /// order
+    to_wayland: HashMap<(Sel, ConnKey, String), VecDeque<OwnedFd>>,
     primary_selection: PrimarySelectionState,
     keyboard: KeyboardHandle<State>,
     pointer: PointerHandle<State>,
@@ -755,10 +758,15 @@ impl State {
                     }
                 }
                 x::Event::ClipboardRequest(req) => self.x_clipboard_request(conn, req),
-                x::Event::ClipboardData(which, data) => {
+                x::Event::ClipboardTargets(which, names) => {
+                    if Rc::ptr_eq(conn, &self.x) {
+                        self.x_clipboard_targets(which, names)
+                    }
+                }
+                x::Event::ClipboardData(which, target, data) => {
                     let waiting = self
                         .to_wayland
-                        .entry((which, key(conn)))
+                        .entry((which, key(conn), target))
                         .or_default()
                         .pop_front();
                     if let (Some(fd), Some(data)) = (waiting, data) {
@@ -875,12 +883,52 @@ impl State {
         {
             self.wayland_selection.remove(&which);
         }
+        // text at once (what nearly every copy is); what the owner
+        // really offers follows when it answers TARGETS
         let types: Vec<String> = TEXT_TYPES.iter().map(|s| s.to_string()).collect();
-        match (which, owner.is_some()) {
-            (Sel::Clipboard, true) => set_data_device_selection(&self.dh, &self.seat, types, ()),
-            (Sel::Clipboard, false) => clear_data_device_selection(&self.dh, &self.seat),
-            (Sel::Primary, true) => set_primary_selection(&self.dh, &self.seat, types, ()),
-            (Sel::Primary, false) => clear_primary_selection(&self.dh, &self.seat),
+        if owner.is_some() {
+            self.x.request_targets(which);
+            self.x.flush();
+            self.offer_x_selection(which, types);
+        } else {
+            self.x_offer.remove(&which);
+            match which {
+                Sel::Clipboard => clear_data_device_selection(&self.dh, &self.seat),
+                Sel::Primary => clear_primary_selection(&self.dh, &self.seat),
+            }
+        }
+    }
+
+    fn offer_x_selection(&mut self, which: Sel, types: Vec<String>) {
+        self.x_offer.insert(which, types.clone());
+        match which {
+            Sel::Clipboard => set_data_device_selection(&self.dh, &self.seat, types, ()),
+            Sel::Primary => set_primary_selection(&self.dh, &self.seat, types, ()),
+        }
+    }
+
+    /// the X owner of a selection said what it offers: MIME types (any
+    /// target with a slash: image/png, text/html, text/uri-list, ...) and
+    /// text if it has any
+    fn x_clipboard_targets(&mut self, which: Sel, names: Option<Vec<String>>) {
+        // still an X client's selection (not a Wayland client's since)
+        if !self.x_offer.contains_key(&which) || self.wayland_selection.contains_key(&which) {
+            return;
+        }
+        let Some(names) = names else {
+            return; // keep offering text
+        };
+        let mut types: Vec<String> = Vec::new();
+        if names.iter().any(|n| x::is_text(n)) {
+            types.extend(TEXT_TYPES.iter().map(|s| s.to_string()));
+        }
+        for n in names {
+            if n.contains('/') && !types.contains(&n) {
+                types.push(n);
+            }
+        }
+        if !types.is_empty() && self.x_offer.get(&which) != Some(&types) {
+            self.offer_x_selection(which, types);
         }
     }
 
@@ -892,13 +940,22 @@ impl State {
             .wayland_selection
             .get(&req.which)
             .filter(|(_, c)| Rc::ptr_eq(c, conn))
-            .map(|(mime, _)| mime.clone());
-        let mime = match (held, conn.clipboard_target(&req)) {
-            (None, _) | (_, x::ClipboardTarget::Other) => {
-                return conn.answer_clipboard(&req, None);
-            }
-            (_, x::ClipboardTarget::Targets) => return conn.answer_clipboard(&req, None),
-            (Some(mime), _) => mime,
+            .map(|(mimes, _)| mimes.clone());
+        let Some(mimes) = held else {
+            return conn.answer_clipboard(&req, None);
+        };
+        let mime = match conn.clipboard_target(&req) {
+            x::ClipboardTarget::Targets => return conn.answer_targets(&req, &mimes),
+            x::ClipboardTarget::Utf8 | x::ClipboardTarget::Latin1 => TEXT_TYPES
+                .iter()
+                .find(|t| mimes.iter().any(|m| m == *t))
+                .map(|t| t.to_string())
+                .or_else(|| mimes.iter().find(|m| x::is_text(m)).cloned()),
+            x::ClipboardTarget::Named(name) => mimes.iter().find(|m| **m == name).cloned(),
+            x::ClipboardTarget::Other => None,
+        };
+        let Some(mime) = mime else {
+            return conn.answer_clipboard(&req, None);
         };
         let Ok((reader, writer)) = std::io::pipe() else {
             return conn.answer_clipboard(&req, None);
@@ -926,8 +983,9 @@ impl State {
             let mut chunk = [0u8; 65536];
             // SAFETY: the reader is not replaced or dropped here
             let n = unsafe { reader.get_mut() }.read(&mut chunk).unwrap_or(0);
-            // 16 MiB is plenty for text; more is cut off
-            if n > 0 && data.len() < 16 << 20 {
+            // 64 MiB is plenty (an uncompressed 4K screenshot is 33);
+            // more is cut off
+            if n > 0 && data.len() < 64 << 20 {
                 data.extend_from_slice(&chunk[..n]);
                 p.moved();
                 return Ok(PostAction::Continue);
@@ -1053,10 +1111,7 @@ impl SelectionHandler for State {
     ) {
         let which = sel(ty);
         let mimes = source.map(|s| s.mime_types()).unwrap_or_default();
-        let text = TEXT_TYPES
-            .iter()
-            .find(|t| mimes.iter().any(|m| m == *t))
-            .map(|t| t.to_string());
+        self.x_offer.remove(&which);
         // the selection is held through the connection of the client
         // that set it (only the focused client can)
         let conn = self.clipboard_conn();
@@ -1068,9 +1123,9 @@ impl SelectionHandler for State {
         let Some(conn) = conn else {
             return;
         };
-        if let Some(text) = text {
+        if !mimes.is_empty() {
             conn.own_clipboard(which);
-            self.wayland_selection.insert(which, (text, conn));
+            self.wayland_selection.insert(which, (mimes, conn));
         } else {
             conn.disown_clipboard(which);
         }
@@ -1080,7 +1135,7 @@ impl SelectionHandler for State {
     fn send_selection(
         &mut self,
         ty: SelectionTarget,
-        _mime_type: String,
+        mime_type: String,
         fd: OwnedFd,
         _seat: Seat<State>,
         _user_data: &(),
@@ -1089,11 +1144,18 @@ impl SelectionHandler for State {
         // asked through the pasting client's connection; none: the fd
         // closes, an empty paste
         if let Some(conn) = self.clipboard_conn() {
+            // text in UTF-8 whichever text type was asked for; anything
+            // else by its MIME type, which X clients name the target with
+            let target = if x::is_text(&mime_type) || TEXT_TYPES.contains(&mime_type.as_str()) {
+                "UTF8_STRING".to_string()
+            } else {
+                mime_type
+            };
             self.to_wayland
-                .entry((which, key(&conn)))
+                .entry((which, key(&conn), target.clone()))
                 .or_default()
                 .push_back(fd);
-            conn.request_clipboard(which);
+            conn.request_clipboard(which, &target);
         }
     }
 }
@@ -1402,6 +1464,7 @@ fn main() {
         data_device: DataDeviceState::new::<State>(&dh),
         handle: event_loop.handle(),
         wayland_selection: HashMap::new(),
+        x_offer: HashMap::new(),
         to_wayland: HashMap::new(),
         primary_selection: PrimarySelectionState::new::<State>(&dh),
         keyboard,
