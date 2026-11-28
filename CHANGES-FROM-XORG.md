@@ -191,23 +191,24 @@ in db2711525).
 - **Variable refresh rate** reaches the driver again: an XLibre bug
   dropped `_VARIABLE_REFRESH` whenever Xinerama was compiled in but not
   used (c362bc782).
-- **NVIDIA's proprietary X driver is not loaded** unless `IgnoreABI`
-  is set (`Option "IgnoreABI"` in ServerFlags, or `-ignoreABI`). Built
-  for X.Org's ABI, driver 595 corrupts the server's screen data and
-  aborts it at startup (XLibre issue #2355), and the driver replaces
-  parts of the dispatcher and RandR, which bypasses namespace checks.
-  Without it, modesetting drives the displays and NVIDIA GPUs render
-  through Vulkan, CUDA and PRIME.
-- **Towards NVIDIA 590+**: those drivers carry a module built against
+- **NVIDIA's proprietary X driver loads only when asked**: with
+  `IgnoreABI` set (`Option "IgnoreABI"` in ServerFlags, or `-ignoreABI`).
+  The driver replaces parts of the dispatcher and RandR and adds its own
+  extensions (NV-GLX, NV-CONTROL), which namespace checks do not cover, so
+  it is an explicit choice. Without it, modesetting drives the displays
+  and NVIDIA GPUs render through Vulkan, CUDA and PRIME.
+- **NVIDIA 590+ works**: those drivers carry a module built against
   X.Org at commit 1bec46dd (ABI 27) and use it for this server's ABI 28.
   The interfaces it uses now match that commit: `WindowOptRec` has
   X.Org's `userProps` slot again (X.Org's macros compiled into the driver
   read the fields after it), RENDER's `DestroyWindow` and `CloseScreen`
   wrap chains are real chains that are called, `RROutputSetSubpixelOrder`
   returns `Bool`, and `DeliverEvents` / `TryClientEvents` take an `int`
-  count. A unit test pins these layouts. Driver 595 still overwrites
-  XFIXES's client key before the extensions start; the driver stays
-  refused until that is found.
+  count. Before that, driver 595 corrupted the server's data and XFIXES
+  aborted it at startup (XLibre issue #2355). A unit test pins these
+  layouts. Tested with 595.71.05 on an RTX 4050 Laptop GPU: as the X
+  screen (OpenGL 4.6, the scene compositor on) and as a PRIME render
+  offload GPU behind modesetting on the iGPU.
 
 ### Wayland applications (WX11)
 

@@ -813,18 +813,17 @@ LoadModule(const char *module, void *options, const XF86ModReqInfo *modreq,
     if (is_nvidia_proprietary && !LoaderIgnoreAbi) {
         /*
          * XPrism does not load NVIDIA's proprietary X driver unless asked
-         * to. Built for X.Org's ABI, current branches (595) corrupt the
-         * server's screen data at startup and abort it (XLibre issue
-         * #2355), and the driver replaces parts of the protocol dispatcher
-         * and RandR, which bypasses XPrism's namespace checks. Refusing it
+         * to: the driver replaces parts of the protocol dispatcher and
+         * RandR and adds its own extensions, which bypasses XPrism's
+         * namespace checks. (595 works since the ABI-27 interfaces match,
+         * see test/xfree86.c xfree86_nvidia_abi_layout.) Refusing it
          * leaves the other drivers (modesetting) to drive the displays;
          * NVIDIA GPUs still render through Vulkan, CUDA and PRIME.
          */
         LogMessage(X_ERROR, "LoadModule: not loading NVIDIA's proprietary X driver "
-                   "(\"nvidia\"): it is built for X.Org's ABI, crashes this server "
-                   "with current versions, and bypasses XPrism's namespace checks.\n");
+                   "(\"nvidia\") unless asked to: it bypasses XPrism's namespace checks.\n");
         LogMessage(X_ERROR, "LoadModule: the displays are left to the other drivers "
-                   "(modesetting). To load it anyway, at your own risk, set "
+                   "(modesetting). To load it, set "
                    "Option \"IgnoreABI\" \"true\" in ServerFlags or start with "
                    "-ignoreABI.\n");
         if (errmaj)
@@ -834,8 +833,9 @@ LoadModule(const char *module, void *options, const XF86ModReqInfo *modreq,
     if (is_nvidia_proprietary) {
         LogMessage(X_WARNING, "LoadModule: loading NVIDIA's proprietary X driver "
                    "because IgnoreABI is set. Legacy branches (470, 390, ...) need "
-                   "XPrism built with -Dlegacy_nvidia_padding=true; current ones "
-                   "(595) are known to crash XLibre-based servers.\n");
+                   "XPrism built with -Dlegacy_nvidia_padding=true. Its own "
+                   "extensions (NV-GLX, NV-CONTROL) and RandR hooks are not "
+                   "covered by namespace checks.\n");
     }
 
     assert(m);

@@ -436,7 +436,7 @@ xfree86_empty_configdir(void)
 }
 
 /* NVIDIA's proprietary X driver is refused unless IgnoreABI is set: it
- * aborts the server at startup (595) and bypasses namespace checks. With
+ * bypasses namespace checks. With
  * IgnoreABI the loader looks for it as for any module. */
 static void
 xfree86_nvidia_ddx_refused(void)
