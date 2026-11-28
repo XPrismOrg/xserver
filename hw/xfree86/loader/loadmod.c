@@ -810,25 +810,32 @@ LoadModule(const char *module, void *options, const XF86ModReqInfo *modreq,
         m = (char *) module;
     }
 
+    if (is_nvidia_proprietary && !LoaderIgnoreAbi) {
+        /*
+         * XPrism does not load NVIDIA's proprietary X driver unless asked
+         * to. Built for X.Org's ABI, current branches (595) corrupt the
+         * server's screen data at startup and abort it (XLibre issue
+         * #2355), and the driver replaces parts of the protocol dispatcher
+         * and RandR, which bypasses XPrism's namespace checks. Refusing it
+         * leaves the other drivers (modesetting) to drive the displays;
+         * NVIDIA GPUs still render through Vulkan, CUDA and PRIME.
+         */
+        LogMessage(X_ERROR, "LoadModule: not loading NVIDIA's proprietary X driver "
+                   "(\"nvidia\"): it is built for X.Org's ABI, crashes this server "
+                   "with current versions, and bypasses XPrism's namespace checks.\n");
+        LogMessage(X_ERROR, "LoadModule: the displays are left to the other drivers "
+                   "(modesetting). To load it anyway, at your own risk, set "
+                   "Option \"IgnoreABI\" \"true\" in ServerFlags or start with "
+                   "-ignoreABI.\n");
+        if (errmaj)
+            *errmaj = LDR_MISMATCH;
+        goto LoadModule_fail;
+    }
     if (is_nvidia_proprietary) {
-        LogMessage(X_WARNING, "LoadModule: If you are using one of the legacy "
-                              "branches of the nvidia proprierary DDX driver "
-                              "(e.g. 470, 390, 340, etc.)\n");
-        LogMessage(X_WARNING, "LoadModule: you need to build XPrism "
-                              "with -Dlegacy_nvidia_padding=true\n");
-        LogMessage(X_WARNING, "LoadModule: Otherwise, you will get a "
-                              "segmentation fault due to the abi mismatch "
-                              "between the new X server abi and the one these "
-                              "old drivers are compiled against.\n");
-        LogMessage(X_WARNING, "LoadModule: If you are using one of the maintained "
-                              "branches of the nvidia nvidia kernel drivers,\n");
-        LogMessage(X_WARNING, "LoadModule: you can try using the in-tree, open-source modesetting "
-                              "DDX driver instead of the proprietary nvidia DDX driver.\n");
-        if (!LoaderIgnoreAbi) {
-            /* warn every time this is hit */
-            LogMessage(X_WARNING, "LoadModule: Implicitly ignoring abi mismatch "
-                       "for the nvidia proprierary DDX driver\n");
-        }
+        LogMessage(X_WARNING, "LoadModule: loading NVIDIA's proprietary X driver "
+                   "because IgnoreABI is set. Legacy branches (470, 390, ...) need "
+                   "XPrism built with -Dlegacy_nvidia_padding=true; current ones "
+                   "(595) are known to crash XLibre-based servers.\n");
     }
 
     assert(m);

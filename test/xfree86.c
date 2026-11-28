@@ -44,6 +44,8 @@
 #endif
 #if defined(XSERVER_PLATFORM_BUS) && defined(XSERVER_LIBPCIACCESS)
 #include "xf86Bus.h"
+#include "loaderProcs.h"
+#include "loader.h"
 #endif
 
 #include "tests-common.h"
@@ -425,6 +427,41 @@ xfree86_empty_configdir(void)
     free(dir);
 }
 
+/* NVIDIA's proprietary X driver is refused unless IgnoreABI is set: it
+ * aborts the server at startup (595) and bypasses namespace checks. With
+ * IgnoreABI the loader looks for it as for any module. */
+static void
+xfree86_nvidia_ddx_refused(void)
+{
+    char template[] = "modules-XXXXXX";
+    char *dir;
+    int err = 0;
+
+    assert(mkdtemp(template));
+    dir = realpath(template, NULL);     /* module paths are absolute */
+    assert(dir);
+    LoaderInit();
+    LoaderSetPath(NULL, dir);
+
+    LoaderIgnoreAbi = FALSE;
+    assert(LoadModule("nvidia", NULL, NULL, &err) == NULL);
+    assert(err == LDR_MISMATCH);
+
+    /* other drivers are not affected */
+    err = 0;
+    assert(LoadModule("nouveau", NULL, NULL, &err) == NULL);
+    assert(err == LDR_NOENT);
+
+    LoaderIgnoreAbi = TRUE;
+    err = 0;
+    assert(LoadModule("nvidia", NULL, NULL, &err) == NULL);
+    assert(err == LDR_NOENT);   /* looked for, not refused */
+    LoaderIgnoreAbi = FALSE;
+
+    assert(rmdir(dir) == 0);
+    free(dir);
+}
+
 const testfunc_t*
 xfree86_test(void)
 {
@@ -437,6 +474,7 @@ xfree86_test(void)
         xfree86_platform_device_stable,
         xfree86_hotplug_driver_first_match,
         xfree86_empty_configdir,
+        xfree86_nvidia_ddx_refused,
         NULL,
     };
     return testfuncs;

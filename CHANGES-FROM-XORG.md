@@ -44,7 +44,8 @@ it (October 2026), XLibre listed these differences from the X.Org Server:
 - everything from the X.Org Server, including its unreleased features;
 - TearFree modesetting by default, and optional atomic modesetting;
 - support for the NVIDIA drivers 340, 390, 470, 570 and newer, with the
-  proprietary driver detected automatically (from 25.0.0.16);
+  proprietary driver detected automatically (from 25.0.0.16; XPrism
+  loads it only with IgnoreABI, see Display below);
 - the Xnamespace extension, which separates X clients into namespaces;
 - seat management through seatd as well as systemd-logind;
 - Xfbdev, the generic framebuffer X server for Linux (kdrive);
@@ -190,6 +191,13 @@ in db2711525).
 - **Variable refresh rate** reaches the driver again: an XLibre bug
   dropped `_VARIABLE_REFRESH` whenever Xinerama was compiled in but not
   used (c362bc782).
+- **NVIDIA's proprietary X driver is not loaded** unless `IgnoreABI`
+  is set (`Option "IgnoreABI"` in ServerFlags, or `-ignoreABI`). Built
+  for X.Org's ABI, driver 595 corrupts the server's screen data and
+  aborts it at startup (XLibre issue #2355), and the driver replaces
+  parts of the dispatcher and RandR, which bypasses namespace checks.
+  Without it, modesetting drives the displays and NVIDIA GPUs render
+  through Vulkan, CUDA and PRIME.
 
 ### Wayland applications (WX11)
 
