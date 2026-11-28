@@ -45,7 +45,7 @@ use std::io::Write;
 use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
-    wl_buffer, wl_callback, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer,
+    wl_buffer, wl_callback, wl_compositor, wl_region, wl_subcompositor, wl_subsurface, wl_data_device, wl_data_device_manager, wl_data_offer,
     wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface,
 };
@@ -73,7 +73,21 @@ struct PopupSpec {
     slide: bool,
 }
 
+/// --subsurface: size, place in the window, colour, synchronized or not,
+/// and the colour it changes to on its own after the first frame
+struct SubSpec {
+    size: (i32, i32),
+    at: (i32, i32),
+    color: u32,
+    desync: bool,
+    recolor: Option<u32>,
+    input_none: bool,
+}
+
 struct App {
+    subcompositor: Option<wl_subcompositor::WlSubcompositor>,
+    sub_spec: Option<SubSpec>,
+    sub: Option<(wl_surface::WlSurface, wl_subsurface::WlSubsurface)>,
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
@@ -151,7 +165,46 @@ fn say(line: String) {
 impl App {
     fn draw(&mut self, qh: &QueueHandle<App>) {
         let surface = self.surface.clone().unwrap();
+        if let (Some(spec), None) = (&self.sub_spec, &self.sub) {
+            let sc = self.subcompositor.as_ref().expect("no wl_subcompositor");
+            let child = self.compositor.as_ref().unwrap().create_surface(qh, ());
+            let sub = sc.get_subsurface(&child, &surface, qh, ());
+            sub.set_position(spec.at.0, spec.at.1);
+            if spec.desync {
+                sub.set_desync();
+            }
+            if spec.input_none {
+                let region = self.compositor.as_ref().unwrap().create_region(qh, ());
+                child.set_input_region(Some(&region));
+                region.destroy();
+            }
+            // synchronized: shown with the parent's next commit
+            self.fill(&child, spec.size, spec.color, qh);
+            child.commit();
+            self.sub = Some((child, sub));
+        }
         self.paint(&surface, self.size, self.color, false, qh);
+    }
+
+    /// attach a buffer of color to surface (no commit)
+    fn fill(&self, surface: &wl_surface::WlSurface, (w, h): (i32, i32), color: u32, qh: &QueueHandle<App>) {
+        let stride = w * 4;
+        let len = (stride * h) as usize;
+        let file = shm_file(len);
+        let mut data = Vec::with_capacity(len);
+        for _ in 0..(w * h) {
+            data.extend_from_slice(&color.to_le_bytes());
+        }
+        (&file).write_all(&data).expect("shm write");
+        let pool = self.shm.as_ref().unwrap().create_pool(file.as_fd(), len as i32, qh, ());
+        let buffer = pool.create_buffer(0, w, h, stride, wl_shm::Format::Xrgb8888, qh, ());
+        pool.destroy();
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage_buffer(0, 0, w, h);
+    }
+
+    fn is_sub(&self, surface: &wl_surface::WlSurface) -> bool {
+        self.sub.as_ref().is_some_and(|(s, _)| s == surface)
     }
 
     /// fill surface with color; the frame callback says which surface
@@ -255,6 +308,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for App {
             match interface.as_str() {
                 "wl_compositor" => app.compositor = Some(registry.bind(name, 4, qh, ())),
                 "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
+                "wl_subcompositor" => app.subcompositor = Some(registry.bind(name, 1, qh, ())),
                 "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
                 "wl_seat" => app.seat = Some(registry.bind(name, 5, qh, ())),
                 "wl_output" => {
@@ -352,6 +406,13 @@ impl Dispatch<wl_callback::WlCallback, (i32, i32, bool)> for App {
                 return;
             }
             say(format!("drawn {w} {h}"));
+            // --sub-recolor: the desynchronized subsurface changes alone
+            let recolor = app.sub_spec.as_mut().and_then(|s| s.recolor.take().map(|c| (c, s.size)));
+            if let (Some((color, size)), Some((child, _))) = (recolor, app.sub.clone()) {
+                app.fill(&child, size, color, qh);
+                child.commit();
+                say("sub recolored".into());
+            }
             if app.popup_spec.as_ref().is_some_and(|p| !p.grab) {
                 app.open_popup(qh, None);
             }
@@ -482,7 +543,13 @@ impl Dispatch<wl_pointer::WlPointer, ()> for App {
                 surface_y,
                 ..
             } => {
-                let what = if app.is_popup(&surface) { " popup" } else { "" };
+                let what = if app.is_popup(&surface) {
+                    " popup"
+                } else if app.is_sub(&surface) {
+                    " sub"
+                } else {
+                    ""
+                };
                 say(format!("pointer enter{what} {surface_x} {surface_y}"))
             }
             wl_pointer::Event::Leave { .. } => say("pointer leave".into()),
@@ -702,6 +769,9 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for App {
 }
 delegate_noop!(App: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(App: ignore wl_compositor::WlCompositor);
+delegate_noop!(App: ignore wl_subcompositor::WlSubcompositor);
+delegate_noop!(App: ignore wl_subsurface::WlSubsurface);
+delegate_noop!(App: ignore wl_region::WlRegion);
 delegate_noop!(App: ignore xdg_positioner::XdgPositioner);
 delegate_noop!(App: ignore wl_shm::WlShm);
 delegate_noop!(App: ignore wl_shm_pool::WlShmPool);
@@ -761,6 +831,7 @@ fn main() {
     let mut alpha = false;
     let mut security_context = None;
     let mut primary = false;
+    let mut sub_spec = None;
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         // --grab takes no value
@@ -771,6 +842,8 @@ fn main() {
             "--alpha",
             "--primary",
             "--copy-stall",
+            "--sub-desync",
+            "--sub-no-input",
         ]
         .contains(&a.as_str())
         {
@@ -801,6 +874,35 @@ fn main() {
             "--popup-color" => {
                 popup_spec.as_mut().expect("--popup first").color =
                     u32::from_str_radix(&v, 16).expect("--popup-color RRGGBB")
+            }
+            "--subsurface" => {
+                let (wh, xy) = v.split_once('+').expect("--subsurface WxH+X+Y");
+                let (w, h) = wh.split_once('x').expect("--subsurface WxH+X+Y");
+                let (x, y) = xy.split_once('+').expect("--subsurface WxH+X+Y");
+                sub_spec = Some(SubSpec {
+                    size: (w.parse().expect("width"), h.parse().expect("height")),
+                    at: (x.parse().expect("x"), y.parse().expect("y")),
+                    color: 0x0000_ff00,
+                    desync: false,
+                    recolor: None,
+                    input_none: false,
+                });
+            }
+            "--sub-color" => {
+                sub_spec.as_mut().expect("--subsurface first").color =
+                    u32::from_str_radix(&v, 16).expect("--sub-color RRGGBB")
+            }
+            "--sub-recolor" => {
+                sub_spec.as_mut().expect("--subsurface first").recolor =
+                    Some(u32::from_str_radix(&v, 16).expect("--sub-recolor RRGGBB"))
+            }
+            "--sub-desync" => {
+                sub_spec.as_mut().expect("--subsurface first").desync = true;
+                continue;
+            }
+            "--sub-no-input" => {
+                sub_spec.as_mut().expect("--subsurface first").input_none = true;
+                continue;
             }
             "--copy" => copy = Some(v),
             "--mime" => {
@@ -843,7 +945,7 @@ fn main() {
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT | --copy-bytes N [--copy-stall]] [--paste [--paste-late MS]] [--mime TYPE] [--primary] [--alpha] [--security-context APP_ID]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT | --copy-bytes N [--copy-stall]] [--paste [--paste-late MS]] [--mime TYPE] [--primary] [--alpha] [--security-context APP_ID] [--subsurface WxH+X+Y [--sub-color RRGGBB] [--sub-desync] [--sub-recolor RRGGBB] [--sub-no-input]]");
                 std::process::exit(2);
             }
         }
@@ -863,6 +965,9 @@ fn main() {
     let qh = queue.handle();
     conn.display().get_registry(&qh, ());
     let mut app = App {
+        subcompositor: None,
+        sub_spec,
+        sub: None,
         compositor: None,
         shm: None,
         wm_base: None,

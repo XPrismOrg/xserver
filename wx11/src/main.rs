@@ -19,6 +19,7 @@
 
 mod x;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -49,8 +50,9 @@ use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resourc
 use smithay::utils::{Logical, Rectangle, Serial, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
-    with_states, BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-    SurfaceAttributes,
+    get_parent, with_states, with_surface_tree_upward, BufferAssignment,
+    CompositorClientState, CompositorHandler, CompositorState, SubsurfaceCachedState,
+    SurfaceAttributes, TraversalAction,
 };
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::{
@@ -171,17 +173,23 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
-        let id = surface.id();
+        // a subsurface shows as part of the toplevel or popup at the root
+        // of its tree
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+        let id = root.id();
         if self.popups.contains_key(&id) {
-            self.commit_popup(surface);
+            self.commit_popup(&root, &root == surface);
             return;
         }
         let Some(top) = self.toplevels.get(&id) else {
-            return;
+            return; // not (yet) part of anything shown
         };
 
         // the first commit of a toplevel asks for its configure
-        let configured = with_states(surface, |states| {
+        let configured = with_states(&root, |states| {
             states
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
@@ -189,17 +197,182 @@ impl CompositorHandler for State {
                 .unwrap_or(true)
         });
         if !configured {
-            top.surface.send_configure();
+            if &root == surface {
+                top.surface.send_configure();
+            }
             return;
         }
 
-        let (buffer, callbacks) = take_commit(surface);
-        match buffer {
-            Some(BufferAssignment::NewBuffer(buffer)) => self.show_buffer(&id, &buffer),
-            Some(BufferAssignment::Removed) => self.hide(&id),
-            None => {}
+        let (image, callbacks) = composite(&root);
+        match image {
+            Some((w, h, pixels, alpha)) => self.show_image(&id, w, h, pixels, alpha),
+            None => self.hide(&id),
         }
         self.frame_done(callbacks);
+    }
+}
+
+/// a surface's last committed pixels (width, height, BGRA rows, alpha)
+#[derive(Default)]
+struct SurfacePixels(RefCell<Option<Image>>);
+type Image = (u32, u32, Vec<u8>, bool);
+
+/// The picture of a surface tree: each surface's newly committed buffer
+/// (subsurfaces' too: a synchronized one's state is applied with its
+/// parent's) is kept, and they are drawn from the farthest to the
+/// nearest at their places, over the root's size. None if the root has
+/// no buffer. Also the frame callbacks of the whole tree.
+fn composite(root: &WlSurface) -> (Option<Image>, Vec<WlCallback>) {
+    let mut layers: Vec<((i32, i32), WlSurface)> = Vec::new();
+    let mut callbacks = Vec::new();
+    with_surface_tree_upward(
+        root,
+        (0, 0),
+        |_, states, parent: &(i32, i32)| {
+            TraversalAction::DoChildren(place_in_tree(states, *parent))
+        },
+        |surface, states, parent| {
+            let (buffer, cbs) = {
+                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                let current = attrs.current();
+                (
+                    current.buffer.take(),
+                    std::mem::take(&mut current.frame_callbacks),
+                )
+            };
+            callbacks.extend(cbs);
+            let cache = states.data_map.get_or_insert(SurfacePixels::default);
+            match buffer {
+                Some(BufferAssignment::NewBuffer(b)) => *cache.0.borrow_mut() = read_pixels(&b),
+                Some(BufferAssignment::Removed) => *cache.0.borrow_mut() = None,
+                None => {}
+            }
+            layers.push((place_in_tree(states, *parent), surface.clone()));
+        },
+        |_, _, _| true,
+    );
+    let pixels_of = |surface: &WlSurface| {
+        with_states(surface, |states| {
+            states
+                .data_map
+                .get::<SurfacePixels>()
+                .and_then(|c| c.0.borrow().clone())
+        })
+    };
+    let Some((w, h, base, alpha)) = pixels_of(root) else {
+        return (None, callbacks);
+    };
+    if layers.len() == 1 {
+        return (Some((w, h, base, alpha)), callbacks); // no subsurfaces
+    }
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for ((x, y), surface) in layers {
+        let layer = if &surface == root {
+            Some((w, h, base.clone(), alpha))
+        } else {
+            pixels_of(&surface)
+        };
+        if let Some((lw, lh, px, la)) = layer {
+            blend(&mut out, w, h, &px, lw, lh, x, y, la);
+        }
+    }
+    (Some((w, h, out, alpha)), callbacks)
+}
+
+/// the surface of root's tree under x, y (root's coordinates) that takes
+/// input there, nearest first, and where it is; root if no subsurface does
+fn surface_under(root: &WlSurface, x: f64, y: f64) -> (WlSurface, (i32, i32)) {
+    let mut found: Option<(WlSurface, (i32, i32))> = None;
+    smithay::wayland::compositor::with_surface_tree_downward(
+        root,
+        (0, 0),
+        |_, states, parent: &(i32, i32)| {
+            TraversalAction::DoChildren(place_in_tree(states, *parent))
+        },
+        |surface, states, parent| {
+            if found.is_some() || surface == root {
+                return;
+            }
+            let (sx, sy) = place_in_tree(states, *parent);
+            let size = states
+                .data_map
+                .get::<SurfacePixels>()
+                .and_then(|c| c.0.borrow().as_ref().map(|i| (i.0, i.1)));
+            let Some((w, h)) = size else {
+                return; // nothing shown: takes no input
+            };
+            let (lx, ly) = (x - sx as f64, y - sy as f64);
+            if lx < 0.0 || ly < 0.0 || lx >= w as f64 || ly >= h as f64 {
+                return;
+            }
+            let point: smithay::utils::Point<i32, Logical> = (lx as i32, ly as i32).into();
+            let takes = states
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .current()
+                .input_region
+                .as_ref()
+                .is_none_or(|r| r.contains(point));
+            if takes {
+                found = Some((surface.clone(), (sx, sy)));
+            }
+        },
+        |_, _, _| true,
+    );
+    found.unwrap_or_else(|| (root.clone(), (0, 0)))
+}
+
+/// where a surface of a tree is, given its parent's place: a
+/// subsurface's offset added
+fn place_in_tree(
+    states: &smithay::wayland::compositor::SurfaceData,
+    parent: (i32, i32),
+) -> (i32, i32) {
+    if states.role == Some("subsurface") {
+        let loc = states
+            .cached_state
+            .get::<SubsurfaceCachedState>()
+            .current()
+            .location;
+        (parent.0 + loc.x, parent.1 + loc.y)
+    } else {
+        parent
+    }
+}
+
+/// draws src (premultiplied BGRA, or BGRX if !alpha) over dst at x, y,
+/// clipped to dst
+#[allow(clippy::too_many_arguments)]
+fn blend(dst: &mut [u8], dw: u32, dh: u32, src: &[u8], sw: u32, sh: u32, x: i32, y: i32, alpha: bool) {
+    let (dw, dh, sw, sh) = (dw as i64, dh as i64, sw as i64, sh as i64);
+    let (x, y) = (x as i64, y as i64);
+    let (x0, x1) = (x.max(0), (x + sw).min(dw));
+    let (y0, y1) = (y.max(0), (y + sh).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    for row in y0..y1 {
+        let s = (((row - y) * sw + (x0 - x)) * 4) as usize;
+        let d = ((row * dw + x0) * 4) as usize;
+        let n = ((x1 - x0) * 4) as usize;
+        let (src, dst) = (&src[s..s + n], &mut dst[d..d + n]);
+        if !alpha {
+            for (dp, sp) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                dp[..3].copy_from_slice(&sp[..3]);
+                dp[3] = 0xff;
+            }
+            continue;
+        }
+        for (dp, sp) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            let a = sp[3] as u32;
+            if a == 0xff {
+                dp.copy_from_slice(sp);
+            } else if a != 0 {
+                for c in 0..4 {
+                    dp[c] = (sp[c] as u32 + dp[c] as u32 * (255 - a) / 255).min(255) as u8;
+                }
+            }
+        }
     }
 }
 
@@ -233,17 +406,6 @@ fn read_pixels(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>, bool)> {
     image
 }
 
-/// take the committed buffer and frame callbacks of surface
-fn take_commit(surface: &WlSurface) -> (Option<BufferAssignment>, Vec<WlCallback>) {
-    with_states(surface, |states| {
-        let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-        let current = attrs.current();
-        (
-            current.buffer.take(),
-            std::mem::take(&mut current.frame_callbacks),
-        )
-    })
-}
 
 impl State {
     fn frame_done(&self, callbacks: Vec<WlCallback>) {
@@ -253,7 +415,7 @@ impl State {
         }
     }
 
-    fn commit_popup(&mut self, surface: &WlSurface) {
+    fn commit_popup(&mut self, surface: &WlSurface, own: bool) {
         let id = surface.id();
         let configured = with_states(surface, |states| {
             states
@@ -263,18 +425,15 @@ impl State {
                 .unwrap_or(true)
         });
         if !configured {
-            let _ = self.popups[&id].surface.send_configure();
+            if own {
+                let _ = self.popups[&id].surface.send_configure();
+            }
             return;
         }
-        let (buffer, callbacks) = take_commit(surface);
-        match buffer {
-            Some(BufferAssignment::NewBuffer(buffer)) => {
-                if let Some((w, h, pixels, alpha)) = read_pixels(&buffer) {
-                    self.show_popup(&id, w, h, &pixels, alpha);
-                }
-            }
-            Some(BufferAssignment::Removed) => self.hide_popup(&id),
-            None => {}
+        let (image, callbacks) = composite(surface);
+        match image {
+            Some((w, h, pixels, alpha)) => self.show_popup(&id, w, h, &pixels, alpha),
+            None => self.hide_popup(&id),
         }
         self.frame_done(callbacks);
     }
@@ -415,11 +574,8 @@ impl State {
         true
     }
 
-    fn show_buffer(&mut self, id: &Id, buffer: &WlBuffer) {
-        // a window keeps the visual of its first buffer
-        let Some((w, h, pixels, alpha)) = read_pixels(buffer) else {
-            return;
-        };
+    /// show a toplevel's picture (a window keeps the visual of its first)
+    fn show_image(&mut self, id: &Id, w: u32, h: u32, pixels: Vec<u8>, alpha: bool) {
 
         let wl_surface = self.toplevels[id].surface.wl_surface().clone();
         let Some(conn) = self.conn_for(&wl_surface) else {
@@ -604,7 +760,10 @@ impl State {
         let focus = self
             .surface_for_window(window)
             .filter(|_| inside)
-            .map(|s| (s, (0.0, 0.0).into()));
+            .map(|root| {
+                let (s, (ox, oy)) = surface_under(&root, x, y);
+                (s, (ox as f64, oy as f64).into())
+            });
         let pointer = self.pointer.clone();
         pointer.motion(
             self,

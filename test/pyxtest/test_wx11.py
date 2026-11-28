@@ -970,3 +970,62 @@ def test_x_image_copy_pastes_in_wayland(xserver, client):
                                    requestor, prop, png, 8, len(data)) + body)
     owner.send_request(_notify(requestor, sel, prop))
     c.wait_for(f"pasted-bin 3000 {sum(data)}")
+
+
+def _wait_pixel(conn, win, x, y, want, timeout=5.0):
+    end = time.monotonic() + timeout
+    while (got := _pixel(conn, win, x, y)) != want and time.monotonic() < end:
+        time.sleep(0.05)
+    return got
+
+
+def test_subsurface_is_drawn_in_its_window(xserver, client):
+    # a 20x10 green subsurface at 30,20 of a 64x48 red window (shown with
+    # the parent's commit: synchronized)
+    c, win = _shown(xserver, client, "video", "--subsurface", "20x10+30+20",
+                    "--sub-color", "00ff00")
+    conn = RawX11Connection(xserver.display_num)
+    assert _geometry(conn, win) == (64, 48)         # the parent's size
+    assert _wait_pixel(conn, win, 35, 25, 0x00ff00) == 0x00ff00
+    assert _pixel(conn, win, 49, 29) == 0x00ff00    # its last pixel
+    assert _pixel(conn, win, 50, 25) == 0xff0000    # just right of it
+    assert _pixel(conn, win, 35, 30) == 0xff0000    # just below
+    assert _pixel(conn, win, 5, 5) == 0xff0000
+
+
+def test_subsurface_out_of_the_window_is_clipped(xserver, client):
+    c, win = _shown(xserver, client, "clip", "--subsurface", "40x40+50+30",
+                    "--sub-color", "0000ff")
+    conn = RawX11Connection(xserver.display_num)
+    assert _geometry(conn, win) == (64, 48)
+    assert _wait_pixel(conn, win, 63, 47, 0x0000ff) == 0x0000ff
+    assert _pixel(conn, win, 49, 29) == 0xff0000
+
+
+def test_desynchronized_subsurface_updates_alone(xserver, client):
+    c, win = _shown(xserver, client, "player", "--subsurface", "20x10+4+4",
+                    "--sub-color", "00ff00", "--sub-desync", "--sub-recolor", "ffff00")
+    c.wait_for("sub recolored")
+    conn = RawX11Connection(xserver.display_num)
+    assert _wait_pixel(conn, win, 10, 8, 0xffff00) == 0xffff00
+    assert _pixel(conn, win, 40, 40) == 0xff0000    # the parent kept
+
+
+def test_pointer_goes_to_the_subsurface_under_it(xserver, client):
+    c, win = _shown(xserver, client, "hit", "--subsurface", "20x10+30+20")
+    inp = Input(xserver)
+    inp.fake(MOTION_NOTIFY, x=5, y=5)
+    c.wait_for("pointer enter 5 5")
+    inp.fake(MOTION_NOTIFY, x=35, y=25)             # into the subsurface
+    c.wait_for("pointer enter sub 5 5")             # its own coordinates
+    inp.fake(MOTION_NOTIFY, x=5, y=40)              # back out
+    c.wait_for("pointer enter 5 40")
+
+
+def test_subsurface_without_input_lets_the_pointer_through(xserver, client):
+    c, win = _shown(xserver, client, "overlay", "--subsurface", "20x10+30+20",
+                    "--sub-no-input")
+    inp = Input(xserver)
+    inp.fake(MOTION_NOTIFY, x=35, y=25)
+    c.wait_for("pointer enter 35 25")               # the parent's
+    assert not [line for line in c.heard() if "enter sub" in line]

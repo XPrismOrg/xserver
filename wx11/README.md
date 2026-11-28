@@ -74,6 +74,11 @@ grants decide whether they reach the session's clipboard.
   such as foot, do not start without an output
 - transparency: an `argb8888` buffer gets a 32-bit ARGB window, which a
   compositing manager (or XPrism's compositor) blends
+- subsurfaces (video, embedded views, decorations): drawn into their
+  toplevel's or popup's window at their places, in their stacking order,
+  synchronized ones with their parent's commit and desynchronized ones on
+  their own; clipped to the parent's size. The pointer goes to the
+  subsurface under it (its input region respected)
 - windows X lost while covered (no compositor) are repainted on Expose
 
 Buffers are copied into the window with `PutImage` for now.
@@ -83,7 +88,6 @@ Buffers are copied into the window with `PutImage` for now.
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
-- subsurfaces
 - drag and drop (XDND)
 - one namespace per sandboxed application (today all sandboxed clients
   share `--sandbox-display`)
