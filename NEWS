@@ -1,3 +1,13 @@
+### xprism-xserver 26.11.02
+
+GPUs the standard way: a GPU on amdgpu, i915, xe or nvidia gets modesetting, glamor and DRI3/Present, not a vendor X driver
+NVIDIA: OpenGL on NVIDIA's libGLX over DRI3 and Present, also as a PRIME offload GPU (nvidia-offload), without NVIDIA's X driver; tested with 595 and 620
+NVIDIA's proprietary X driver: an opt-in (IgnoreABI); 590/595 no longer abort the server (ABI-27 interfaces matched); its xorg.conf.d snippets only with -Dnvidia_ddx_config
+composite: un-maximizing a window shown by direct scanout no longer takes the server down
+wx11: subsurfaces, drag and drop from X clients (XDND), the clipboard in any type with large copies in chunks (INCR)
+security: the X.Org advisory of 2026-11-10 (CVE-2026-109091 to -109096, -109903, -109904) is fixed
+XLibre: merged up to 2026-11-27 (XInput, Present, GPU hot-plug fixes)
+
 ### xprism-xserver 26.11.01
 
 first XPrism version, based on xlibre-xserver 25.2

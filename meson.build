@@ -6,7 +6,7 @@ project('xserver', 'c',
         ],
         # YY.MM.NN, or YY.MM.NN.PP for a patch release: the NNth release
         # of that month (include/meson.build checks the ranges)
-        version: '26.11.01',
+        version: '26.11.02',
         meson_version: '>= 0.61.0',
 )
 release_date = '2026-11-27'

@@ -26,7 +26,7 @@ adds the features below. [CHANGES-FROM-XORG.md](CHANGES-FROM-XORG.md)
 lists every difference from the X.Org Server, including what was
 removed.
 
-The current version is **26.11.01**. Versions are `YY.MM.NN`, the NNth
+The current version is **26.11.02**. Versions are `YY.MM.NN`, the NNth
 release of that month, with `.PP` added for patch releases (`26.11.01.01`).
 
 ## Screenshots
@@ -228,7 +228,7 @@ HDR monitor or an EDR panel:
 
 ## Status
 
-The current release is **26.11.01**, the first.
+The current release is **26.11.02**.
 
 Every push is built and tested in CI. On Linux this is the full test
 suite, run with the built-in compositor on and off: XPrism's own tests,
