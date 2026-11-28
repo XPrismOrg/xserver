@@ -191,24 +191,31 @@ in db2711525).
 - **Variable refresh rate** reaches the driver again: an XLibre bug
   dropped `_VARIABLE_REFRESH` whenever Xinerama was compiled in but not
   used (c362bc782).
-- **NVIDIA's proprietary X driver loads only when asked**: with
-  `IgnoreABI` set (`Option "IgnoreABI"` in ServerFlags, or `-ignoreABI`).
-  The driver replaces parts of the dispatcher and RandR and adds its own
-  extensions (NV-GLX, NV-CONTROL), which namespace checks do not cover, so
-  it is an explicit choice. Without it, modesetting drives the displays
-  and NVIDIA GPUs render through Vulkan, CUDA and PRIME.
-- **NVIDIA 590+ works**: those drivers carry a module built against
-  X.Org at commit 1bec46dd (ABI 27) and use it for this server's ABI 28.
-  The interfaces it uses now match that commit: `WindowOptRec` has
-  X.Org's `userProps` slot again (X.Org's macros compiled into the driver
-  read the fields after it), RENDER's `DestroyWindow` and `CloseScreen`
-  wrap chains are real chains that are called, `RROutputSetSubpixelOrder`
-  returns `Bool`, and `DeliverEvents` / `TryClientEvents` take an `int`
-  count. Before that, driver 595 corrupted the server's data and XFIXES
-  aborted it at startup (XLibre issue #2355). A unit test pins these
-  layouts. Tested with 595.71.05 on an RTX 4050 Laptop GPU: as the X
-  screen (OpenGL 4.6, the scene compositor on) and as a PRIME render
-  offload GPU behind modesetting on the iGPU.
+- **GPUs the standard way**: a GPU on a modern kernel display driver
+  (amdgpu, i915, xe, nvidia) gets no vendor X driver in the automatic
+  configuration. modesetting drives its displays, glamor accelerates it
+  on the vendor's EGL and GBM, and clients render through DRI3 and
+  Present. For NVIDIA that includes OpenGL: glamor on NVIDIA's EGL makes
+  glvnd pick NVIDIA's libGLX, which renders over DRI3 and Present as on
+  Xwayland, also as a PRIME render offload GPU behind another GPU
+  (`__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia`, what
+  NixOS's `nvidia-offload` sets). Old GPUs (radeon, nouveau's older
+  chipsets, ...) keep their X drivers, and a Device section can still
+  name any driver.
+- **NVIDIA's proprietary X driver is an opt-in**, for compatibility: it
+  loads only with `IgnoreABI` (`Option "IgnoreABI"` in ServerFlags, or
+  `-ignoreABI`), and only then does the automatic configuration try it.
+  It replaces parts of the dispatcher and RandR and adds its own
+  extensions (NV-GLX, NV-CONTROL), which namespace checks do not cover.
+  Drivers 590 and 595 carry a module built against X.Org at commit
+  1bec46dd (ABI 27) and use it for this server's ABI 28; the interfaces
+  it uses match that commit (`WindowOptRec`'s `userProps` slot, RENDER's
+  `DestroyWindow` and `CloseScreen` wrap chains, `RROutputSetSubpixelOrder`
+  returning `Bool`, an `int` count for `DeliverEvents` and
+  `TryClientEvents`; before that, 595 corrupted the server's data and
+  XFIXES aborted it at startup, XLibre issue #2355). A unit test pins
+  these layouts. Tested with 595.71.05 on an RTX 4050 Laptop GPU, as the
+  X screen and as a PRIME offload GPU.
 
 ### Wayland applications (WX11)
 

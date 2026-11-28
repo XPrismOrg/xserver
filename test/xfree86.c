@@ -508,6 +508,43 @@ xfree86_vendor_drivers_not_generic(void)
 #endif
 }
 
+/* An NVIDIA GPU goes to modesetting (glamor, DRI3) unless NVIDIA's
+ * proprietary X driver is asked for with IgnoreABI. */
+static void
+xfree86_nvidia_autoconfig(void)
+{
+#if defined(XSERVER_PLATFORM_BUS) && defined(XSERVER_LIBPCIACCESS)
+    /* a domain no real device uses, so nothing is opened */
+    struct pci_device dev = { .domain = 0x7fff, .vendor_id = 0x10de, .device_id = 0x2487 };
+    Bool ignore_abi;
+
+    for (ignore_abi = FALSE; ignore_abi <= TRUE; ignore_abi++) {
+        XF86MatchedDrivers md = { 0 };
+        Bool nvidia = FALSE;
+        int i;
+
+        LoaderIgnoreAbi = ignore_abi;
+        xf86VideoPtrToDriverList(&dev, &md);
+        for (i = 0; i < md.nmatches; i++) {
+            nvidia |= !strcmp(md.matches[i], "nvidia");
+            free(md.matches[i]);
+        }
+        assert(nvidia == ignore_abi);
+    }
+    LoaderIgnoreAbi = FALSE;
+
+    /* GPUs on these kernel drivers get no vendor X driver: modesetting */
+    assert(xf86KernelDriverIsStandard("amdgpu"));
+    assert(xf86KernelDriverIsStandard("i915"));
+    assert(xf86KernelDriverIsStandard("xe"));
+    assert(xf86KernelDriverIsStandard("nvidia"));
+    /* old Radeons keep xf86-video-ati, nouveau its chipset check */
+    assert(!xf86KernelDriverIsStandard("radeon"));
+    assert(!xf86KernelDriverIsStandard("nouveau"));
+    assert(!xf86KernelDriverIsStandard(NULL));
+#endif
+}
+
 /*
  * NVIDIA's X driver (590 and later) carries a module built against X.Org
  * at commit 1bec46dd (ABI 27) and uses it for this server's newer ABI: it
@@ -556,6 +593,7 @@ xfree86_test(void)
         xfree86_empty_configdir,
         xfree86_nvidia_ddx_refused,
         xfree86_vendor_drivers_not_generic,
+        xfree86_nvidia_autoconfig,
         xfree86_nvidia_abi_layout,
         NULL,
     };

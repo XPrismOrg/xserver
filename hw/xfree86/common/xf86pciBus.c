@@ -51,6 +51,7 @@
 
 /* Bus-specific headers */
 #include "xf86Bus.h"
+#include "loader.h"
 
 #include "xf86_OSproc.h"
 
@@ -1058,9 +1059,55 @@ xf86ConfigPciEntity(ScrnInfoPtr pScrn, int scrnFlag, int entityIndex,
     return pScrn;
 }
 
+/*
+ * Kernel drivers whose GPUs are best driven the standard way: modesetting
+ * for the displays, glamor (on the vendor's EGL and GBM) for acceleration,
+ * DRI3 and Present for clients. Their vendor X drivers are either gone
+ * (i915, xe) or older ways to do the same (amdgpu, nvidia).
+ */
+Bool
+xf86KernelDriverIsStandard(const char *kernel_driver)
+{
+    static const char *const standard[] = { "amdgpu", "i915", "xe", "nvidia" };
+
+    if (!kernel_driver)
+        return FALSE;
+    for (size_t i = 0; i < ARRAY_SIZE(standard); i++)
+        if (!strcmp(kernel_driver, standard[i]))
+            return TRUE;
+    return FALSE;
+}
+
+/* the kernel driver bound to dev, from Linux's sysfs; NULL if unknown
+   (elsewhere the path does not exist) */
+static const char *
+pci_kernel_driver(const struct pci_device *dev, char *buf, size_t size)
+{
+    char link[96];
+    ssize_t n;
+
+    snprintf(link, sizeof(link), "/sys/bus/pci/devices/%04x:%02x:%02x.%d/driver",
+             dev->domain, dev->bus, dev->dev, dev->func);
+    n = readlink(link, buf, size - 1);
+    if (n > 0) {
+        buf[n] = '\0';
+        const char *slash = strrchr(buf, '/');
+        return slash ? slash + 1 : buf;
+    }
+    return NULL;
+}
+
 void
 xf86VideoPtrToDriverList(struct pci_device *dev, XF86MatchedDrivers *md)
 {
+    char kbuf[PATH_MAX];
+
+    /* a GPU on a modern kernel driver: no vendor X driver, modesetting
+       (added after the vendor drivers) takes it */
+    if (xf86KernelDriverIsStandard(pci_kernel_driver(dev, kbuf, sizeof(kbuf))) &&
+        !(dev->vendor_id == 0x10de && LoaderIgnoreAbi))
+        return;
+
     int i;
 
     /* Add more entries here if we ever return more than 4 drivers for
@@ -1184,7 +1231,12 @@ xf86VideoPtrToDriverList(struct pci_device *dev, XF86MatchedDrivers *md)
 
         driverList[idx++] = "nouveau";
 #endif
-        driverList[idx++] = "nvidia";
+        /* NVIDIA's proprietary X driver only when asked for (IgnoreABI,
+           see LoadModule): otherwise modesetting drives the GPU, glamor
+           accelerates it on NVIDIA's EGL and GBM, and NVIDIA's libGLX
+           renders over DRI3 and Present, as on Xwayland */
+        if (LoaderIgnoreAbi)
+            driverList[idx++] = "nvidia";
         driverList[idx++] = "nv";
         break;
     }

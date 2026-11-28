@@ -50,5 +50,6 @@ xf86MatchDriverFromFiles(uint16_t match_vendor, uint16_t match_chip,
                          XF86MatchedDrivers *md);
 void
 xf86VideoPtrToDriverList(struct pci_device *dev, XF86MatchedDrivers *md);
+Bool xf86KernelDriverIsStandard(const char *kernel_driver);
 
 #endif                          /* _XF86_PCI_BUS_H */
