@@ -20,29 +20,33 @@ xorg_compat = static_library('xorg_compat',
 
 install_data('10-quirks.conf',
              install_dir: join_paths(get_option('datadir'), 'X11/xorg.conf.d'))
-nvidia_conf = configuration_data()
-nvidia_conf.set('libdir', join_paths(get_option('prefix'),get_option('libdir')))
-configure_file(
-    input: '10-nvidia.conf.in',
-    output: '10-nvidia.conf',
-    configuration: nvidia_conf,
-    install_dir: join_paths(get_option('datadir'), 'X11/xorg.conf.d'),
-)
-configure_file(
-    input: '10-nvidia-modules.conf.in',
-    output: '10-nvidia-modules.conf',
-    configuration: nvidia_conf,
-    install_dir: join_paths(get_option('datadir'), 'X11/xorg.conf.d'),
-)
-configure_file(
-    input: '10-nvidia.conf.debian.in',
-    output: '10-nvidia.conf.debian',
-    configuration: nvidia_conf,
-    install_dir: join_paths(get_option('sysconfdir'), 'X11/xorg.conf.d'),
-)
-configure_file(
-    input: '10-nvidia-modules.conf.debian.in',
-    output: '10-nvidia-modules.conf.debian',
-    configuration: nvidia_conf,
-    install_dir: join_paths(get_option('sysconfdir'), 'X11/xorg.conf.d'),
-)
+# NVIDIA's proprietary X driver is an opt-in (IgnoreABI): its OutputClass
+# snippets, which name it for every nvidia-drm device, are too
+if get_option('nvidia_ddx_config')
+    nvidia_conf = configuration_data()
+    nvidia_conf.set('libdir', join_paths(get_option('prefix'),get_option('libdir')))
+    configure_file(
+        input: '10-nvidia.conf.in',
+        output: '10-nvidia.conf',
+        configuration: nvidia_conf,
+        install_dir: join_paths(get_option('datadir'), 'X11/xorg.conf.d'),
+    )
+    configure_file(
+        input: '10-nvidia-modules.conf.in',
+        output: '10-nvidia-modules.conf',
+        configuration: nvidia_conf,
+        install_dir: join_paths(get_option('datadir'), 'X11/xorg.conf.d'),
+    )
+    configure_file(
+        input: '10-nvidia.conf.debian.in',
+        output: '10-nvidia.conf.debian',
+        configuration: nvidia_conf,
+        install_dir: join_paths(get_option('sysconfdir'), 'X11/xorg.conf.d'),
+    )
+    configure_file(
+        input: '10-nvidia-modules.conf.debian.in',
+        output: '10-nvidia-modules.conf.debian',
+        configuration: nvidia_conf,
+        install_dir: join_paths(get_option('sysconfdir'), 'X11/xorg.conf.d'),
+    )
+endif

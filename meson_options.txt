@@ -137,6 +137,8 @@ option('xf86-input-null', type: 'boolean', value: true,
 # legacy nvidia driver quirks
 option('legacy_nvidia_padding', type: 'boolean', value: false,
         description: 'EXPERT ONLY: Add a padding to ScreenRec to match an older ABI for legacy NVidia drivers')
+option('nvidia_ddx_config', type: 'boolean', value: false,
+        description: 'Install the xorg.conf.d snippets that pick NVIDIA\'s proprietary X driver for NVIDIA GPUs (it also needs IgnoreABI); without them NVIDIA GPUs go the standard way (modesetting, glamor, DRI3)')
 option('legacy_nvidia_340x', type: 'boolean', value: true,
         description: 'Extra entrypoints for old Nvidia 340x proprietary driver')
 

@@ -205,6 +205,9 @@ in db2711525).
 - **NVIDIA's proprietary X driver is an opt-in**, for compatibility: it
   loads only with `IgnoreABI` (`Option "IgnoreABI"` in ServerFlags, or
   `-ignoreABI`), and only then does the automatic configuration try it.
+  The xorg.conf.d snippets that name it for every NVIDIA GPU
+  (`10-nvidia.conf`, `10-nvidia-modules.conf`) are installed only with
+  `-Dnvidia_ddx_config=true`.
   It replaces parts of the dispatcher and RandR and adds its own
   extensions (NV-GLX, NV-CONTROL), which namespace checks do not cover.
   Drivers 590 and 595 carry a module built against X.Org at commit
