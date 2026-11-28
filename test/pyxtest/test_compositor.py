@@ -587,6 +587,28 @@ class TestDirectScanout:
         assert x.pixel(300, 100) == GREEN
         assert _is_composited(x, fs)
 
+    def test_shrink_out_of_fullscreen(self, xvfb):
+        # un-maximizing: moved and made smaller at once, which uncovers the
+        # root window. Its background is painted while the resize is still
+        # being validated; a frame composed then (it ends direct scanout)
+        # validated the tree again and took the server down.
+        x, fs = self._fullscreen(xvfb)
+        assert _becomes_direct(x, fs)
+        x.req(X_CONFIGURE_WINDOW, 0, struct.pack("<IHxxiiII", fs, 0xF, 100, 100, 400, 300))
+        assert x.pixel(50, 50) == ROOT_BG
+        assert x.pixel(300, 250) == GREEN
+        assert x.pixel(600, 500) == ROOT_BG
+        assert _is_composited(x, fs)
+        # and back, twice: maximize and restore again
+        for _ in range(2):
+            x.req(X_CONFIGURE_WINDOW, 0,
+                  struct.pack("<IHxxiiII", fs, 0xF, 0, 0, SCREEN_W, SCREEN_H))
+            x.pixel(0, 0)
+            assert _becomes_direct(x, fs)
+            x.req(X_CONFIGURE_WINDOW, 0, struct.pack("<IHxxiiII", fs, 0xF, 100, 100, 400, 300))
+            assert x.pixel(600, 500) == ROOT_BG
+            assert x.pixel(300, 250) == GREEN
+
     def test_window_below_never_shows_through(self, xvfb):
         x = Client(xvfb)
         below = x.window(100, 100, 100, 100, RED)

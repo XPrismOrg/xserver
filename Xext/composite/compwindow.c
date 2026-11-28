@@ -334,7 +334,13 @@ compMoveWindow(WindowPtr pWin, int x, int y, WindowPtr pSib, VTKind kind)
     CompScreenPtr cs = GetCompScreen(pScreen);
 
     pScreen->MoveWindow = cs->MoveWindow;
+    /* validating the new geometry paints exposures (the root window's
+       background too); a frame composed on demand then could end direct
+       scanout, which redirects the window and validates the tree again in
+       the middle of this validation */
+    compSceneHold++;
     (*pScreen->MoveWindow) (pWin, x, y, pSib, kind);
+    compSceneHold--;
     cs->MoveWindow = pScreen->MoveWindow;
     pScreen->MoveWindow = compMoveWindow;
 
@@ -349,7 +355,9 @@ compResizeWindow(WindowPtr pWin, int x, int y,
     CompScreenPtr cs = GetCompScreen(pScreen);
 
     pScreen->ResizeWindow = cs->ResizeWindow;
+    compSceneHold++;
     (*pScreen->ResizeWindow) (pWin, x, y, w, h, pSib);
+    compSceneHold--;
     cs->ResizeWindow = pScreen->ResizeWindow;
     pScreen->ResizeWindow = compResizeWindow;
 
@@ -363,7 +371,9 @@ compChangeBorderWidth(WindowPtr pWin, unsigned int bw)
     CompScreenPtr cs = GetCompScreen(pScreen);
 
     pScreen->ChangeBorderWidth = cs->ChangeBorderWidth;
+    compSceneHold++;
     (*pScreen->ChangeBorderWidth) (pWin, bw);
+    compSceneHold--;
     cs->ChangeBorderWidth = pScreen->ChangeBorderWidth;
     pScreen->ChangeBorderWidth = compChangeBorderWidth;
 

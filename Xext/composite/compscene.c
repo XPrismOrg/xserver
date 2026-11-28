@@ -137,7 +137,8 @@ static DevPrivateKeyRec sceneWindowKeyRec;     /* DamagePtr per top-level */
 static DevPrivateKeyRec sceneAttrsKeyRec;      /* SceneAttrsRec per window */
 static Atom atomOpacity;
 static bool sceneInFrame;       /* painting a frame, or copying to windows */
-int compSceneHold;              /* > 0: no frames on demand (compCopyWindow) */
+int compSceneHold;              /* > 0: no frames on demand (copying or
+                                   validating window geometry) */
 static unsigned long handlersGeneration;
 
 static SceneScreenPtr
@@ -1886,7 +1887,9 @@ scenePace(ScreenPtr pScreen, SceneScreenPtr ss, RegionPtr damage, bool all)
  * or a drawing operation. It may end direct scanout, which gives the
  * window a new pixmap, but not start it, which frees one that the
  * operation may still use; and none runs while compCopyWindow copies a
- * window. Starting direct scanout is left to the block handler.
+ * window or while a window's geometry is validated (compMoveWindow,
+ * compResizeWindow, compChangeBorderWidth). Starting direct scanout is
+ * left to the block handler.
  */
 static void
 sceneFrame(ScreenPtr pScreen, SceneScreenPtr ss, bool fromHook)
