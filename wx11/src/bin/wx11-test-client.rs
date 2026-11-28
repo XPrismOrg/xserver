@@ -29,6 +29,9 @@
 // not text prints "pasted-bin LENGTH SUM" (SUM: the bytes added up).
 // --copy-bytes N copies N bytes of a pattern (byte i is i * 7 % 251).
 // --paste also prints each type it is offered ("offer TYPE").
+// --drop takes drags dropped on the window in the --mime type (UTF-8 text
+// by default): "drag enter TYPES" (the types, comma-separated), "drag
+// leave", "dropped TEXT".
 // --paste-late MS waits MS milliseconds before reading a paste and then
 // prints only its length ("pasted-late N"); --copy-stall never writes
 // what it is asked to send, nor closes the pipe ("send stalled").
@@ -36,7 +39,7 @@
 //   wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH]
 //                    [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]]
 //                    [--copy TEXT | --copy-bytes N [--copy-stall]]
-//                    [--paste [--paste-late MS]] [--mime TYPE]
+//                    [--paste [--paste-late MS]] [--drop] [--mime TYPE]
 //                    [--primary] [--alpha]
 //                    [--security-context APP_ID]
 
@@ -109,6 +112,11 @@ struct App {
     data_device: Option<wl_data_device::WlDataDevice>,
     copy: Option<String>,
     paste: bool,
+    /// --drop
+    drop_target: bool,
+    /// the types of the newest data offer
+    offer_mimes: Vec<String>,
+    drag_offer: Option<wl_data_offer::WlDataOffer>,
     alpha: bool,
     primary: bool,
     primary_manager:
@@ -609,6 +617,40 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for App {
         conn: &Connection,
         _: &QueueHandle<App>,
     ) {
+        match &event {
+            wl_data_device::Event::DataOffer { .. } => app.offer_mimes.clear(),
+            wl_data_device::Event::Enter { serial, id: Some(offer), .. } if app.drop_target => {
+                say(format!("drag enter {}", app.offer_mimes.join(",")));
+                let want = mime();
+                if app.offer_mimes.contains(&want) {
+                    offer.accept(*serial, Some(want));
+                    offer.set_actions(
+                        wl_data_device_manager::DndAction::Copy,
+                        wl_data_device_manager::DndAction::Copy,
+                    );
+                } else {
+                    offer.accept(*serial, None);
+                }
+                app.drag_offer = Some(offer.clone());
+            }
+            wl_data_device::Event::Leave if app.drop_target => say("drag leave".into()),
+            wl_data_device::Event::Drop if app.drop_target => {
+                if let Some(offer) = app.drag_offer.take() {
+                    use std::io::Read;
+                    let (mut reader, writer) = std::io::pipe().expect("pipe");
+                    offer.receive(mime(), writer.as_fd());
+                    drop(writer);
+                    let _ = conn.flush();
+                    let mut text = Vec::new();
+                    let _ = reader.read_to_end(&mut text);
+                    offer.finish();
+                    offer.destroy();
+                    let _ = conn.flush();
+                    say(format!("dropped {}", String::from_utf8_lossy(&text)));
+                }
+            }
+            _ => {}
+        }
         let wl_data_device::Event::Selection { id: Some(offer) } = event else {
             return;
         };
@@ -764,6 +806,7 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for App {
             if app.paste {
                 say(format!("offer {mime_type}"));
             }
+            app.offer_mimes.push(mime_type);
         }
     }
 }
@@ -828,6 +871,7 @@ fn main() {
     let mut popup_spec = None;
     let mut copy = None;
     let mut paste = false;
+    let mut drop_target = false;
     let mut alpha = false;
     let mut security_context = None;
     let mut primary = false;
@@ -839,6 +883,7 @@ fn main() {
             "--grab",
             "--popup-slide",
             "--paste",
+            "--drop",
             "--alpha",
             "--primary",
             "--copy-stall",
@@ -924,6 +969,7 @@ fn main() {
                 continue;
             }
             "--security-context" => security_context = Some(v),
+            "--drop" => drop_target = true,
             "--paste" => {
                 paste = true;
                 continue;
@@ -945,7 +991,7 @@ fn main() {
                 continue;
             }
             _ => {
-                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT | --copy-bytes N [--copy-stall]] [--paste [--paste-late MS]] [--mime TYPE] [--primary] [--alpha] [--security-context APP_ID] [--subsurface WxH+X+Y [--sub-color RRGGBB] [--sub-desync] [--sub-recolor RRGGBB] [--sub-no-input]]");
+                eprintln!("usage: wx11-test-client [--title T] [--app-id ID] [--color RRGGBB] [--size WxH] [--popup WxH+X+Y [--popup-color RRGGBB] [--grab] [--popup-slide]] [--copy TEXT | --copy-bytes N [--copy-stall]] [--paste [--paste-late MS]] [--drop] [--mime TYPE] [--primary] [--alpha] [--security-context APP_ID] [--subsurface WxH+X+Y [--sub-color RRGGBB] [--sub-desync] [--sub-recolor RRGGBB] [--sub-no-input]]");
                 std::process::exit(2);
             }
         }
@@ -985,6 +1031,9 @@ fn main() {
         data_device: None,
         copy,
         paste,
+        drop_target,
+        offer_mimes: Vec::new(),
+        drag_offer: None,
         alpha,
         primary,
         primary_manager: None,

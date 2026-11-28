@@ -51,6 +51,15 @@ pub enum Event {
     ClipboardLost(Sel),
     /// an X pointer button went down (true) or up, at x, y in the window
     Button(u32, u8, bool, f64, f64, u32),
+    /// an X client drags something over one of our windows (XdndEnter):
+    /// the window, the source window and the types it offers (atom names)
+    DndEnter(u32, u32, Vec<String>),
+    /// the drag moved to x, y on the root window (XdndPosition)
+    DndPosition(u32, u32, i32, i32, u32),
+    /// the drag from the source window left our window (XdndLeave)
+    DndLeave(u32),
+    /// it was dropped on our window, at a time (XdndDrop)
+    DndDrop(u32, u32),
 }
 
 /// the selections WX11 bridges: CLIPBOARD (copy and paste) and PRIMARY
@@ -59,6 +68,8 @@ pub enum Event {
 pub enum Sel {
     Clipboard,
     Primary,
+    /// what an X client drags (XdndSelection)
+    Dnd,
 }
 
 /// what an X client asked of the clipboard WX11 owns
@@ -145,6 +156,7 @@ pub struct XSide {
     text: u32,
     wx11_selection: u32,
     wx11_primary: u32,
+    xdnd: Xdnd,
     /// an InputOnly window that owns and requests selections
     sel_win: u32,
     incr: u32,
@@ -159,6 +171,24 @@ pub struct XSide {
     /// the target each answer property of sel_win was asked for in
     asked: RefCell<HashMap<u32, String>>,
 }
+
+/// the atoms of the XDND protocol (drag and drop between X clients,
+/// https://freedesktop.org/wiki/Specifications/XDND/), version 5
+struct Xdnd {
+    aware: u32,
+    enter: u32,
+    position: u32,
+    status: u32,
+    leave: u32,
+    drop: u32,
+    finished: u32,
+    selection: u32,
+    type_list: u32,
+    action_copy: u32,
+}
+
+/// the XDND version WX11 speaks
+const XDND_VERSION: u32 = 5;
 
 /// largest property WX11 writes in one request; more goes by INCR.
 /// WX11_MAX_PROPERTY (bytes) lowers it, for tests.
@@ -211,6 +241,18 @@ impl XSide {
         let wx11_selection = atom("WX11_SELECTION")?;
         let wx11_primary = atom("WX11_PRIMARY")?;
         let incr = atom("INCR")?;
+        let xdnd = Xdnd {
+            aware: atom("XdndAware")?,
+            enter: atom("XdndEnter")?,
+            position: atom("XdndPosition")?,
+            status: atom("XdndStatus")?,
+            leave: atom("XdndLeave")?,
+            drop: atom("XdndDrop")?,
+            finished: atom("XdndFinished")?,
+            selection: atom("XdndSelection")?,
+            type_list: atom("XdndTypeList")?,
+            action_copy: atom("XdndActionCopy")?,
+        };
         let gc = conn.generate_id()?;
         conn.create_gc(gc, root, &CreateGCAux::new())?;
         let argb = match argb_visual {
@@ -273,6 +315,7 @@ impl XSide {
             text,
             wx11_selection,
             wx11_primary,
+            xdnd,
             sel_win,
             incr,
             incoming: RefCell::new(HashMap::new()),
@@ -302,6 +345,7 @@ impl XSide {
         match which {
             Sel::Clipboard => self.clipboard,
             Sel::Primary => AtomEnum::PRIMARY.into(),
+            Sel::Dnd => self.xdnd.selection,
         }
     }
 
@@ -310,6 +354,8 @@ impl XSide {
             Some(Sel::Clipboard)
         } else if atom == u32::from(AtomEnum::PRIMARY) {
             Some(Sel::Primary)
+        } else if atom == self.xdnd.selection {
+            Some(Sel::Dnd)
         } else {
             None
         }
@@ -386,11 +432,13 @@ impl XSide {
             return match which {
                 Sel::Clipboard => self.wx11_selection,
                 Sel::Primary => self.wx11_primary,
+                Sel::Dnd => self.atom("WX11_XdndSelection"),
             };
         }
         let sel = match which {
             Sel::Clipboard => "CLIPBOARD",
             Sel::Primary => "PRIMARY",
+            Sel::Dnd => "XdndSelection",
         };
         self.atom(&format!("WX11_{sel}_{target}"))
     }
@@ -801,9 +849,55 @@ impl XSide {
                 &[pid],
             );
         }
+        // a drop target for X clients' drags (XDND)
+        let _ = self.conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            self.xdnd.aware,
+            AtomEnum::ATOM,
+            &[XDND_VERSION],
+        );
         self.set_title(win, title);
         let _ = self.conn.map_window(win);
         win
+    }
+
+    /// an XDND message to the drag's source window
+    fn xdnd_send(&self, source: u32, type_: u32, data: [u32; 5]) {
+        let event = x11rb::protocol::xproto::ClientMessageEvent::new(32, source, type_, data);
+        let _ = self
+            .conn
+            .send_event(false, source, EventMask::NO_EVENT, event);
+    }
+
+    /// answer XdndPosition: whether window takes the drop (as a copy)
+    pub fn dnd_status(&self, window: u32, source: u32, accept: bool) {
+        // bit 1: send every position, not only outside a rectangle
+        let flags = u32::from(accept) | 2;
+        let action = if accept { self.xdnd.action_copy } else { 0 };
+        self.xdnd_send(source, self.xdnd.status, [window, flags, 0, 0, action]);
+    }
+
+    /// the drop on window is over (taken or not)
+    pub fn dnd_finished(&self, window: u32, source: u32, accepted: bool) {
+        let action = if accepted { self.xdnd.action_copy } else { 0 };
+        self.xdnd_send(source, self.xdnd.finished, [window, u32::from(accepted), action, 0, 0]);
+    }
+
+    /// the types an XdndEnter offers: up to three in the message, or all
+    /// in the source's XdndTypeList
+    fn dnd_types(&self, source: u32, data: [u32; 5]) -> Vec<String> {
+        let atoms: Vec<u32> = if data[1] & 1 != 0 {
+            self.conn
+                .get_property(false, source, self.xdnd.type_list, AtomEnum::ATOM, 0, 1024)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .and_then(|r| r.value32().map(|v| v.collect()))
+                .unwrap_or_default()
+        } else {
+            data[2..].to_vec()
+        };
+        atoms.into_iter().filter_map(|a| self.atom_name(a)).collect()
     }
 
     pub fn set_title(&self, win: u32, title: &str) {
@@ -962,6 +1056,25 @@ impl XSide {
                     if let Some(which) = self.which(c.selection) {
                         out.push(Event::ClipboardLost(which));
                     }
+                }
+                XEvent::ClientMessage(m) if m.format == 32 && m.type_ == self.xdnd.enter => {
+                    let d = m.data.as_data32();
+                    // versions before 3 differ; we answer in our own
+                    if d[1] >> 24 >= 3 {
+                        out.push(Event::DndEnter(m.window, d[0], self.dnd_types(d[0], d)));
+                    }
+                }
+                XEvent::ClientMessage(m) if m.format == 32 && m.type_ == self.xdnd.position => {
+                    let d = m.data.as_data32();
+                    let (x, y) = ((d[2] >> 16) as i16, (d[2] & 0xffff) as i16);
+                    out.push(Event::DndPosition(m.window, d[0], x as i32, y as i32, d[3]));
+                }
+                XEvent::ClientMessage(m) if m.format == 32 && m.type_ == self.xdnd.leave => {
+                    out.push(Event::DndLeave(m.data.as_data32()[0]))
+                }
+                XEvent::ClientMessage(m) if m.format == 32 && m.type_ == self.xdnd.drop => {
+                    let d = m.data.as_data32();
+                    out.push(Event::DndDrop(d[0], d[2]))
                 }
                 XEvent::ClientMessage(m)
                     if m.type_ == self.wm_protocols

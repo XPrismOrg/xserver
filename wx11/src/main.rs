@@ -33,7 +33,9 @@ use smithay::delegate_seat;
 use smithay::delegate_shm;
 use smithay::delegate_xdg_shell;
 use smithay::input::keyboard::{FilterResult, KeyboardHandle, XkbConfig};
-use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
+use smithay::input::pointer::{
+    AxisFrame, ButtonEvent, GrabStartData as PointerGrabStartData, MotionEvent, PointerHandle,
+};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::{Mode as OutputMode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
@@ -43,6 +45,7 @@ use smithay::reexports::calloop::{
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_callback::WlCallback;
+use smithay::reexports::wayland_server::protocol::wl_data_device_manager::DndAction;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -57,8 +60,8 @@ use smithay::wayland::compositor::{
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, request_data_device_client_selection, set_data_device_focus,
-    set_data_device_selection, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
-    ServerDndGrabHandler,
+    set_data_device_selection, start_dnd, ClientDndGrabHandler, DataDeviceHandler,
+    DataDeviceState, ServerDndGrabHandler, SourceMetadata,
 };
 use smithay::wayland::selection::primary_selection::{
     clear_primary_selection, request_primary_client_selection, set_primary_focus,
@@ -107,6 +110,22 @@ struct Popup {
     grabbed: bool,
 }
 
+/// An X client's drag over one of our windows (XDND), shown to Wayland
+/// clients as a drag WX11 started.
+struct XDrag {
+    /// the connection of the window it is over (XDND messages go to it)
+    conn: Rc<XSide>,
+    window: u32,
+    /// the X client's source window
+    source: u32,
+    /// what it offers, as X atom names
+    types: Vec<String>,
+    /// the type the Wayland client under the pointer takes, if any
+    accepted: Option<String>,
+    /// dropped: the answer (XdndFinished) is due
+    dropped: bool,
+}
+
 pub struct State {
     dh: DisplayHandle,
     compositor: CompositorState,
@@ -142,6 +161,7 @@ pub struct State {
     toplevels: HashMap<Id, Toplevel>,
     popups: HashMap<Id, Popup>,
     start: Instant,
+    x_drag: Option<XDrag>,
 }
 
 #[derive(Default)]
@@ -932,6 +952,12 @@ impl State {
                         self.write_paste(fd, data);
                     }
                 }
+                x::Event::DndEnter(win, source, types) => self.x_drag_enter(conn, win, source, types),
+                x::Event::DndPosition(win, source, x, y, time) => {
+                    self.x_drag_position(win, source, x, y, time)
+                }
+                x::Event::DndLeave(source) => self.x_drag_leave(source),
+                x::Event::DndDrop(source, time) => self.x_drag_drop(source, time),
                 x::Event::Expose(win) => self.repaint(win),
                 x::Event::Resized(win, w, h) => {
                     if let Some(t) = self.toplevel_for_window(win) {
@@ -1054,6 +1080,7 @@ impl State {
             match which {
                 Sel::Clipboard => clear_data_device_selection(&self.dh, &self.seat),
                 Sel::Primary => clear_primary_selection(&self.dh, &self.seat),
+                Sel::Dnd => {}
             }
         }
     }
@@ -1063,6 +1090,7 @@ impl State {
         match which {
             Sel::Clipboard => set_data_device_selection(&self.dh, &self.seat, types, ()),
             Sel::Primary => set_primary_selection(&self.dh, &self.seat, types, ()),
+            Sel::Dnd => {}
         }
     }
 
@@ -1126,6 +1154,7 @@ impl State {
             Sel::Primary => {
                 request_primary_client_selection(&self.seat, mime, writer.into()).is_ok()
             }
+            Sel::Dnd => false,
         };
         if !asked {
             return conn.answer_clipboard(&req, None);
@@ -1326,7 +1355,202 @@ impl DataDeviceHandler for State {
 }
 
 impl ClientDndGrabHandler for State {}
-impl ServerDndGrabHandler for State {}
+
+/// the Wayland client under an X client's drag (see XDrag)
+impl ServerDndGrabHandler for State {
+    fn accept(&mut self, mime_type: Option<String>, _seat: Seat<State>) {
+        let Some(d) = self.x_drag.as_mut() else {
+            return;
+        };
+        if d.accepted != mime_type && !d.dropped {
+            d.accepted = mime_type;
+            // XDND answers positions; the Wayland client's answer comes
+            // later, so tell the source at once
+            d.conn.dnd_status(d.window, d.source, d.accepted.is_some());
+            d.conn.flush();
+        }
+    }
+
+    /// the Wayland client takes the drop: fetch it from the X source
+    fn send(&mut self, mime_type: String, fd: OwnedFd, _seat: Seat<State>) {
+        let Some(d) = self.x_drag.as_ref() else {
+            return;
+        };
+        let target = x_dnd_target(&d.types, &mime_type);
+        let conn = d.conn.clone();
+        self.to_wayland
+            .entry((Sel::Dnd, key(&conn), target.clone()))
+            .or_default()
+            .push_back(fd);
+        conn.request_clipboard(Sel::Dnd, &target);
+        conn.flush();
+    }
+
+    fn finished(&mut self, _seat: Seat<State>) {
+        self.x_drag_done(true);
+    }
+
+    fn cancelled(&mut self, _seat: Seat<State>) {
+        self.x_drag_done(false);
+    }
+}
+
+/// the MIME types Wayland clients are offered for an X drag's types: text
+/// (if any), then each MIME type (text/uri-list for files, ...)
+fn x_dnd_mimes(types: &[String]) -> Vec<String> {
+    let mut mimes: Vec<String> = Vec::new();
+    if types.iter().any(|t| x::is_text(t)) {
+        mimes.extend(TEXT_TYPES.iter().map(|s| s.to_string()));
+    }
+    for t in types {
+        if t.contains('/') && !mimes.contains(t) {
+            mimes.push(t.clone());
+        }
+    }
+    mimes
+}
+
+/// the X target to ask an X drag's source for, for a MIME type: itself if
+/// offered, else text as UTF8_STRING (or the text type it has)
+fn x_dnd_target(types: &[String], mime: &str) -> String {
+    if types.iter().any(|t| t == mime) {
+        return mime.to_string();
+    }
+    if x::is_text(mime) || TEXT_TYPES.contains(&mime) {
+        if let Some(t) = ["UTF8_STRING", "text/plain;charset=utf-8", "TEXT", "STRING", "text/plain"]
+            .into_iter()
+            .find(|t| types.iter().any(|x| x == t))
+        {
+            return t.to_string();
+        }
+    }
+    mime.to_string()
+}
+
+impl State {
+    /// an X client's drag came over one of our windows: start a drag for
+    /// the Wayland clients, carrying what the X source offers
+    fn x_drag_enter(&mut self, conn: &Rc<XSide>, window: u32, source: u32, types: Vec<String>) {
+        self.x_drag_end_unfinished();
+        let mimes = x_dnd_mimes(&types);
+        if mimes.is_empty() {
+            return; // nothing a Wayland client could take
+        }
+        self.x_drag = Some(XDrag {
+            conn: conn.clone(),
+            window,
+            source,
+            types,
+            accepted: None,
+            dropped: false,
+        });
+        let start = PointerGrabStartData {
+            focus: None,
+            button: 0x110, // BTN_LEFT
+            location: (0.0, 0.0).into(),
+        };
+        let metadata = SourceMetadata {
+            mime_types: mimes,
+            dnd_action: DndAction::Copy,
+        };
+        let (dh, seat) = (self.dh.clone(), self.seat.clone());
+        start_dnd(&dh, &seat, self, SERIAL_COUNTER.next_serial(), Some(start), None, metadata);
+    }
+
+    fn x_drag_is(&self, source: u32) -> bool {
+        self.x_drag.as_ref().is_some_and(|d| d.source == source && !d.dropped)
+    }
+
+    /// the drag moved: move the Wayland pointer (the grab tells the
+    /// clients), and answer
+    fn x_drag_position(&mut self, window: u32, source: u32, x: i32, y: i32, time: u32) {
+        if !self.x_drag_is(source) {
+            return;
+        }
+        let Some(d) = self.x_drag.as_mut() else { return };
+        // the drag can move over another of our windows without a new
+        // XdndEnter only within one X client's windows; follow it
+        d.window = window;
+        let conn = d.conn.clone();
+        let (ox, oy) = conn.root_position(window);
+        self.pointer_motion(window, (x - ox) as f64, (y - oy) as f64, time);
+        if let Some(d) = self.x_drag.as_ref() {
+            d.conn.dnd_status(d.window, d.source, d.accepted.is_some());
+            d.conn.flush();
+        }
+    }
+
+    /// the drag left our window: end the Wayland drag without a drop
+    fn x_drag_leave(&mut self, source: u32) {
+        if !self.x_drag_is(source) {
+            return;
+        }
+        self.x_drag = None;
+        self.end_server_drag(0);
+    }
+
+    /// dropped: the grab drops on the Wayland client under the pointer,
+    /// which then asks for the data (send) and says when it is done
+    /// (finished), or refuses (cancelled)
+    fn x_drag_drop(&mut self, source: u32, time: u32) {
+        if !self.x_drag_is(source) {
+            return;
+        }
+        if let Some(d) = self.x_drag.as_mut() {
+            d.dropped = true;
+        }
+        self.end_server_drag(time);
+    }
+
+    /// release the drag's grab: a drop on the client under the pointer
+    /// (if it accepted), nothing otherwise
+    fn end_server_drag(&mut self, time: u32) {
+        let pointer = self.pointer.clone();
+        // not a drop (left, or given up): no client is under it
+        if self.x_drag.as_ref().is_none_or(|d| !d.dropped) {
+            pointer.motion(
+                self,
+                None,
+                &MotionEvent {
+                    location: (0.0, 0.0).into(),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time,
+                },
+            );
+        }
+        pointer.button(
+            self,
+            &ButtonEvent {
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
+                button: 0x110,
+                state: ButtonState::Released,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    /// the drop is over: tell the X source whether it was taken
+    fn x_drag_done(&mut self, taken: bool) {
+        if let Some(d) = self.x_drag.take_if(|d| d.dropped) {
+            d.conn.dnd_finished(d.window, d.source, taken);
+            d.conn.flush();
+        }
+    }
+
+    /// a new drag while the last drop is still waiting for its client:
+    /// that one is given up
+    fn x_drag_end_unfinished(&mut self) {
+        if let Some(d) = self.x_drag.take() {
+            if d.dropped {
+                d.conn.dnd_finished(d.window, d.source, false);
+                d.conn.flush();
+            } else {
+                self.end_server_drag(0);
+            }
+        }
+    }
+}
 
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
@@ -1624,6 +1848,7 @@ fn main() {
         handle: event_loop.handle(),
         wayland_selection: HashMap::new(),
         x_offer: HashMap::new(),
+        x_drag: None,
         to_wayland: HashMap::new(),
         primary_selection: PrimarySelectionState::new::<State>(&dh),
         keyboard,

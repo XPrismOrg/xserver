@@ -1029,3 +1029,104 @@ def test_subsurface_without_input_lets_the_pointer_through(xserver, client):
     inp.fake(MOTION_NOTIFY, x=35, y=25)
     c.wait_for("pointer enter 35 25")               # the parent's
     assert not [line for line in c.heard() if "enter sub" in line]
+
+
+# ---- drag and drop (XDND) ----
+
+XDND_NAMES = ["XdndAware", "XdndEnter", "XdndPosition", "XdndStatus", "XdndLeave",
+              "XdndDrop", "XdndFinished", "XdndSelection", "XdndActionCopy",
+              "UTF8_STRING", "text/uri-list", "TARGETS"]
+
+
+class XDragSource:
+    """an X client dragging over a window, as XDND 5 has it"""
+
+    def __init__(self, xserver):
+        self.c = RawX11Connection(xserver.display_num)
+        self.a = {n: self.c.intern_atom(n) for n in XDND_NAMES}
+        self.c.targets_atoms = (self.a["TARGETS"], self.a["UTF8_STRING"])
+        self.win = self.c.create_window()
+        self.c.send_request(struct.pack("<BxHIII", 22, 4, self.win,       # SetSelectionOwner
+                                        self.a["XdndSelection"], 0))
+
+    def send(self, target, name, *data):
+        data = (list(data) + [0] * 5)[:5]
+        ev = struct.pack("<BBHII5I", CLIENT_MESSAGE, 32, 0, target, self.a[name], *data)
+        self.c.send_request(struct.pack("<BBHII", X_SEND_EVENT, 0, 11, target, 0) + ev)
+
+    def enter(self, target, *types):
+        self.send(target, "XdndEnter", self.win, 5 << 24, *[self.a[t] for t in types])
+
+    def position(self, target, x, y):
+        self.send(target, "XdndPosition", self.win, 0, (x << 16) | y, 0, self.a["XdndActionCopy"])
+
+    def message(self, name, timeout=5.0):
+        """the next ClientMessage name sent to our window: its data"""
+        end = time.monotonic() + timeout
+        while (left := end - time.monotonic()) > 0:
+            r = self.c.recv_response(timeout=left)
+            if r is None:
+                break
+            if (r.response_type & 0x7F) == CLIENT_MESSAGE and \
+                    struct.unpack_from("<I", r.data, 8)[0] == self.a[name]:
+                return struct.unpack_from("<5I", r.data, 12)
+        return None
+
+    def accepted_status(self, target, x, y, timeout=5.0):
+        """move to x, y until the target accepts (XdndStatus bit 0)"""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            self.position(target, x, y)
+            st = self.message("XdndStatus", timeout=0.5)
+            if st and st[1] & 1:
+                return st
+        return None
+
+
+def test_x_window_is_an_xdnd_target(xserver, client):
+    _, win = _shown(xserver, client, "target")
+    conn = RawX11Connection(xserver.display_num)
+    assert _cardinal(conn, win, conn.intern_atom("XdndAware")) == 5
+
+
+def test_x_drag_drops_in_wayland(xserver, client):
+    from test_clipboard_grants import _answer
+    c, win = _shown(xserver, client, "dropzone", "--drop")
+    src = XDragSource(xserver)
+    src.enter(win, "UTF8_STRING", "text/uri-list")
+    st = src.accepted_status(win, 10, 10)
+    c.wait_for("drag enter text/plain;charset=utf-8,UTF8_STRING,text/plain,TEXT,text/uri-list")
+    assert st, "the Wayland client never accepted the drag"
+    assert st[0] == win and st[4] == src.a["XdndActionCopy"]
+    src.send(win, "XdndDrop", src.win)
+    assert _answer(src.c, "dragged from X ✓".encode()), "WX11 did not ask for the drop"
+    c.wait_for("dropped dragged from X ✓")
+    fin = src.message("XdndFinished")
+    assert fin and fin[0] == win and fin[1] & 1, fin
+
+
+def test_x_drag_refused_by_wayland(xserver, client):
+    # the client takes only PNG: never accepted, and the drop is refused
+    c, win = _shown(xserver, client, "picky", "--drop", "--mime", "image/png")
+    src = XDragSource(xserver)
+    src.enter(win, "UTF8_STRING")
+    src.position(win, 10, 10)
+    c.wait_for("drag enter text/plain;charset=utf-8,UTF8_STRING,text/plain,TEXT")
+    st = src.message("XdndStatus")
+    assert st and not st[1] & 1, st
+    src.send(win, "XdndDrop", src.win)
+    fin = src.message("XdndFinished")
+    assert fin and fin[0] == win and not fin[1] & 1, fin
+    assert not any(line.startswith("dropped") for line in c.heard())
+
+
+def test_x_drag_leaves_wayland(xserver, client):
+    c, win = _shown(xserver, client, "passby", "--drop")
+    src = XDragSource(xserver)
+    src.enter(win, "UTF8_STRING")
+    assert src.accepted_status(win, 10, 10)
+    src.send(win, "XdndLeave", src.win)
+    c.wait_for("drag leave")
+    # a new drag afterwards works as the first
+    src.enter(win, "UTF8_STRING")
+    assert src.accepted_status(win, 12, 12), "no drag after a drag left"

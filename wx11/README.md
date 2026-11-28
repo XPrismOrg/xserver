@@ -79,6 +79,11 @@ grants decide whether they reach the session's clipboard.
   synchronized ones with their parent's commit and desynchronized ones on
   their own; clipped to the parent's size. The pointer goes to the
   subsurface under it (its input region respected)
+- drag and drop from X clients into Wayland clients (XDND 5): every
+  window is an XDND target; the drag is shown to the Wayland client under
+  the pointer with the X source's types (text, text/uri-list for files,
+  ...), and a drop it takes is fetched from the source and answered with
+  XdndFinished (a copy)
 - windows X lost while covered (no compositor) are repainted on Expose
 
 Buffers are copied into the window with `PutImage` for now.
@@ -88,7 +93,8 @@ Buffers are copied into the window with `PutImage` for now.
 - zero-copy dma-buf: DRI3 `PixmapFromBuffers` and Present, explicit sync
   (`linux-drm-syncobj-v1`), `wp_presentation` feedback
 - touch, and one `wl_seat` per XPrism seat (XInput2)
-- drag and drop (XDND)
+- drag and drop from Wayland clients into X clients (smithay's client
+  drag cancels the source on a drop outside Wayland surfaces)
 - one namespace per sandboxed application (today all sandboxed clients
   share `--sandbox-display`)
 
