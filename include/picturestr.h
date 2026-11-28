@@ -294,8 +294,12 @@ typedef struct _PictureScreen {
     GlyphsProcPtr Glyphs;       /* unused */
     CompositeRectsProcPtr CompositeRects;
 
-    void *_dummy1; // required in place of a removed field for ABI compatibility
-    void *_dummy2; // required in place of a removed field for ABI compatibility
+    /* X.Org's DestroyWindow and CloseScreen chains, for binary drivers
+       built for X.Org (NVIDIA) that wrap them: they start at no-op ends
+       and are called when a window is destroyed and when the screen
+       closes. Nothing in the server wraps them. */
+    Bool (*legacyDestroyWindow) (WindowPtr pWindow);
+    Bool (*legacyCloseScreen) (ScreenPtr pScreen);
 
     StoreColorsProcPtr StoreColors;
 

@@ -742,7 +742,7 @@ void RRCrtcSetTransformSupport(RRCrtcPtr crtc, Bool transforms);
  * @param order   subpixel order value to set
  */
 _X_EXPORT /* just for Nvidia legacy */
-void RROutputSetSubpixelOrder(RROutputPtr output, int order);
+Bool RROutputSetSubpixelOrder(RROutputPtr output, int order);
 
 /*
  * Retrieve output property value

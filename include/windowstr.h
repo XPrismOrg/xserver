@@ -76,6 +76,10 @@ typedef struct _WindowOpt {
     Mask otherEventMasks;       /* default: 0 */
     struct _OtherClients *otherClients; /* default: NULL */
     struct _GrabRec *passiveGrabs;      /* default: NULL */
+    /* X.Org's userProps; window properties are in WindowRec now. Kept
+       (always NULL) so the fields after it stay where binary drivers
+       built for X.Org (NVIDIA) read them through X.Org's macros. */
+    void *_xorgUserProps;
     CARD32 backingBitPlanes;    /* default: ~0L */
     CARD32 backingPixel;        /* default: 0 */
     RegionPtr boundingShape;    /* default: NULL */

@@ -198,6 +198,16 @@ in db2711525).
   parts of the dispatcher and RandR, which bypasses namespace checks.
   Without it, modesetting drives the displays and NVIDIA GPUs render
   through Vulkan, CUDA and PRIME.
+- **Towards NVIDIA 590+**: those drivers carry a module built against
+  X.Org at commit 1bec46dd (ABI 27) and use it for this server's ABI 28.
+  The interfaces it uses now match that commit: `WindowOptRec` has
+  X.Org's `userProps` slot again (X.Org's macros compiled into the driver
+  read the fields after it), RENDER's `DestroyWindow` and `CloseScreen`
+  wrap chains are real chains that are called, `RROutputSetSubpixelOrder`
+  returns `Bool`, and `DeliverEvents` / `TryClientEvents` take an `int`
+  count. A unit test pins these layouts. Driver 595 still overwrites
+  XFIXES's client key before the extensions start; the driver stays
+  refused until that is found.
 
 ### Wayland applications (WX11)
 

@@ -306,13 +306,15 @@ RROutputSetConnection(RROutputPtr output, CARD8 connection)
     return TRUE;
 }
 
-void RROutputSetSubpixelOrder(RROutputPtr output, int subpixelOrder)
+/* returns TRUE, as in X.Org: binary drivers check it */
+Bool RROutputSetSubpixelOrder(RROutputPtr output, int subpixelOrder)
 {
     if (output->subpixelOrder == subpixelOrder)
-        return;
+        return TRUE;
 
     output->subpixelOrder = subpixelOrder;
     RROutputChanged(output, FALSE);
+    return TRUE;
 }
 
 Bool

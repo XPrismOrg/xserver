@@ -65,10 +65,28 @@ PictureWindowFormat(WindowPtr pWindow)
                               WindowGetVisual(pWindow));
 }
 
+/* the ends of the chains binary drivers may wrap (PictureScreenRec) */
+static Bool
+PictureLegacyDestroyWindowEnd(WindowPtr pWindow)
+{
+    return TRUE;
+}
+
+static Bool
+PictureLegacyCloseScreenEnd(ScreenPtr pScreen)
+{
+    return TRUE;
+}
+
 static void
 picture_window_destructor(CallbackListPtr *pcbl, ScreenPtr pScreen, WindowPtr pWindow)
 {
     PicturePtr pPicture;
+    PictureScreenPtr ps = GetPictureScreenIfSet(pScreen);
+
+    if (ps && ps->legacyDestroyWindow &&
+        ps->legacyDestroyWindow != PictureLegacyDestroyWindowEnd)
+        (*ps->legacyDestroyWindow) (pWindow);
 
     while ((pPicture = GetPictureWindow(pWindow))) {
         SetPictureWindow(pWindow, pPicture->pNext);
@@ -83,6 +101,8 @@ static void PictureScreenClose(CallbackListPtr *pcbl, ScreenPtr pScreen, void *u
     PictureScreenPtr ps = GetPictureScreen(pScreen);
     int n;
 
+    if (ps->legacyCloseScreen && ps->legacyCloseScreen != PictureLegacyCloseScreenEnd)
+        (*ps->legacyCloseScreen) (pScreen);
     PictureResetFilters(pScreen);
     for (n = 0; n < ps->nformats; n++)
         if (ps->formats[n].type == PictTypeIndexed)
@@ -104,6 +124,8 @@ PictureStoreColors(ColormapPtr pColormap, int ndef, xColorItem * pdef)
     (*pScreen->StoreColors) (pColormap, ndef, pdef);
     ps->StoreColors = pScreen->StoreColors;
     pScreen->StoreColors = PictureStoreColors;
+    ps->legacyDestroyWindow = PictureLegacyDestroyWindowEnd;
+    ps->legacyCloseScreen = PictureLegacyCloseScreenEnd;
 
     if (pColormap->class == PseudoColor || pColormap->class == GrayScale) {
         PictFormatPtr format = ps->formats;

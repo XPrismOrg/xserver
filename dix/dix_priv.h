@@ -595,7 +595,7 @@ _X_EXPORT // exported for nvidia
 int TryClientEvents(ClientPtr pClient,
                     DeviceIntPtr device,
                     xEventPtr pEvents,
-                    size_t count,
+                    int count,          /* int: X.Org's ABI (NVIDIA) */
                     Mask mask,
                     Mask filter,
                     GrabPtr grab)
@@ -618,7 +618,7 @@ int TryClientEvents(ClientPtr pClient,
 _X_EXPORT // exported for nvidia
 enum EventDeliveryState DeliverEvents(WindowPtr pWindow,
                                       xEventPtr events,
-                                      size_t nEvents,
+                                      int nEvents,     /* int: X.Org's ABI */
                                       WindowPtr otherParent)
     _X_ATTRIBUTE_NONNULL_ARG(1,2);
 

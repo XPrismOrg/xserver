@@ -53,6 +53,11 @@
 
 #include "tests-common.h"
 
+#include <stddef.h>
+#include "windowstr.h"
+#include "scrnintstr.h"
+#include "picturestr.h"
+
 static void
 edid_set_checksum(unsigned char *block)
 {
@@ -503,6 +508,40 @@ xfree86_vendor_drivers_not_generic(void)
 #endif
 }
 
+/*
+ * NVIDIA's X driver (590 and later) carries a module built against X.Org
+ * at commit 1bec46dd (ABI 27) and uses it for this server's newer ABI: it
+ * reads and wraps these structures at X.Org's offsets, partly through
+ * X.Org's inline macros compiled into it. Fields XPrism removed keep
+ * their slots.
+ */
+static void
+xfree86_nvidia_abi_layout(void)
+{
+    const size_t ptr = sizeof(void *);
+
+    /* WindowOptRec: X.Org's userProps sits between passiveGrabs and
+       backingBitPlanes (wBoundingShape() and friends read after it) */
+    assert(offsetof(WindowOptRec, _xorgUserProps) ==
+           offsetof(WindowOptRec, passiveGrabs) + ptr);
+    assert(offsetof(WindowOptRec, backingBitPlanes) ==
+           offsetof(WindowOptRec, _xorgUserProps) + ptr);
+
+    /* PictureScreenRec: DestroyWindow and CloseScreen, then StoreColors */
+    assert(offsetof(PictureScreenRec, legacyDestroyWindow) ==
+           offsetof(PictureScreenRec, CompositeRects) + ptr);
+    assert(offsetof(PictureScreenRec, legacyCloseScreen) ==
+           offsetof(PictureScreenRec, legacyDestroyWindow) + ptr);
+    assert(offsetof(PictureScreenRec, StoreColors) ==
+           offsetof(PictureScreenRec, legacyCloseScreen) + ptr);
+
+#ifndef CONFIG_LEGACY_NVIDIA_PADDING
+    /* ScreenRec as at ABI 27: no pScratchPixmap */
+    assert(offsetof(ScreenRec, totalPixmapSize) ==
+           offsetof(ScreenRec, NameWindowPixmap) + ptr);
+#endif
+}
+
 const testfunc_t*
 xfree86_test(void)
 {
@@ -517,6 +556,7 @@ xfree86_test(void)
         xfree86_empty_configdir,
         xfree86_nvidia_ddx_refused,
         xfree86_vendor_drivers_not_generic,
+        xfree86_nvidia_abi_layout,
         NULL,
     };
     return testfuncs;

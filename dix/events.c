@@ -2029,7 +2029,7 @@ ReleaseActiveGrabs(ClientPtr client)
  */
 int
 TryClientEvents(ClientPtr client, DeviceIntPtr dev, xEvent *pEvents,
-                size_t count, Mask mask, Mask filter, GrabPtr grab)
+                int count, Mask mask, Mask filter, GrabPtr grab)
 {
     int type;
 
@@ -2945,7 +2945,7 @@ DeliverDeviceEvents(WindowPtr pWin, InternalEvent *event, GrabPtr grab,
  * @return event delivery state (@see enum EventDeliveryState)
  */
 enum EventDeliveryState
-DeliverEvents(WindowPtr pWin, xEvent *xE, size_t count, WindowPtr otherParent)
+DeliverEvents(WindowPtr pWin, xEvent *xE, int count, WindowPtr otherParent)
 {
     DeviceIntRec dummy;
     int deliveries;
